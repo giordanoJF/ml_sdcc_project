@@ -317,7 +317,7 @@ Il dataset FEMNIST viene partizionato in modo **deterministico e statico** prima
 
 $$\text{start}_k = k \cdot \left\lfloor \frac{|\mathcal{U}|}{N} \right\rfloor, \quad \text{end}_k = \begin{cases} \text{start}_k + \lfloor |\mathcal{U}|/N \rfloor & \text{se } k < N-1 \\ |\mathcal{U}| & \text{se } k = N-1 \end{cases}$$
 
-dove $\mathcal{U}$ è l'insieme totale degli utenti e $N$ è `num_workers` in `config.yaml`. La partizione del worker $k$ viene scritta su host in `data/femnist/worker_k/{train,test}/data.json` e montata nel suo container tramite volume Docker esclusivo:
+dove $\mathcal{U}$ è l'insieme totale degli utenti e $N$ è `num_workers` in `config.yaml`. La partizione del worker $k$ viene scritta su host in `data/femnist/worker_k/{train,test}/data.json` e montata nel suo container tramite bind mount Docker:
 
 ```
 ./data/femnist/worker_k  →  /app/data/femnist  (dentro il container k)
@@ -387,11 +387,29 @@ L'early stopping è **locale e indipendente** per ogni worker: non esiste coordi
 
 #### Fase C — Gossip Push
 
-**Meccanismo.** Prima dell'invio, `shared_state["current_round"]` viene aggiornato al valore del round corrente, rendendolo visibile a Thread 1 per i successivi controlli di staleness. Il worker interroga il Discovery Server tramite `GET /peers`, esclude il proprio indirizzo dalla lista, e seleziona casualmente `min(num_gossip_peers, len(eligible_peers))` vicini. Per ciascun target viene applicata la logica di fault injection (Sezione 8), poi viene invocato `send_model()`.
+**Meccanismo.** Prima dell'invio, `shared_state["current_round"]` viene aggiornato al valore del round corrente, rendendolo visibile a Thread 1 per i successivi controlli di staleness. Il worker interroga il Discovery Server tramite `GET /peers`, esclude il proprio indirizzo dalla lista, e seleziona casualmente `min(gossip_fanout, len(eligible_peers))` vicini. Per ciascun target viene applicata la logica di fault injection (Sezione 8), poi viene invocato `send_model()`.
 
 **Snapshot unico dei pesi.** Il modello viene snapshotted una volta — `weights_snapshot = model.state_dict()` — prima del loop sui target. Tutti i vicini ricevono la stessa versione del modello. Questo evita che modifiche al modello durante l'invio (impossibili in questo design, ma buona pratica) producano incoerenze.
 
-**Selezione casuale dei vicini.** La selezione di $M$ vicini casuali a ogni round implementa il gossip protocol nella sua forma più semplice. La casualità garantisce che nel lungo periodo tutti i worker ricevano aggiornamenti da tutti gli altri (con probabilità che cresce con il numero di round), anche con $M \ll N-1$. Questo produce una connettività media della rete dell'ordine di $M$ archi uscenti per nodo, sufficiente per la propagazione dell'informazione in reti sparse.
+**Selezione casuale dei vicini.** La selezione di $M$ vicini casuali a ogni round implementa la variante **k-push** del gossip protocol (anche nota come *push-based k-fan-out*): ogni nodo invia a $k$ peer scelti a caso in un singolo hop, senza che i destinatari facciano forwarding del messaggio. La casualità garantisce che nel lungo periodo tutti i worker ricevano aggiornamenti da tutti gli altri (con probabilità crescente con il numero di round), anche con $M \ll N-1$. Questo produce una connettività media della rete dell'ordine di $M$ archi uscenti per nodo, sufficiente per la propagazione dell'informazione in reti sparse.
+
+**K-push vs. rumor mongering: analisi comparativa.** Il k-push non è l'unica variante di gossip esistente. L'alternativa classica è il *rumor mongering* (o gossip epidemico): ogni nodo che riceve un messaggio decide probabilisticamente se propagarlo ulteriormente, generando una catena di inoltri multi-hop. La tabella seguente confronta le due varianti nel contesto FL.
+
+| Aspetto | K-push (adottato) | Rumor mongering |
+|---|---|---|
+| **Hop per round** | 1 — il mittente originale invia, i destinatari non forwardano | Multipli — ogni ricevente può diventare mittente |
+| **Traffico** | Deterministico: esattamente $N 	imes k$ messaggi per round | Variabile e imprevedibile; può crescere esponenzialmente su reti piccole |
+| **Diffusione** | Lenta per $N$ grande: raggiunge $k$ peer per round | Rapida: copertura $O(\log N)$ hop con alta probabilità |
+| **Semantica FedAvg** | Corretta: ogni contributo arriva al più da un percorso | Rischio di duplicati: gli stessi pesi possono arrivare via percorsi distinti e venire aggregati più volte |
+| **Deduplicazione** | Non necessaria | Obbligatoria: il buffer deve tracciare `(sender_id, round)` già visti |
+| **Amplificazione stale update** | Contenuta: un update stantio raggiunge al più $k$ nodi | Pericolosa: un update stantio che sfugge al filtro locale si propaga a tutta la rete |
+| **Complessità implementativa** | Bassa | Media — richiede seen-set, logica di forwarding, deduplicazione nel buffer |
+
+**Perché k-push è la scelta corretta in questo progetto.** Il motivo principale è il rapporto tra prestazioni e complessità implementativa. Con $N$ nell'ordine delle decine e $T = 200$ round, la diffusione lenta del k-push non è un problema reale: con $k = 3$ e 20 round, ogni worker riceve statisticamente aggiornamenti dall'intera rete. Il rumor mongering aggiungerebbe complessità sostanziale (deduplicazione nel buffer, logica di forwarding nel worker, stima del traffico) senza benefici misurabili a questa scala.
+
+Il secondo motivo è semantico: FedAvg richiede che ogni contributo venga contato *esattamente una volta* per round. Il k-push garantisce questo per costruzione — ogni worker invia i propri pesi, i destinatari non li ritrasmettono. Il rumor mongering rompe questa invariante e richiederebbe un fix esplicito nel `AggregationBuffer`.
+
+**Quando il rumor mongering sarebbe preferibile.** In sistemi reali con $N$ nell'ordine delle migliaia — reti di sensori IoT, sistemi di membership distribuiti (es. SWIM protocol), DHT come Chord o Kademlia — il k-push con $k$ piccolo lascia zone della rete non raggiunte per decine di round, rendendo la convergenza globale molto lenta. Il rumor mongering garantisce in quei contesti copertura quasi totale in $O(\log N)$ round indipendentemente da $k$, un vantaggio decisivo. In ambito FL, sarebbe applicabile con una variante modificata che deduplicherebbe gli aggiornamenti per `(sender_id, round)` prima dell'aggregazione, accettando il costo di complessità e traffico extra in cambio di convergenza più rapida su reti sparse e molto grandi.
 
 **Perché la selezione avviene nel worker, non nel Registry.** Una progettazione alternativa potrebbe delegare la selezione dei vicini al Discovery Server: il worker chiede "dammi M peer casuali" e il Registry risponde con la lista già filtrata. Questa alternativa è stata esplicitamente scartata per due ragioni distinte.
 
@@ -613,7 +631,7 @@ L'early stopping è **locale e indipendente** per ogni worker: non richiede coor
 Il sistema non usa cross-validation (motivata in Sezione 2.3). L'approccio adottato per la selezione degli iperparametri è il **grid search su hold-out fisso**, che è lo stesso approccio usato nei paper di riferimento LEAF e FedAvg:
 
 1. **Subset veloce per l'esplorazione.** Si lancia `download_femnist.py --sf 0.05` per ottenere il 5% del dataset (~170 scrittori). Con questa dimensione, ogni esperimento completa in pochi minuti anche su CPU.
-2. **Grid search.** Si varia un iperparametro alla volta mantenendo gli altri ai valori di default. I candidati principali sono: `learning_rate` (1e-4, 1e-3, 5e-3), `inner_steps_H` (100, 500, 1000), `num_gossip_peers` (1, 2, N-1). Per ogni configurazione si lancia `docker compose up` e si osserva la convergenza.
+2. **Grid search.** Si varia un iperparametro alla volta mantenendo gli altri ai valori di default. I candidati principali sono: `learning_rate` (1e-4, 1e-3, 5e-3), `inner_steps_H` (100, 500, 1000), `gossip_fanout` (1, 2, N-1). Per ogni configurazione si lancia `docker compose up` e si osserva la convergenza.
 3. **Metrica di confronto.** Dopo ogni esperimento, `python scripts/aggregate_metrics.py` produce le statistiche globali. La metrica principale è la **mean accuracy finale** (media tra worker), con la **std accuracy** come indicatore di equità (worker che convergono uniformemente sono preferibili a quelli dove un worker eccelle e gli altri no).
 4. **Conferma su dataset completo.** La configurazione migliore trovata sul subset 5% viene rieseguita su `--sf 1.0` per verificare che i risultati si scalino correttamente.
 
@@ -625,7 +643,7 @@ Questo procedimento è interamente abilitato dal sistema di metriche descritto n
 
 ### 6.1 Architettura del Sistema di Metriche
 
-In un sistema P2P decentralizzato, non esiste un nodo centrale che osservi le prestazioni globali in tempo reale. Il sistema di metriche adottato sfrutta la struttura dei **volume mount Docker**: ogni worker scrive le proprie metriche su `{data_dir}/metrics.csv`, che — essendo `data_dir` montata dall'host — è immediatamente visibile sul filesystem dell'host senza alcun trasferimento dati aggiuntivo.
+In un sistema P2P decentralizzato, non esiste un nodo centrale che osservi le prestazioni globali in tempo reale. Il sistema di metriche adottato sfrutta la struttura dei **bind mount Docker**: ogni worker scrive le proprie metriche su `{data_dir}/metrics.csv`, che — essendo `data_dir` montata dall'host — è immediatamente visibile sul filesystem dell'host senza alcun trasferimento dati aggiuntivo.
 
 ```
 Container Worker 0               Host
@@ -725,7 +743,7 @@ Le variabili di interesse per lo studio di scalabilità sono:
 - **Accuracy a convergenza** (`mean_accuracy` all'ultimo round): tende a migliorare con più worker perché si esplora una distribuzione di dati più ampia.
 - **Rounds a convergenza** (round in cui `mean_accuracy` si stabilizza): può aumentare con più worker perché i modelli aggregati partono da punti più distanti.
 - **Deviazione standard dell'accuracy** (`std_accuracy`): misura l'equità — con molti worker non-i.i.d., alcuni possono convergere molto più lentamente di altri.
-- **Volume totale di comunicazione** (messaggi × 6.9 MB): scala con O(N × R × M), dove N è num_workers, R i round, M num_gossip_peers.
+- **Volume totale di comunicazione** (messaggi × 6.9 MB): scala con O(N × R × M), dove N è num_workers, R i round, M gossip_fanout.
 - **Durata per round** (`round_duration_s`): domina la Fase B (training locale), quasi indipendente da N — questo è il principale vantaggio del gossip P2P rispetto al FL centralizzato, dove l'aggregazione diventa un collo di bottiglia all'aumentare di N.
 
 ---
@@ -751,7 +769,7 @@ Fase 2 — FL Standard
 Fase 3 — Ricerca degli Iperparametri
   └── Esp. 3a: variare learning_rate
   └── Esp. 3b: variare inner_steps_H
-  └── Esp. 3c: variare num_gossip_peers
+  └── Esp. 3c: variare gossip_fanout
   └── Obiettivo: trovare la configurazione ottimale
 
 Fase 4 — Analisi della Scalabilità
@@ -837,7 +855,7 @@ federated_learning:
   inner_steps_H: 500
   early_stopping_patience: 10
 network:
-  num_gossip_peers: 3
+  gossip_fanout: 3
 ```
 
 **Procedura:**
@@ -897,7 +915,7 @@ Questo è il parametro che bilancia **qualità dell'aggregazione** vs **costo di
 
 #### 3c — Numero di Gossip Peers (M)
 
-| Config | `num_gossip_peers` | Effetto atteso |
+| Config | `gossip_fanout` | Effetto atteso |
 |---|---|---|
 | A | 1 | propagazione lenta: serve più round per diffondere informazioni |
 | B (default) | 2 | buon compromesso |
@@ -950,7 +968,7 @@ Il vantaggio del gossip P2P emerge chiaramente nell'ultimo punto: il volume di c
 
 Testare: 0.0 (nessuna perdita), 0.2 (default), 0.5, 0.8.
 
-Con `drop_probability: 0.8` e `num_gossip_peers: 2`, il numero atteso di messaggi inviati per round è solo $2 \times 0.2 = 0.4$ — meno di uno per round in media. Il sistema dovrebbe mostrare convergenza più lenta o divergenza.
+Con `drop_probability: 0.8` e `gossip_fanout: 2`, il numero atteso di messaggi inviati per round è solo $2 \times 0.2 = 0.4$ — meno di uno per round in media. Il sistema dovrebbe mostrare convergenza più lenta o divergenza.
 
 #### 5b — Variare crash_probability
 
@@ -1227,9 +1245,10 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 | Sezione | Parametro | Default | Descrizione |
 |---|---|:---:|---|
 | `network` | `registry_url` | `http://registry:5000` | Endpoint del Discovery Server; sovrascrivibile via `REGISTRY_URL` env var |
+| `network` | `registry_port` | `5000` | Porta HTTP su cui il registry ascolta; iniettata come `REGISTRY_PORT` env var nel container |
 | `network` | `grpc_port` | `50051` | Porta gRPC esposta da ogni worker |
 | `network` | `num_workers` | `3` | Numero totale di worker; modifica + `python scripts/generate_compose.py` |
-| `network` | `num_gossip_peers` (M) | `3` | Vicini contattati per round nella Fase C |
+| `network` | `gossip_fanout` (M) | `3` | Vicini contattati per round nella Fase C |
 | `federated_learning` | `total_rounds` | `200` | Tetto massimo di round; può terminare prima per early stopping |
 | `federated_learning` | `inner_steps_H` | `500` | Step di training locale per round (Fase B) |
 | `federated_learning` | `early_stopping_patience` | `10` | Round consecutivi senza miglioramento prima di fermare il training |
@@ -1252,8 +1271,9 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 ```yaml
 network:
   registry_url: "http://registry:5000"  # Overridable via REGISTRY_URL env var
+  registry_port: 5000                   # Port the registry server listens on
   grpc_port: 50051
-  num_gossip_peers: 3
+  gossip_fanout: 3
   num_workers: 3                        # Change here, then run: python scripts/generate_compose.py
 
 federated_learning:
@@ -1299,7 +1319,7 @@ python scripts/download_femnist.py --sf 1.0
 # --sf 0.05 per un subset veloce (5%); 1.0 per il dataset completo (~2-4 GB)
 
 # Passo 2 — Imposta i parametri in config.yaml
-#   In particolare: num_workers, num_gossip_peers, total_rounds, ecc.
+#   In particolare: num_workers, gossip_fanout, total_rounds, ecc.
 
 # Passo 3 — Partiziona il dataset e rigenera i compose file
 python scripts/split_dataset.py      # crea data/femnist/worker_{i}/

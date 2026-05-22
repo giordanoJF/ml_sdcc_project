@@ -117,7 +117,7 @@ def main():
     # REGISTRY_URL can be overridden via env var for AWS multi-instance deploys
     registry_url = os.environ.get("REGISTRY_URL", net_cfg["registry_url"])
     grpc_port = net_cfg["grpc_port"]
-    num_gossip_peers = net_cfg["num_gossip_peers"]   # M: peers contacted per round
+    gossip_fanout = net_cfg["gossip_fanout"]          # k: peers to push weights to each round
     my_address = f"{my_host}:{grpc_port}"
 
     total_rounds = fl_cfg["total_rounds"]
@@ -287,7 +287,7 @@ def main():
                 # Exclude self to avoid sending to ourselves
                 eligible_peers = [p for p in all_peers if p != my_address]
                 targets = (
-                    random.sample(eligible_peers, min(num_gossip_peers, len(eligible_peers)))
+                    random.sample(eligible_peers, min(gossip_fanout, len(eligible_peers)))
                     if eligible_peers else []
                 )
 
