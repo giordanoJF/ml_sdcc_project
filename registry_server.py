@@ -6,6 +6,7 @@ Keeps a live map of {worker_id -> grpc_address} and exposes three REST endpoints
 Does NOT handle model weights, hyperparameters, or training state.
 """
 import logging
+import os
 import threading
 
 from flask import Flask, jsonify, request
@@ -50,4 +51,5 @@ def get_peers():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("REGISTRY_PORT", "5000"))
+    app.run(host="0.0.0.0", port=port)

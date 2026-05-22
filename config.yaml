@@ -1,5 +1,6 @@
 network:
   registry_url: "http://registry:5000"  # Overridable via REGISTRY_URL env var
+  registry_port: 5000                   # Port the registry server listens on
   grpc_port: 50051
   num_gossip_peers: 3
   num_workers: 3                        # run: python scripts/generate_compose.py

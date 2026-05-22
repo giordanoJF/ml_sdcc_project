@@ -18,13 +18,14 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-_HEALTHCHECK = (
-    '      test: ["CMD-SHELL", "python -c \\"import urllib.request; '
-    'urllib.request.urlopen(\'http://localhost:5000/peers\')\\""]'
-)
+def _healthcheck(registry_port: int) -> str:
+    return (
+        f'      test: ["CMD-SHELL", "python -c \\"import urllib.request; '
+        f'urllib.request.urlopen(\'http://localhost:{registry_port}/peers\')\\""]'
+    )
 
 
-def write_local_compose(num_workers: int) -> None:
+def write_local_compose(num_workers: int, registry_port: int) -> None:
     """
     Generate docker-compose.yml for local single-machine development.
 
@@ -64,12 +65,14 @@ def write_local_compose(num_workers: int) -> None:
         "    build:",
         "      context: .",
         "      dockerfile: Dockerfile.registry",
+        "    environment:",
+        f"      - REGISTRY_PORT={registry_port}",
         "    ports:",
-        '      - "5000:5000"',
+        f'      - "{registry_port}:{registry_port}"',
         "    networks:",
         "      - fl_net",
         "    healthcheck:",
-        _HEALTHCHECK,
+        _healthcheck(registry_port),
         "      interval: 5s",
         "      timeout: 3s",
         "      retries: 10",
@@ -87,7 +90,7 @@ def write_local_compose(num_workers: int) -> None:
     print(f"  docker-compose.yml        ({num_workers} workers)")
 
 
-def write_aws_compose(num_workers: int, grpc_port: int) -> None:
+def write_aws_compose(num_workers: int, grpc_port: int, registry_port: int) -> None:
     """
     Generate docker-compose.aws.yml for AWS EC2 deployment.
 
@@ -108,7 +111,7 @@ def write_aws_compose(num_workers: int, grpc_port: int) -> None:
         "#     REGISTRY_EC2_IP=<ip-registry> EC2_PUBLIC_IP=<ip-node> \\",
         "#     WORKER_ID=0 MY_HOST=<ip-node> docker compose -f docker-compose.aws.yml up worker_0",
         "#",
-        f"# AWS PREREQUISITES: Security Group open on port 5000 (registry HTTP) "
+        f"# AWS PREREQUISITES: Security Group open on port {registry_port} (registry HTTP) "
         f"and {grpc_port}–{grpc_port + num_workers - 1} (gRPC workers)",
         "",
         'version: "3.8"',
@@ -124,10 +127,12 @@ def write_aws_compose(num_workers: int, grpc_port: int) -> None:
         "    build:",
         "      context: .",
         "      dockerfile: Dockerfile.registry",
+        "    environment:",
+        f"      - REGISTRY_PORT={registry_port}",
         "    ports:",
-        '      - "5000:5000"',
+        f'      - "{registry_port}:{registry_port}"',
         "    healthcheck:",
-        _HEALTHCHECK,
+        _healthcheck(registry_port),
         "      interval: 5s",
         "      timeout: 3s",
         "      retries: 10",
@@ -150,7 +155,7 @@ def write_aws_compose(num_workers: int, grpc_port: int) -> None:
             f"      - WORKER_ID={i}",
             f"      - TOTAL_WORKERS={num_workers}",
             f"      - MY_HOST=${{EC2_PUBLIC_IP:-worker_{i}}}",
-            f"      - REGISTRY_URL=http://${{REGISTRY_EC2_IP:-registry}}:5000",
+            f"      - REGISTRY_URL=http://${{REGISTRY_EC2_IP:-registry}}:{registry_port}",
             "    ports:",
             f'      - "{host_port}:{grpc_port}"',
             "    depends_on:",
@@ -168,10 +173,11 @@ def main():
     cfg = _load_config()
     num_workers: int = cfg["network"]["num_workers"]
     grpc_port: int = cfg["network"]["grpc_port"]
+    registry_port: int = cfg["network"]["registry_port"]
 
     print(f"Generating compose files — {num_workers} workers, gRPC base port {grpc_port} ...")
-    write_local_compose(num_workers)
-    write_aws_compose(num_workers, grpc_port)
+    write_local_compose(num_workers, registry_port)
+    write_aws_compose(num_workers, grpc_port, registry_port)
     print("Done. Run: docker compose up --build")
 
 
