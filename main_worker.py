@@ -1,0 +1,351 @@
+"""
+P2P Worker entry point.
+
+Coordinates two parallel threads:
+  - Thread 1 (gRPC Server): started by start_grpc_server(), always listening.
+  - Thread 2 (Training Loop): the main thread; runs Phases A, B, C each round.
+
+Round structure
+---------------
+  Phase A — Weighted FedAvg aggregation with received neighbors' models.
+  Phase B — Local training for exactly H inner steps (AdamW optimizer).
+  Phase C — Gossip Push: send own weights to M randomly selected peers.
+"""
+import logging
+import os
+import random
+import sys
+import time
+
+import requests
+import torch
+import yaml
+
+from core.dataset import load_partition
+from core.metrics import MetricsWriter
+from core.model import FEMNISTModel
+from core.trainer import train_step, validate
+from network.grpc_client import send_model
+from network.grpc_server import AggregationBuffer, start_grpc_server
+
+# Configure logging early so the worker_id appears in every line
+WORKER_ID = os.environ.get("WORKER_ID", "?")
+logging.basicConfig(
+    level=logging.INFO,
+    format=f"%(asctime)s [Worker {WORKER_ID}] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Registry helpers
+# ---------------------------------------------------------------------------
+
+def load_config(path: str = "config.yaml") -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def register_worker(registry_url: str, worker_id: str, address: str, max_retries: int = 10):
+    """
+    Register this worker with the Discovery Server.
+    Retries with a fixed delay to handle the case where the registry container
+    starts slightly after the workers.
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{registry_url}/register",
+                json={"worker_id": worker_id, "address": address},
+                timeout=5,
+            )
+            response.raise_for_status()
+            logger.info(f"Registered at {address}")
+            return
+        except Exception as exc:
+            logger.warning(f"Registration attempt {attempt + 1}/{max_retries} failed: {exc}")
+            time.sleep(3)
+    logger.error("Could not register with the Discovery Server. Exiting.")
+    sys.exit(1)
+
+
+def deregister_worker(registry_url: str, worker_id: str):
+    """Best-effort deregistration on clean shutdown (skipped on crash)."""
+    try:
+        requests.post(
+            f"{registry_url}/deregister",
+            json={"worker_id": worker_id},
+            timeout=5,
+        )
+    except Exception:
+        pass  # non-critical: the registry will eventually serve a stale entry
+
+
+def fetch_peers(registry_url: str) -> list[str]:
+    """Return the list of currently active gRPC addresses from the registry."""
+    try:
+        return requests.get(f"{registry_url}/peers", timeout=5).json()
+    except Exception as exc:
+        logger.warning(f"Could not fetch peers: {exc}")
+        return []
+
+
+def infinite_batches(loader):
+    """Cycle over a DataLoader indefinitely to allow arbitrary H inner steps."""
+    while True:
+        yield from loader
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    cfg = load_config()
+
+    # Read identity from environment variables set by docker-compose
+    worker_id = str(os.environ.get("WORKER_ID", "0"))
+    total_workers = int(os.environ.get("TOTAL_WORKERS", "3"))
+    my_host = os.environ.get("MY_HOST", f"worker_{worker_id}")
+
+    net_cfg = cfg["network"]
+    fl_cfg = cfg["federated_learning"]
+    ml_cfg = cfg["machine_learning"]
+    fault_injection_cfg = cfg["fault_injection"]
+
+    # REGISTRY_URL can be overridden via env var for AWS multi-instance deploys
+    registry_url = os.environ.get("REGISTRY_URL", net_cfg["registry_url"])
+    grpc_port = net_cfg["grpc_port"]
+    num_gossip_peers = net_cfg["num_gossip_peers"]   # M: peers contacted per round
+    my_address = f"{my_host}:{grpc_port}"
+
+    total_rounds = fl_cfg["total_rounds"]
+    inner_steps = fl_cfg["inner_steps_H"]            # H: local steps before gossip
+    patience = fl_cfg["early_stopping_patience"]
+    gossip_enabled = fl_cfg.get("gossip_enabled", True)
+
+    data_dir = ml_cfg["data_dir"]
+    batch_size = ml_cfg["batch_size"]
+    learning_rate = ml_cfg["learning_rate"]
+    clip_grad = ml_cfg.get("clip_grad", 1.0)
+    label_smoothing = ml_cfg.get("label_smoothing", 0.1)
+    dropout_conv = ml_cfg.get("dropout_conv", 0.25)
+    dropout_fc = ml_cfg.get("dropout_fc", 0.5)
+
+    metrics_cfg = cfg.get("metrics", {})
+    metrics_enabled = metrics_cfg.get("enabled", True)
+    metrics_file = metrics_cfg.get("output_file", "metrics.csv")
+
+    drop_prob = fault_injection_cfg["drop_probability"]
+    crash_prob = fault_injection_cfg["crash_probability"]
+    grpc_timeout = fault_injection_cfg["grpc_timeout_seconds"]
+    max_staleness = fault_injection_cfg["max_staleness"]
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not gossip_enabled:
+        logger.warning("gossip_enabled=false — training in isolation (no-FL baseline mode)")
+    logger.info(f"Starting on {my_address} | device={device} | total_workers={total_workers}")
+
+    # --- Dataset: load this worker's pre-split partition ---
+    train_loader, val_loader, local_samples = load_partition(data_dir, batch_size)
+    # local_samples: number of training examples owned by THIS worker.
+    # Kept constant for the entire run; used to weight our contribution in FedAvg.
+    logger.info(f"Loaded {local_samples} local training samples")
+
+    # --- Model and optimizer ---
+    model = FEMNISTModel(dropout_conv=dropout_conv, dropout_fc=dropout_fc).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+    # --- Metrics writer (writes to data_dir/metrics.csv, visible on host) ---
+    metrics_writer: MetricsWriter | None = None
+    if metrics_enabled:
+        metrics_path = os.path.join(data_dir, metrics_file)
+        metrics_writer = MetricsWriter(metrics_path, worker_id)
+        logger.info(f"Metrics logging enabled → {metrics_path}")
+
+    # --- Shared state between Thread 1 and Thread 2 ---
+    buffer = AggregationBuffer()
+    # current_round is written by Thread 2 (Phase C) and read by Thread 1
+    # for the staleness check; a plain dict is sufficient since Python's GIL
+    # makes integer assignment atomic for a single writer.
+    shared_state = {"current_round": 0}
+
+    # --- Thread 1: start the gRPC server in background ---
+    grpc_server = start_grpc_server(grpc_port, buffer, shared_state, max_staleness)
+
+    # --- Register with the Discovery Server ---
+    register_worker(registry_url, worker_id, my_address)
+
+    # --- Thread 2: training loop ---
+    train_iter = infinite_batches(train_loader)
+    best_val_loss = float("inf")
+    patience_counter = 0
+
+    try:
+        for round_num in range(1, total_rounds + 1):
+            round_start = time.time()
+            logger.info(f"=== Round {round_num}/{total_rounds} ===")
+
+            # -----------------------------------------------------------
+            # Phase A: Weighted FedAvg aggregation (skipped in baseline mode)
+            # -----------------------------------------------------------
+            neighbors_aggregated = 0
+            if gossip_enabled:
+                with buffer.lock:
+                    if buffer.received_samples > 0:
+                        # neighbor_samples: total training examples contributed by all
+                        # neighbors whose updates arrived this round (denominator of
+                        # the neighbors' weighted average, already baked into weighted_sum).
+                        neighbor_samples = buffer.received_samples
+                        neighbors_aggregated = buffer.messages_received
+                        # combined_samples: grand total used to weight local vs. neighbors.
+                        combined_samples = local_samples + neighbor_samples
+                        local_state = model.state_dict()
+                        new_state = {}
+                        for k, v in local_state.items():
+                            if v.is_floating_point():
+                                # FedAvg formula:
+                                #   new_w = (local_w * local_samples + weighted_sum) / combined_samples
+                                # weighted_sum already holds sum(w_i * sender_samples_i)
+                                # over all received neighbors, so no intermediate average needed.
+                                new_state[k] = (
+                                    v.float() * local_samples + buffer.weighted_sum[k]
+                                ) / combined_samples
+                            else:
+                                # Non-float buffers (e.g. BatchNorm's num_batches_tracked)
+                                # are not averaged; keep the local value.
+                                new_state[k] = v
+                        model.load_state_dict(new_state)
+                        # Reset the buffer so the next round starts fresh
+                        buffer.weighted_sum = None
+                        buffer.received_samples = 0
+                        buffer.messages_received = 0
+                        logger.info(
+                            f"FedAvg applied — local={local_samples}, "
+                            f"neighbors={neighbor_samples} ({neighbors_aggregated} models), "
+                            f"combined={combined_samples}"
+                        )
+
+            # Validate after aggregation to track convergence for early stopping
+            val_loss, val_acc = validate(model, val_loader, device)
+            logger.info(f"Validation — loss={val_loss:.4f}, accuracy={val_acc:.2%}")
+
+            if val_loss < best_val_loss - 1e-4:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                logger.info(f"Early stopping patience: {patience_counter}/{patience}")
+                if patience_counter >= patience:
+                    # Exit the training loop but keep the gRPC server alive so
+                    # other workers can still push their updates to us.
+                    logger.info(
+                        "Early stopping triggered. "
+                        "Training loop stopped; gRPC server remains active."
+                    )
+                    break
+
+            # -----------------------------------------------------------
+            # Phase B: Local training for exactly H inner steps
+            # (no network interaction during this phase)
+            # -----------------------------------------------------------
+            total_loss = 0.0
+            for _ in range(inner_steps):
+                batch = next(train_iter)
+                total_loss += train_step(
+                    model, optimizer, batch, device,
+                    clip_grad=clip_grad,
+                    label_smoothing=label_smoothing,
+                )
+            train_loss_avg = total_loss / inner_steps
+            logger.info(
+                f"Local training — avg_loss={train_loss_avg:.4f} "
+                f"over {inner_steps} steps"
+            )
+
+            # -----------------------------------------------------------
+            # Fault injection: random crash simulation
+            # -----------------------------------------------------------
+            if random.random() < crash_prob:
+                # sys.exit raises SystemExit, which is caught by the finally
+                # block (deregistration runs) but NOT by wait_for_termination(),
+                # so the process actually dies — simulating a real node crash.
+                logger.warning("FAULT INJECTION: simulated node crash via sys.exit(1)")
+                sys.exit(1)
+
+            # -----------------------------------------------------------
+            # Phase C: Gossip Push (skipped in baseline mode)
+            # -----------------------------------------------------------
+            sent_count = 0
+            if gossip_enabled:
+                # Update current_round before sending so the receiver's staleness
+                # check sees the correct value.
+                shared_state["current_round"] = round_num
+
+                all_peers = fetch_peers(registry_url)
+                # Exclude self to avoid sending to ourselves
+                eligible_peers = [p for p in all_peers if p != my_address]
+                targets = (
+                    random.sample(eligible_peers, min(num_gossip_peers, len(eligible_peers)))
+                    if eligible_peers else []
+                )
+
+                weights_snapshot = model.state_dict()  # snapshot once, reuse for all targets
+                dropped_count = 0
+                for target in targets:
+                    # Simulate packet loss before attempting the RPC
+                    if random.random() < drop_prob:
+                        dropped_count += 1
+                        logger.debug(f"Dropped message to {target}")
+                        continue
+                    success = send_model(
+                        target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
+                    )
+                    if success:
+                        sent_count += 1
+
+                logger.info(
+                    f"Gossip push — sent={sent_count}, dropped={dropped_count}, "
+                    f"targets={len(targets)}"
+                )
+
+            # -----------------------------------------------------------
+            # Log round metrics
+            # -----------------------------------------------------------
+            round_duration = time.time() - round_start
+            if metrics_writer is not None:
+                metrics_writer.log(
+                    round_num=round_num,
+                    train_loss_avg=train_loss_avg,
+                    val_loss=val_loss,
+                    val_accuracy=val_acc,
+                    round_duration_s=round_duration,
+                    neighbors_aggregated=neighbors_aggregated,
+                    peers_contacted=sent_count,
+                )
+
+    finally:
+        # Save the final model checkpoint to data_dir (visible on host via mount).
+        # Used by aggregate_metrics.py to compute inter-worker weight divergence.
+        checkpoint_path = os.path.join(data_dir, "model_final.pt")
+        try:
+            torch.save(model.state_dict(), checkpoint_path)
+            logger.info(f"Checkpoint saved → {checkpoint_path}")
+        except Exception as exc:
+            logger.warning(f"Could not save checkpoint: {exc}")
+
+        # Deregister on clean exit (early stopping or round limit reached).
+        # Not executed if the process is killed by sys.exit inside the loop
+        # because SystemExit propagates through finally but wait_for_termination
+        # is never reached, which is the intended crash behavior.
+        deregister_worker(registry_url, worker_id)
+
+    # Keep the process alive so Thread 1 can continue serving peers that are
+    # still training. Reached only after a clean break from the loop.
+    logger.info("Training complete. gRPC server still active for remaining peers.")
+    grpc_server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    main()
