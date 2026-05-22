@@ -1,0 +1,28 @@
+# Git and IDE
+.git/
+.idea/
+.venv/
+
+# Dataset and external repos (mounted as volumes, not baked into the image)
+data/
+leaf/
+
+# Generated proto stubs (generated inside the container during build)
+gossip_pb2.py
+gossip_pb2_grpc.py
+
+# Scripts, docs, PDFs, and config not needed inside the container
+scripts/
+pdf/
+*.md
+*.log
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Compose files (not needed inside the container)
+docker-compose*.yml

@@ -1,0 +1,23 @@
+/.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# File generati dal proto (creati nel Dockerfile)
+gossip_pb2.py
+gossip_pb2_grpc.py
+
+# Dataset scaricato separatamente con scripts/download_femnist.py
+data/
+leaf/
+
+# Log e variabili d'ambiente
+*.log
+.env
+/pdf/
+/docker-compose.yml
+/docker-compose.aws.yml
