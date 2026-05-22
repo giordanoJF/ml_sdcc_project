@@ -14,6 +14,7 @@ Round structure
 import logging
 import os
 import random
+import signal
 import sys
 import time
 
@@ -177,6 +178,19 @@ def main():
     # --- Register with the Discovery Server ---
     register_worker(registry_url, worker_id, my_address)
 
+    # --- Signal handlers for clean shutdown ---
+    # SIGTERM: sent by `docker stop` / `docker compose down` (10s grace period before SIGKILL).
+    # SIGINT:  sent by Ctrl+C, both in an attached terminal and via `docker attach`.
+    # Both call sys.exit(0) which raises SystemExit, traversing the finally block below
+    # and guaranteeing deregister_worker() and checkpoint save always run.
+    # SIGKILL (docker kill, OOM killer) cannot be caught — documented as known limitation.
+    def _handle_shutdown(signum, frame):
+        logger.info(f"Signal {signum} received — shutting down cleanly")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     # --- Thread 2: training loop ---
     train_iter = infinite_batches(train_loader)
     best_val_loss = float("inf")
@@ -293,6 +307,9 @@ def main():
 
                 weights_snapshot = model.state_dict()  # snapshot once, reuse for all targets
                 dropped_count = 0
+                failed_targets = []
+                tried = set(targets)  # all peers attempted, used to avoid duplicates on retry
+
                 for target in targets:
                     # Simulate packet loss before attempting the RPC
                     if random.random() < drop_prob:
@@ -304,10 +321,33 @@ def main():
                     )
                     if success:
                         sent_count += 1
+                    else:
+                        failed_targets.append(target)
+
+                # Reactive re-query: if any gRPC push failed (not simulated drops),
+                # fetch a fresh peer list and attempt one replacement per failure.
+                # This covers the case where a peer crashed and deregistered between
+                # our initial fetch_peers() call and the push attempt.
+                # At most one extra HTTP call per round, only when failures occur.
+                retried = 0
+                if failed_targets:
+                    fresh_peers = fetch_peers(registry_url)
+                    replacements = [p for p in fresh_peers if p != my_address and p not in tried]
+                    for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
+                        tried.add(replacement)
+                        if random.random() < drop_prob:
+                            dropped_count += 1
+                            continue
+                        success = send_model(
+                            replacement, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
+                        )
+                        if success:
+                            sent_count += 1
+                        retried += 1
 
                 logger.info(
                     f"Gossip push — sent={sent_count}, dropped={dropped_count}, "
-                    f"targets={len(targets)}"
+                    f"failed={len(failed_targets)}, retried={retried}"
                 )
 
             # -----------------------------------------------------------
@@ -335,10 +375,9 @@ def main():
         except Exception as exc:
             logger.warning(f"Could not save checkpoint: {exc}")
 
-        # Deregister on clean exit (early stopping or round limit reached).
-        # Not executed if the process is killed by sys.exit inside the loop
-        # because SystemExit propagates through finally but wait_for_termination
-        # is never reached, which is the intended crash behavior.
+        # Always executed: sys.exit(), SystemExit, KeyboardInterrupt, and normal
+        # loop completion all traverse finally. SIGTERM/SIGINT are routed through
+        # sys.exit(0) by the signal handlers above. Only SIGKILL bypasses this block.
         deregister_worker(registry_url, worker_id)
 
     # Keep the process alive so Thread 1 can continue serving peers that are
