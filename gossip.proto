@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package gossip;
+
+// Each worker exposes this service to receive models from neighbors
+service GossipService {
+    rpc ReceiveModel (ModelMessage) returns (Ack);
+}
+
+// Gossip message: model weights + sender metadata
+message ModelMessage {
+    bytes  weights     = 1; // state_dict serialized with torch.save
+    int32  round       = 2; // round of the sender at the time of sending
+    int32  num_samples = 3; // local samples of the sender (for weighted FedAvg)
+    string worker_id   = 4; // ID of the sender (for logging only)
+}
+
+// Acknowledgment response
+message Ack {
+    bool accepted = 1;
+}
