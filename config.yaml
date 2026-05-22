@@ -1,34 +1,128 @@
 network:
-  registry_url: "http://registry:5000"  # Overridable via REGISTRY_URL env var
-  registry_port: 5000                   # Port the registry server listens on
+  # Full URL of the Discovery Server. Workers use this to register, deregister,
+  # and fetch the current peer list. Override with REGISTRY_URL env var for AWS
+  # multi-instance deployments where the registry runs on a separate machine.
+  registry_url: "http://registry:5000"
+
+  # Port the registry HTTP server listens on inside its container.
+  # Must match the port in registry_url. Injected as REGISTRY_PORT env var
+  # into the registry container by generate_compose.py.
+  registry_port: 5000
+
+  # Port each worker's gRPC server listens on for incoming model pushes (Phase C).
+  # All workers use the same internal port; in docker-compose.aws.yml each worker
+  # is mapped to a distinct host port (grpc_port + worker_id) to avoid collisions.
   grpc_port: 50051
-  gossip_fanout: 3                      # peers to push weights to each round (k-push)
-  num_workers: 3                        # run: python scripts/generate_compose.py
+
+  # Number of randomly selected peers each worker pushes its weights to at the
+  # end of each round (k-push gossip, Phase C). Higher values increase traffic
+  # linearly (k * model_size per round) but improve convergence speed.
+  # Typical range: 1 (minimal traffic) to N-1 (full broadcast).
+  gossip_fanout: 3
+
+  # Total number of worker containers. After changing this value, regenerate
+  # the compose files and re-partition the dataset:
+  #   python scripts/split_dataset.py && python scripts/generate_compose.py
+  num_workers: 3
 
 federated_learning:
-  total_rounds: 200           # Maximum number of rounds
-  inner_steps_H: 500          # Local training steps between two gossip rounds
+  # Maximum number of training rounds before the process terminates.
+  # One round = Phase A (FedAvg aggregation) + Phase B (H local steps) + Phase C (gossip push).
+  # Can terminate earlier if early_stopping_patience is reached.
+  total_rounds: 200
+
+  # Number of local SGD steps each worker performs in Phase B before gossiping (H in DiLoCo).
+  # Higher H = less communication, more local drift between workers.
+  # Lower H = more communication, models stay closer but traffic increases.
+  # Default 500: with batch_size=32 this processes 16000 samples between gossip rounds.
+  inner_steps_H: 500
+
+  # Aggregation algorithm applied in Phase A. Currently only FedAvg is implemented.
   aggregation_strategy: "FedAvg"
-  early_stopping_patience: 10 # Rounds without improvement before stopping training
-  gossip_enabled: true        # Set false to train in isolation (no-FL baseline)
+
+  # Rounds without validation loss improvement before a worker stops local training.
+  # IMPORTANT — this is a LOCAL decision based on the worker's own validation partition,
+  # not a global FL convergence signal. When a worker stops, it deregisters from the
+  # Discovery Server and other workers lose it as a gossip peer, potentially slowing
+  # global convergence. For controlled comparative experiments, disable early stopping
+  # by setting this to a value larger than total_rounds (e.g. 9999) so all workers
+  # run for the same number of rounds. Keep it enabled for longer production runs
+  # to avoid wasting compute when a worker has genuinely plateaued.
+  # The threshold for "improvement" is 1e-4 (hardcoded in main_worker.py).
+  early_stopping_patience: 10
+
+  # Set to false to disable Phase A (aggregation) and Phase C (gossip push).
+  # Workers train in complete isolation on their local partition — no model sharing.
+  # Use this as the no-FL baseline in Experiment 1 to quantify how much the
+  # federated aggregation actually contributes to accuracy and convergence.
+  gossip_enabled: true
 
 machine_learning:
   dataset: "femnist"
+
+  # Path to the worker's data partition INSIDE the container.
+  # Mapped from the host via bind mount: ./data/femnist/worker_<id> -> /app/data/femnist
+  # Do not change unless you also update the bind mount in the compose files.
   data_dir: "/app/data/femnist"
+
+  # Mini-batch size for AdamW. Larger batches = more stable gradients but higher
+  # memory usage and fewer gradient steps per epoch.
   batch_size: 32
+
+  # Learning rate for AdamW. AdamW is less sensitive to this than SGD, but on
+  # non-i.i.d. FL partitions a smaller lr (e.g. 1e-4) can reduce inter-worker drift.
   learning_rate: 0.001
+
+  # Optimizer. AdamW is used throughout; this field is informational only.
   optimizer: "AdamW"
-  clip_grad: 1.0          # max L2 norm for gradient clipping (0 = disabled)
-  label_smoothing: 0.1    # cross-entropy label smoothing (0 = disabled)
-  dropout_conv: 0.25      # spatial dropout probability in conv blocks
-  dropout_fc: 0.5         # dropout probability before the final FC layer
+
+  # Maximum L2 norm for gradient clipping. Clips gradients that exceed this threshold
+  # before the optimizer step. Reduces client drift in FL, where local gradients can
+  # diverge significantly from the global optimum. Set to 0 to disable.
+  clip_grad: 1.0
+
+  # Label smoothing coefficient for cross-entropy loss. Replaces hard targets (0/1)
+  # with soft targets (epsilon/(C-1) for wrong classes, 1-epsilon for the correct one).
+  # Helps calibration on FEMNIST's 62 visually similar classes. Set to 0 to disable.
+  label_smoothing: 0.1
+
+  # Dropout probability applied after each conv block (Dropout2d = spatial dropout:
+  # drops entire feature maps rather than individual activations, more appropriate
+  # for convolutional layers). Set to 0 to disable.
+  dropout_conv: 0.25
+
+  # Dropout probability applied before the final fully-connected classification layer.
+  # Set to 0 to disable.
+  dropout_fc: 0.5
 
 metrics:
+  # Set to false to disable per-round CSV logging (slightly faster training).
   enabled: true
-  output_file: "metrics.csv"  # written to data_dir/metrics.csv (mounted on host)
+
+  # Name of the CSV file written to data_dir/ at the end of each round.
+  # Visible on the host immediately via the bind mount — no data transfer needed.
+  # After the experiment, run: python scripts/aggregate_metrics.py
+  output_file: "metrics.csv"
 
 fault_injection:
-  drop_probability: 0.20      # Probability of dropping a gossip push
-  crash_probability: 0.05     # Probability of simulated crash per round
-  grpc_timeout_seconds: 5.0   # Timeout for each gRPC call
-  max_staleness: 10           # Discard updates older than N rounds
+  # Probability [0, 1] that a gossip push to a specific peer is silently dropped
+  # before the gRPC call is even attempted (simulates packet loss / network partition).
+  # At 0.20 with gossip_fanout=3, on average 2.4 messages are sent per round instead of 3.
+  drop_probability: 0.20
+
+  # Probability [0, 1] that a worker calls sys.exit(1) after Phase B in a given round,
+  # simulating a node crash. The process terminates immediately; the finally block
+  # still runs (deregistration + checkpoint save) because sys.exit raises SystemExit.
+  # At 0.05, expected lifetime of a worker before crash = 1/0.05 = 20 rounds.
+  crash_probability: 0.05
+
+  # Timeout in seconds for each outgoing gRPC call (send_model). If the target
+  # worker does not respond within this window, the call is marked as failed and
+  # the push is skipped for that peer (non-blocking for the sender).
+  grpc_timeout_seconds: 5.0
+
+  # Maximum round age difference accepted for incoming model updates.
+  # A message from round R is accepted only if current_round - R <= max_staleness.
+  # Prevents workers from incorporating very outdated weights that could degrade
+  # convergence. With H=500, 10 stale rounds = 5000 local batches of delay.
+  max_staleness: 10
