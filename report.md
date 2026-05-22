@@ -389,6 +389,10 @@ L'early stopping è **locale e indipendente** per ogni worker: non esiste coordi
 
 **Meccanismo.** Prima dell'invio, `shared_state["current_round"]` viene aggiornato al valore del round corrente, rendendolo visibile a Thread 1 per i successivi controlli di staleness. Il worker interroga il Discovery Server tramite `GET /peers`, esclude il proprio indirizzo dalla lista, e seleziona casualmente `min(gossip_fanout, len(eligible_peers))` vicini. Per ciascun target viene applicata la logica di fault injection (Sezione 8), poi viene invocato `send_model()`.
 
+**Frequenza di interrogazione del registry.** Il registry viene interrogato **una volta per round**, all'inizio della Fase C. Questa scelta è coerente con il requisito di minimizzare il traffico di rete: con H=500 inner steps un round dura tipicamente diversi minuti, quindi aggiornare la lista peer più spesso produrrebbe overhead HTTP senza benefici concreti sulla freschezza. Interrogare il registry meno spesso (es. ogni K round) ridurrebbe ulteriormente il traffico al costo di una visione più stale della topologia. Il trade-off è bilanciato al valore attuale: un'interrogazione per round mantiene la lista allineata con i cambiamenti topologici (worker che si registrano o deregistrano) senza generare traffico aggiuntivo apprezzabile rispetto ai push gRPC che domina il volume totale.
+
+**Re-query reattivo dopo fallimento gRPC.** Un push fallito (codice `UNAVAILABLE` o `DEADLINE_EXCEEDED`) è un segnale che il peer potrebbe essere crashato e potrebbe essersi già deregistrato. Il worker sfrutta questa informazione: se almeno un push gRPC fallisce (esclusi i drop simulati, che sono intenzionali), viene eseguita immediatamente una seconda chiamata a `GET /peers` per ottenere una lista aggiornata. Per ogni peer irraggiungibile viene tentato un sostitutivo scelto tra i peer freschi non ancora contattati in questo round (tracciati nel set `tried`). Questo meccanismo costa **al massimo una HTTP call extra per round**, emessa solo quando si verificano fallimenti reali. Copre il caso più comune: peer crashato con deregistrazione pulita (via `finally` o signal handler). Non risolve il caso di hard crash (SIGKILL, OOM) dove il peer rimane nel registry — documentato come known limitation in Sezione 8.4. Il log di fine Fase C riporta `failed=N, retried=M` per osservabilità diretta.
+
 **Snapshot unico dei pesi.** Il modello viene snapshotted una volta — `weights_snapshot = model.state_dict()` — prima del loop sui target. Tutti i vicini ricevono la stessa versione del modello. Questo evita che modifiche al modello durante l'invio (impossibili in questo design, ma buona pratica) producano incoerenze.
 
 **Selezione casuale dei vicini.** La selezione di $M$ vicini casuali a ogni round implementa la variante **k-push** del gossip protocol (anche nota come *push-based k-fan-out*): ogni nodo invia a $k$ peer scelti a caso in un singolo hop, senza che i destinatari facciano forwarding del messaggio. La casualità garantisce che nel lungo periodo tutti i worker ricevano aggiornamenti da tutti gli altri (con probabilità crescente con il numero di round), anche con $M \ll N-1$. Questo produce una connettività media della rete dell'ordine di $M$ archi uscenti per nodo, sufficiente per la propagazione dell'informazione in reti sparse.
@@ -405,9 +409,9 @@ L'early stopping è **locale e indipendente** per ogni worker: non esiste coordi
 | **Amplificazione stale update** | Contenuta: un update stantio raggiunge al più $k$ nodi | Pericolosa: un update stantio che sfugge al filtro locale si propaga a tutta la rete |
 | **Complessità implementativa** | Bassa | Media — richiede seen-set, logica di forwarding, deduplicazione nel buffer |
 
-**Perché k-push è la scelta corretta in questo progetto.** Il motivo principale è il rapporto tra prestazioni e complessità implementativa. Con $N$ nell'ordine delle decine e $T = 200$ round, la diffusione lenta del k-push non è un problema reale: con $k = 3$ e 20 round, ogni worker riceve statisticamente aggiornamenti dall'intera rete. Il rumor mongering aggiungerebbe complessità sostanziale (deduplicazione nel buffer, logica di forwarding nel worker, stima del traffico) senza benefici misurabili a questa scala.
+**Perché k-push è la scelta corretta in questo progetto.** La ragione primaria è un **requisito esplicito della traccia di progetto**: il sistema deve mantenere basso il traffico di rete. Il k-push soddisfa questo requisito per costruzione: il volume di comunicazione per round è deterministico e pari a $N 	imes k 	imes 	ext{model\_size}$, indipendentemente dallo stato della rete. Con il rumor mongering il traffico è invece imprevedibile e può crescere molto di più — ogni update si propaga a cascata, e su reti piccole (N=3–20) questo produce ridondanza elevata senza benefici reali di diffusione. Il k-push permette di calibrare con precisione il trade-off tra traffico e qualità dell'aggregazione agendo su un solo parametro (`gossip_fanout`), in linea con l'obiettivo del progetto di analizzare sperimentalmente questo trade-off.
 
-Il secondo motivo è semantico: FedAvg richiede che ogni contributo venga contato *esattamente una volta* per round. Il k-push garantisce questo per costruzione — ogni worker invia i propri pesi, i destinatari non li ritrasmettono. Il rumor mongering rompe questa invariante e richiederebbe un fix esplicito nel `AggregationBuffer`.
+Il secondo motivo è semantico: FedAvg richiede che ogni contributo venga contato *esattamente una volta* per round. Il k-push garantisce questo per costruzione — ogni worker invia i propri pesi, i destinatari non li ritrasmettono. Il rumor mongering rompe questa invariante e richiederebbe un fix esplicito nel `AggregationBuffer`, aggiungendo complessità senza vantaggi a questa scala.
 
 **Quando il rumor mongering sarebbe preferibile.** In sistemi reali con $N$ nell'ordine delle migliaia — reti di sensori IoT, sistemi di membership distribuiti (es. SWIM protocol), DHT come Chord o Kademlia — il k-push con $k$ piccolo lascia zone della rete non raggiunte per decine di round, rendendo la convergenza globale molto lenta. Il rumor mongering garantisce in quei contesti copertura quasi totale in $O(\log N)$ round indipendentemente da $k$, un vantaggio decisivo. In ambito FL, sarebbe applicabile con una variante modificata che deduplicherebbe gli aggiornamenti per `(sender_id, round)` prima dell'aggregazione, accettando il costo di complessità e traffico extra in cambio di convergenza più rapida su reti sparse e molto grandi.
 
@@ -620,11 +624,27 @@ Il modello proposto ha **meno parametri** del placeholder nonostante abbia il do
 
 ### 5.5 Early Stopping Locale
 
-L'early stopping è implementato nel training loop principale (`main_worker.py`) e si basa sulla validation loss locale calcolata da `validate()`. Dopo ogni round di H inner steps, il modello viene valutato sul test set locale. Se la validation loss non migliora di almeno $10^{-4}$ per `early_stopping_patience` round consecutivi (default: 10, configurabile in `config.yaml`), il training locale si arresta.
+L'early stopping è implementato nel training loop principale (`main_worker.py`) e si basa sulla validation loss locale calcolata da `validate()`. La validazione avviene **dopo la Phase A** (aggregazione FedAvg), quindi misura la qualità del modello aggregato — non solo del modello locale pre-training. Se la validation loss non migliora di almeno $10^{-4}$ per `early_stopping_patience` round consecutivi (default: 10), il training locale si arresta.
 
-Il comportamento post-early stopping è intenzionalmente non-terminante: il thread di training si ferma, ma il **server gRPC rimane attivo**. I worker che continuano il training possono ancora inviare aggiornamenti al worker convergente, e possono ricevere il suo modello — che è il più aggiornato disponibile per quel nodo. Questo comportamento è intrinseco al modello a due thread: Thread 1 (gRPC) non ha dipendenze da Thread 2 (training loop).
+Il comportamento post-early stopping è intenzionalmente non-terminante: il thread di training (Thread 2) si ferma, ma il **server gRPC (Thread 1) rimane attivo**. Questo comportamento è ottenuto chiamando `grpc_server.wait_for_termination()` dopo il break dal loop, che blocca il thread principale finché il server non viene fermato esternamente.
 
-L'early stopping è **locale e indipendente** per ogni worker: non richiede coordinamento tra nodi e non è influenzato dallo stato degli altri worker. Worker diversi possono convergere in round diversi; quelli che convergono prima continuano a servire i peer come ricevitori passivi di gossip.
+#### Differenza semantica rispetto all'early stopping centralizzato
+
+In ML centralizzato, l'early stopping misura la loss sul validation set **globale**: se peggiora, il modello sta overfittando l'intero dataset di training. La decisione è globale e coordinata.
+
+Nel nostro sistema la decisione è **locale e indipendente**: ogni worker misura la propria val_loss sulla propria partizione locale. Questo crea due problemi specifici del contesto FL:
+
+1. **Convergenza locale ≠ convergenza globale.** Un worker con una partizione "facile" può raggiungere un plateau locale al round 30 mentre la rete FL globale non ha ancora raggiunto consenso. Fermare quel worker priva gli altri di un peer attivo nei round successivi.
+
+2. **Perdita di un vicino gossip.** Quando un worker si ferma, chiama `deregister_worker()` nel blocco `finally` e sparisce dalla lista peer del Discovery Server. Gli altri worker non lo trovano più come target per i push di Phase C, riducendo il `gossip_fanout` effettivo della rete. Con 3 worker totali, la perdita di uno riduce il fanout disponibile da 2 a 1 — impatto significativo.
+
+Il fatto che la validation avvenga dopo la Phase A mitiga parzialmente il primo problema: la loss misurata include il contributo degli aggiornamenti ricevuti dai vicini, non solo quello del training locale. Tuttavia non elimina il rischio di stopping prematuro.
+
+#### Raccomandazione per gli esperimenti
+
+Per i **confronti controllati** (Esperimenti 1–4 del piano sperimentale), è consigliabile disabilitare l'early stopping impostando `early_stopping_patience` a un valore superiore a `total_rounds` (es. `9999`). Questo garantisce che tutti i worker eseguano esattamente lo stesso numero di round, rendendo i confronti di accuratezza e convergenza direttamente comparabili.
+
+Per **run di produzione** o esperimenti esplorativi dove si vuole evitare compute inutile su worker già convergenti, l'early stopping può rimanere abilitato con `patience: 10`.
 
 ### 5.6 Selezione degli Iperparametri
 
@@ -1063,11 +1083,13 @@ if random.random() < crash_prob:
 
 La scelta di `sys.exit(1)` è deliberata e ha implicazioni precise:
 
-1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e non serve più quell'indirizzo ai peer.
+1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e il checkpoint viene salvato.
 
-2. Tuttavia, `SystemExit` non viene catturata da `grpc_server.wait_for_termination()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
+2. `SystemExit` non viene catturata da `grpc_server.wait_for_termination()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
 
 3. Il Docker container si arresta con exit code 1, il che (in assenza di `restart: always` nel compose) lascia il servizio down — comportamento intenzionale.
+
+Lo stesso meccanismo `finally` è sfruttato dai signal handler descritti in Sezione 8.4: SIGTERM e SIGINT vengono intercettati e reindirizzati a `sys.exit(0)`, garantendo la stessa sequenza di cleanup (deregistrazione + checkpoint) anche per shutdown manuali e `docker stop`.
 
 #### Gestione del nodo crashato dagli altri worker
 
@@ -1100,6 +1122,49 @@ Se il server non risponde entro `grpc_timeout_seconds` (default: 5.0 s), gRPC so
 #### Trade-off nella scelta del timeout
 
 Un timeout troppo basso (es. 0.5 s) potrebbe rifiutare connessioni legittime verso nodi lenti ma attivi, degradando artificialmente il numero di aggiornamenti ricevuti. Un timeout troppo alto (es. 60 s) renderebbe il round lento in presenza di nodi crashati. Il valore di 5 secondi è sufficiente per reti locali (latenza <1 ms) e ragionevole per EC2 nella stessa region (latenza tipica 1–10 ms), lasciando ampio margine per serializzazione e deserializzazione dei pesi.
+
+### 8.4 Graceful Shutdown: Signal Handling
+
+#### Il problema: hard crash vs shutdown gestito
+
+Il meccanismo di fault injection (Sezione 8.2) simula crash tramite `sys.exit(1)`, che attraversa il blocco `finally` e deregistra il worker pulitamente. Nella realtà esistono però scenari di terminazione che non passano per il codice Python:
+
+| Evento | Segnale | Intercettabile? | Deregistrazione |
+|---|---|:---:|:---:|
+| `docker stop` / `docker compose down` | SIGTERM | ✅ | ✅ con handler |
+| Ctrl+C (terminale o `docker attach`) | SIGINT | ✅ | ✅ con handler |
+| `docker kill` | SIGKILL | ❌ | ❌ |
+| OOM killer del kernel | SIGKILL | ❌ | ❌ |
+
+SIGTERM e SIGINT sono intercettabili in Python tramite `signal.signal()`. SIGKILL è inviato direttamente dal kernel al processo e non può essere catturato in nessun linguaggio — è il meccanismo di terminazione forzata di Unix.
+
+#### Implementazione
+
+All'avvio, dopo la registrazione presso il Discovery Server, vengono installati due handler:
+
+```python
+def _handle_shutdown(signum, frame):
+    logger.info(f"Signal {signum} received — shutting down cleanly")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, _handle_shutdown)
+signal.signal(signal.SIGINT, _handle_shutdown)
+```
+
+Entrambi chiamano `sys.exit(0)`, che solleva `SystemExit` e attraversa il blocco `finally` — la stessa sequenza del crash simulato, ma con exit code 0 (terminazione normale). Il risultato è:
+
+1. `deregister_worker()` viene chiamato → il worker sparisce dalla lista peer
+2. Il checkpoint `model_final.pt` viene salvato
+3. Il processo termina con exit code 0
+
+#### Known limitation: SIGKILL e OOM
+
+Se il container viene terminato con `docker kill` o dall'OOM killer del kernel, il processo riceve SIGKILL e termina istantaneamente senza eseguire alcun codice Python. In questo caso:
+- Il worker rimane nel registry fino al successivo riavvio (entry stale)
+- Gli altri worker continueranno a tentare push verso di esso, ricevendo `UNAVAILABLE`
+- Il meccanismo di re-query reattivo (Sezione 4.2) attiva automaticamente la ricerca di peer sostitutivi
+
+Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel registry: i worker inviano periodicamente un segnale di vita, e il registry rimuove automaticamente chi non si fa vivo da T secondi. Questo è il pattern adottato in protocolli di membership production-grade come SWIM. Per il perimetro di questo progetto, dove i crash SIGKILL non fanno parte del modello di fault injection, il meccanismo di re-query reattivo costituisce una mitigazione sufficiente.
 
 ---
 
