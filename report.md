@@ -1212,7 +1212,7 @@ python scripts/generate_compose.py
 docker compose up --build
 ```
 
-`generate_compose.py` produce `docker-compose.yml` e `docker-compose.aws.yml` con il numero corretto di servizi. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers` come variabili d'ambiente, e monta esclusivamente la propria directory `./data/femnist/worker_i` nel container — isolamento dei dati garantito a livello di filesystem.
+`generate_compose.py` produce `docker-compose.yml` e `docker-compose.aws.yml` con il numero corretto di servizi. Il registry riceve `REGISTRY_PORT` come variabile d'ambiente, in modo che la porta su cui ascolta sia sempre coerente con quella configurata in `config.yaml`. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers` come variabili d'ambiente, e monta esclusivamente la propria partizione tramite **bind mount** Docker (`type: bind`, sintassi lunga esplicita) — isolamento dei dati garantito a livello di filesystem.
 
 In AWS, ogni worker ottiene anche una porta host distinta (`grpc_port + i`) per evitare conflitti nel caso di deployment su istanza singola (Opzione A).
 
