@@ -1,0 +1,30 @@
+# Host development dependencies
+# Install with: pip install -r requirements.debug.txt
+#
+# Covers all scripts and modules that run directly on the host (not inside Docker):
+#   - scripts/download_femnist.py   → tensorflow-cpu, Pillow, numpy
+#   - scripts/split_dataset.py      → pyyaml
+#   - scripts/generate_compose.py   → pyyaml
+#   - scripts/aggregate_metrics.py  → torch
+#   - main_worker.py (local debug)  → torch, grpcio, pyyaml, requests
+#   - registry_server.py (local)    → flask
+#   - proto stub generation         → grpcio-tools
+
+# ML
+torch>=2.1,<3.0
+
+# gRPC (runtime + code generation from gossip.proto)
+grpcio>=1.60,<2.0
+grpcio-tools>=1.60,<2.0
+
+# HTTP / web
+requests>=2.31
+flask>=3.0,<4.0
+
+# Config
+pyyaml>=6.0
+
+# FEMNIST dataset preprocessing (used by scripts/download_femnist.py via LEAF)
+tensorflow-cpu>=2.13
+Pillow>=10.0
+numpy>=1.24
