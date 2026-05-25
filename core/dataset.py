@@ -74,7 +74,7 @@ def load_partition(
         train_loader, val_loader, num_train_samples
     """
     train_users, train_data = _read_json_shards(os.path.join(data_dir, "train"))
-    val_users, val_data = _read_json_shards(os.path.join(data_dir, "test"))
+    val_users, val_data = _read_json_shards(os.path.join(data_dir, "val"))
 
     def collect_samples(users: list, data_map: dict) -> tuple[list, list]:
         # Flatten all writers' samples into two parallel lists.

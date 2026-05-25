@@ -139,9 +139,15 @@ def main():
 
     print(f"Splitting FEMNIST into {num_workers} partitions ...")
 
-    for split in ("train", "test"):
-        src_dir = os.path.join(SRC_DIR, split)
-        print(f"\n[{split}]")
+    # LEAF uses "train/" and "test/" as directory names, but the "test/" split
+    # is used as a validation set in our system (measured each round for early
+    # stopping). We rename it to "val/" in the per-worker directories so the
+    # code reflects the actual usage. The LEAF source directories are unchanged.
+    split_mapping = {"train": "train", "test": "val"}
+
+    for src_split, dst_split in split_mapping.items():
+        src_dir = os.path.join(SRC_DIR, src_split)
+        print(f"\n[{src_split} → {dst_split}]")
 
         # Pass 1: collect writer IDs only (no pixel data)
         all_users = _collect_user_ids(src_dir)
@@ -158,12 +164,12 @@ def main():
         # Create output directories
         out_dirs = []
         for i in range(num_workers):
-            d = os.path.join(DEST_ROOT, f"worker_{i}", split)
+            d = os.path.join(DEST_ROOT, f"worker_{i}", dst_split)
             os.makedirs(d, exist_ok=True)
             out_dirs.append(d)
 
         # Pass 2: stream shards, write output files immediately
-        _stream_split(split, worker_map, num_workers, worker_user_lists, out_dirs)
+        _stream_split(src_split, worker_map, num_workers, worker_user_lists, out_dirs)
 
     print("\nDone. Per-worker partitions written to:")
     for i in range(num_workers):

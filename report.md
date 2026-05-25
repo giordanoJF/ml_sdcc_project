@@ -88,7 +88,7 @@ Il training set completo è distribuito su **36 file JSON**; ogni file copre fin
 I dati subiscono tre trasformazioni successive prima di essere usati dal modello:
 
 **1. Lettura e fusione (`_read_json_shards`).**
-Tutti i file JSON di una split (`train/` o `test/`) vengono letti e fusi in due strutture:
+Tutti i file JSON di una split (`train/` o `val/`) vengono letti e fusi in due strutture:
 - `all_users`: lista flat di tutti i writer nell'ordine originale di LEAF (ordine deterministico).
 - `user_data`: dizionario globale `{writer_id → {x, y}}`.
 
@@ -101,7 +101,7 @@ Worker 1 → writer 1199–2397  (~1.199 writer, ~245.000 immagini)
 Worker 2 → writer 2398–3596  (~1.199 writer, ~245.000 immagini)
 ```
 
-Lo stesso partizionamento viene applicato **separatamente** sia a `train/` che a `test/`: ogni worker riceve una slice contigua di writer da entrambe le cartelle. Il risultato sono due file per worker: `data/femnist/worker_{i}/train/data.json` e `data/femnist/worker_{i}/test/data.json`, ciascuno con la stessa struttura JSON originale ma contenente solo i writer di quel worker. Il rapporto 90/10 per campione dentro ogni writer — stabilito da LEAF — è preservato intatto.
+Lo stesso partizionamento viene applicato **separatamente** sia a `train/` che a `test/` di LEAF: ogni worker riceve una slice contigua di writer da entrambe le cartelle. Il risultato sono due file per worker: `data/femnist/worker_{i}/train/data.json` e `data/femnist/worker_{i}/val/data.json`. La cartella sorgente `test/` di LEAF viene rinominata `val/` nelle cartelle worker per riflettere l'uso reale: non è un test set tenuto fuori dal training, ma il validation set usato per l'early stopping ad ogni round. Il rapporto 90/10 per campione dentro ogni writer — stabilito da LEAF — è preservato intatto.
 
 **3. Appiattimento e tensori (`collect_samples` + `FEMNISTDataset`).**
 All'interno del container, `load_partition` legge il proprio `data.json` e appiattisce tutti i campioni di tutti i writer in due liste parallele:
@@ -125,7 +125,15 @@ La proprietà non-i.i.d. è cruciale per la valutazione realistica del sistema: 
 
 LEAF fornisce uno split predeterminato configurabile tramite `--tf` (default 0.9 = 90% train, 10% validation). Lo split avviene **per campione dentro ogni scrittore**: entrambe le cartelle `train/` e `test/` contengono gli stessi writer, con campioni diversi. Questo è lo schema adottato da tutte le paper di riferimento sul benchmark FEMNIST — incluse FedAvg [2] e le varianti DiLoCo-inspired — ed è la scelta adottata in questo progetto.
 
-**Nota sul naming**: LEAF chiama la seconda cartella `test/`, ma nel nostro sistema essa è usata esclusivamente come **validation set** — viene misurata ad ogni round in `main_worker.py` dopo la Fase A per l'early stopping e le metriche di convergenza. Non esiste un test set separato tenuto completamente fuori dal ciclo di training. Nel codice, `dataset.py` carica `test/` nel `val_loader` e la funzione di validazione si chiama `validate()`. Per coerenza con l'uso reale, nel resto di questo documento si userà il termine *validation set* (o *validation loss*) anziché *test set*.
+**Nota sul naming**: LEAF chiama la seconda cartella `test/`, ma nel nostro sistema essa è usata come **validation set** — misurata ad ogni round dopo la Fase A per l'early stopping e le metriche di convergenza. Non è un test set tenuto fuori dal training. Per evitare ambiguità, `split_dataset.py` rinomina `test/` in `val/` nelle cartelle worker: il codice riflette l'uso reale. `dataset.py` carica `val/` nel `val_loader` e nel resto di questo documento si usa il termine *validation set* (o *validation loss*).
+
+**Assenza di un test set separato.** In ML classico si distinguono tre set: train (ottimizzazione), val (decisioni di training come early stopping), test (valutazione finale su dati mai visti). Il nostro sistema ha solo train e val, usando quest'ultimo per entrambi i ruoli. Questo introduce un **bias ottimistico** nelle metriche finali: l'early stopping si ferma quando le performance su `val/` sono al picco, quindi i valori riportati sono leggermente gonfiati rispetto a un test set indipendente.
+
+Questa è tuttavia la pratica standard nella letteratura FL su FEMNIST — inclusi il paper LEAF originale [3] e FedAvg [2] — per tre ragioni concrete:
+
+1. **Dimensione dei set**: il 10% dei campioni di ogni scrittore, già diviso tra i worker, è una partizione piccola. Suddividerla ulteriormente in val + test produrrebbe set troppo ridotti per stime statisticamente affidabili.
+2. **Bias trascurabile rispetto alla varianza FL**: la fonte di rumore dominante nelle metriche FL è la varianza inter-worker dovuta ai dati non-i.i.d., non il bias da early stopping. Il bias sistematico si cancella nei confronti tra configurazioni (FL vs no-FL, diversi `gossip_fanout`), che è l'obiettivo degli esperimenti.
+3. **Confrontabilità con la letteratura**: usare lo stesso schema di split permette di confrontare i risultati direttamente con i valori riportati nelle paper di riferimento.
 
 Un'alternativa sarebbe la **k-fold cross-validation**, in cui i dati di ogni worker vengono suddivisi in $k$ fold, il training viene ripetuto $k$ volte usando a rotazione un fold diverso come validation, e i risultati vengono mediati. Il confronto tra i due approcci nel contesto FL è il seguente:
 
@@ -306,7 +314,7 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 5. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`. Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
 6. Rimozione automatica dell'intera directory `leaf/` (~20 GB). Una volta che `data/femnist/data/` esiste, il repository LEAF non serve più — se necessario verrà riclonato automaticamente da GitHub alla prossima esecuzione dello script.
 
-**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker, scrivendo `data/femnist/worker_{i}/{train,test}/data.json` per ciascun worker $i \in [0, N)$. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
+**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker, scrivendo `data/femnist/worker_{i}/{train,val}/data.json` per ciascun worker $i \in [0, N)$. La cartella sorgente `test/` di LEAF viene rinominata `val/` per riflettere l'uso reale nel sistema. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
 - **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON, senza caricare i pixel. Produce la lista globale ordinata di tutti i writer, calcola la mappa `writer_id → worker_index` e raggruppa gli ID per worker. Consumo RAM: trascurabile (solo stringhe).
 - **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
@@ -321,7 +329,7 @@ Il dataset FEMNIST viene partizionato in modo **deterministico e statico** prima
 
 $$\text{start}_k = k \cdot \left\lfloor \frac{|\mathcal{U}|}{N} \right\rfloor, \quad \text{end}_k = \begin{cases} \text{start}_k + \lfloor |\mathcal{U}|/N \rfloor & \text{se } k < N-1 \\ |\mathcal{U}| & \text{se } k = N-1 \end{cases}$$
 
-dove $\mathcal{U}$ è l'insieme totale degli utenti e $N$ è `num_workers` in `config.yaml`. La partizione del worker $k$ viene scritta su host in `data/femnist/worker_k/{train,test}/data.json` e montata nel suo container tramite bind mount Docker:
+dove $\mathcal{U}$ è l'insieme totale degli utenti e $N$ è `num_workers` in `config.yaml`. La partizione del worker $k$ viene scritta su host in `data/femnist/worker_k/{train,val}/data.json` e montata nel suo container tramite bind mount Docker:
 
 ```
 ./data/femnist/worker_k  →  /app/data/femnist  (dentro il container k)
@@ -339,7 +347,7 @@ Una partizione dinamica (che ribilancia i dati al join di nuovi worker) avrebbe 
 
 #### Caricamento nel worker
 
-`core/dataset.py` espone la funzione `load_partition(data_dir, batch_size)` che legge semplicemente tutti i file JSON presenti in `data_dir/train/` e `data_dir/test/` — la stessa interfaccia di lettura indipendentemente da quanti worker esistano. Il splitting è già avvenuto su host; il container non sa nulla della topologia globale.
+`core/dataset.py` espone la funzione `load_partition(data_dir, batch_size)` che legge semplicemente tutti i file JSON presenti in `data_dir/train/` e `data_dir/val/` — la stessa interfaccia di lettura indipendentemente da quanti worker esistano. Il splitting è già avvenuto su host; il container non sa nulla della topologia globale.
 
 #### Gestione del ciclo infinito sui batch
 
@@ -728,8 +736,8 @@ Questo approccio non richiede alcuna modifica al Registry né alcun canale di co
 | `round` | int | Numero del round corrente |
 | `timestamp` | float | Unix timestamp (per analisi temporale reale) |
 | `train_loss_avg` | float | Loss media su H inner steps della Fase B |
-| `val_loss` | float | Loss sul test set locale dopo la Fase A |
-| `val_accuracy` | float | Accuracy sul test set locale [0, 1] |
+| `val_loss` | float | Loss sul validation set locale dopo la Fase A |
+| `val_accuracy` | float | Accuracy sul validation set locale [0, 1] |
 | `round_duration_s` | float | Durata totale del round (Fase A + B + C) in secondi |
 | `neighbors_aggregated` | int | Numero di modelli vicini incorporati in Fase A (0 = nessuna aggregazione) |
 | `peers_contacted` | int | Push gossip con successo in Fase C |
