@@ -41,7 +41,7 @@ DiLoCo [1] propone un paradigma di training distribuito in cui ogni partecipante
 
 Con $H = 500$, ogni worker trasmette i propri pesi solo al termine di 500 batch di training. Supponendo batch da 32 campioni, ciò equivale a 16.000 esempi elaborati per ogni gossip push. L'impatto sulla qualità del modello aggregato è limitato perché gli inner steps locali producono aggiornamenti nella stessa direzione generale del gradiente globale, convergendo verso una soluzione compatibile con quella degli altri worker.
 
-DiLoCo introduce inoltre la tolleranza esplicita al drop asincrono dei messaggi: un aggiornamento mancante in un round non blocca il training del nodo mittente né quello del ricevente, che proseguono indipendentemente. Questo comportamento è intrinseco all'architettura gossip asincrona adottata: il buffer di aggregazione è semplicemente vuoto al termine del round se nessun vicino ha inviato aggiornamenti.
+DiLoCo introduce inoltre la tolleranza esplicita al drop asincrono dei messaggi: un aggiornamento mancante in un round non blocca il training del nodo mittente né quello del ricevente, che proseguono indipendentemente. Questo comportamento è intrinseco all'architettura gossip asincrona adottata: l'accumulatore di aggregazione è semplicemente a zero al termine del round se nessun vicino ha inviato aggiornamenti.
 
 ### 2.3 Dataset LEAF e FEMNIST
 
@@ -369,7 +369,7 @@ $$w_{\text{new}} = \frac{w_{\text{local}} \cdot n_{\text{local}} + (\texttt{weig
 
 **Trattamento dei parametri non-float.** Solo i parametri floating-point vengono aggregati. I buffer interi presenti nello `state_dict` — come `num_batches_tracked` nei layer BatchNorm, che conta il numero di batch visti — mantengono il valore locale. Mediare contatori interi non ha senso semantico e potrebbe produrre valori inconsistenti.
 
-**Reset del buffer.** Dopo l'aggregazione, `weighted_sum` viene posto a `None` e `received_samples` a `0`. Il reset avviene con il lock acquisito, garantendo che nessun messaggio in arrivo (Thread 1) possa modificare il buffer nel breve intervallo tra la lettura e il reset.
+**Reset dell'accumulatore.** Dopo l'aggregazione, `weighted_sum` viene posto a `None` e `received_samples` a `0`. Il reset avviene con il lock acquisito, garantendo che nessun messaggio in arrivo (Thread 1) possa modificare l'accumulatore nel breve intervallo tra la lettura e il reset.
 
 **Caso base: nessun vicino ha inviato.** Se `received_samples == 0`, la Fase A viene saltata e il worker procede direttamente alla Fase B con il proprio modello invariato. Questo è il comportamento corretto in caso di assenza di aggiornamenti (nessun vicino attivo, tutti i messaggi droppati o stantii): il training locale prosegue autonomamente.
 
@@ -439,7 +439,7 @@ $$\texttt{weighted}[k] = w_{\text{received}}[k] \cdot \texttt{sender\_samples}$$
 
 $$\texttt{weighted\_sum}[k] \mathrel{+}= \texttt{weighted}[k], \qquad \texttt{received\_samples} \mathrel{+}= \texttt{sender\_samples}$$
 
-Il caso base (`received_samples == 0`) inizializza il buffer con il primo contributo. La prova che questo accumulatore produce lo stesso risultato dell'approccio batch è diretta per linearità della somma: $\sum_i (w_i \cdot n_i) = $ running sum step-by-step.
+Il caso base (`received_samples == 0`) inizializza l'accumulatore con il primo contributo. La prova che questo accumulatore produce lo stesso risultato dell'approccio batch è diretta per linearità della somma: $\sum_i (w_i \cdot n_i) = $ running sum step-by-step.
 
 #### Correttezza con accesso concorrente
 
@@ -457,7 +457,7 @@ Thread 1 applica il seguente controllo prima di ogni aggregazione:
 
 $$\text{discard if} \quad (r_{\text{current}} - r_{\text{sender}}) > \Delta_{\max}$$
 
-dove $r_{\text{current}}$ è il round corrente del ricevente (letto da `shared_state["current_round"]`), $r_{\text{sender}}$ è il campo `round` del messaggio, e $\Delta_{\max}$ è il parametro `max_staleness` (default: 10). Il messaggio viene scartato restituendo `Ack(accepted=False)` senza modificare il buffer.
+dove $r_{\text{current}}$ è il round corrente del ricevente (letto da `shared_state["current_round"]`), $r_{\text{sender}}$ è il campo `round` del messaggio, e $\Delta_{\max}$ è il parametro `max_staleness` (default: 10). Il messaggio viene scartato restituendo `Ack(accepted=False)` senza modificare l'accumulatore.
 
 #### Unidirezionalità: perché non scartare anche i messaggi "dal futuro"
 
@@ -1063,7 +1063,7 @@ Il drop avviene **prima** della chiamata gRPC, non dopo. Questo modella la perdi
 
 #### Robustezza intrinseca dell'algoritmo
 
-L'algoritmo è **robusto per costruzione** al message drop: la Fase A aggrega esclusivamente i modelli effettivamente ricevuti nel buffer. Se un round produce zero messaggi ricevuti (tutti droppati, nessun vicino attivo), la Fase A viene semplicemente saltata e il worker procede con il suo modello invariato. Non esiste alcuna dipendenza su una soglia minima di messaggi ricevuti per procedere.
+L'algoritmo è **robusto per costruzione** al message drop: la Fase A aggrega esclusivamente i modelli effettivamente ricevuti nell'accumulatore. Se un round produce zero messaggi ricevuti (tutti droppati, nessun vicino attivo), la Fase A viene semplicemente saltata e il worker procede con il suo modello invariato. Non esiste alcuna dipendenza su una soglia minima di messaggi ricevuti per procedere.
 
 Con $p_{\text{drop}} = 0.20$ e $M = 3$ vicini, il numero atteso di messaggi inviati con successo per round è $3 \times (1 - 0.20) = 2.4$. Il numero di messaggi ricevuti da ogni worker dipende da quanti vicini lo abbiano selezionato come target: con $N=3$ worker, ogni worker è selezionato in media da $2 \times (M/2) \times (1 - p_{\text{drop}}) \approx 1.6$ peer per round.
 
@@ -1165,6 +1165,62 @@ Se il container viene terminato con `docker kill` o dall'OOM killer del kernel, 
 - Il meccanismo di re-query reattivo (Sezione 4.2) attiva automaticamente la ricerca di peer sostitutivi
 
 Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel registry: i worker inviano periodicamente un segnale di vita, e il registry rimuove automaticamente chi non si fa vivo da T secondi. Questo è il pattern adottato in protocolli di membership production-grade come SWIM. Per il perimetro di questo progetto, dove i crash SIGKILL non fanno parte del modello di fault injection, il meccanismo di re-query reattivo costituisce una mitigazione sufficiente.
+
+### 8.5 Semantiche di Consegna dei Messaggi
+
+#### Garanzie fornite automaticamente da gRPC e Flask
+
+Entrambi i canali di comunicazione usano TCP come trasporto. TCP garantisce **ordine e integrità dei byte**: se una connessione si stabilisce e la trasmissione completa senza eccezione, il payload è arrivato integro e nell'ordine corretto. Questo vale sia per le chiamate gRPC (gossip push) sia per le richieste HTTP al registry (Flask).
+
+Le garanzie a livello applicativo — quante volte un messaggio viene consegnato — dipendono invece dalla logica implementata sopra TCP.
+
+#### Gossip push (gRPC): semantica at-most-once
+
+Il client (`send_model`) effettua **una sola chiamata RPC** per destinatario. In caso di `RpcError` (timeout, nodo irraggiungibile, rifiuto) la funzione restituisce `False` e il training loop non riprova verso lo stesso peer:
+
+```python
+success = send_model(target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout)
+if success:
+    sent_count += 1
+else:
+    failed_targets.append(target)
+```
+
+Il meccanismo di re-query reattivo (Sezione 4.2) cerca un **peer sostitutivo** dalla lista aggiornata, non riprova lo stesso destinatario. La semantica risultante è quindi **at-most-once per ogni peer**: se la consegna riesce, il messaggio è stato recapitato esattamente una volta; se fallisce, non viene ritentato verso quel nodo.
+
+#### Registry HTTP (Flask): semantica at-least-once
+
+`register_worker()` implementa un loop di retry con backoff fisso:
+
+```python
+for attempt in range(max_retries):
+    try:
+        response = requests.post(f"{registry_url}/register", ...)
+        response.raise_for_status()
+        return
+    except Exception:
+        time.sleep(3)
+```
+
+In teoria, se la POST va a buon fine ma la risposta si perde in rete prima di tornare al client, il worker ritenterebbe una registrazione già avvenuta — semantica **at-least-once**. In pratica l'operazione è idempotente: il registry sovrascrive silenziosamente (`_registry[worker_id] = address`), quindi un doppio invio non causa inconsistenze.
+
+#### Perché at-most-once è la scelta corretta per il gossip push
+
+In un sistema transazionale (pagamenti, database) la perdita di un messaggio è un errore grave che richiede retry, deduplicazione e garanzie exactly-once. Nel federated learning il modello è diverso: i pesi inviati durante il gossip push sono **aggiornamenti statistici approssimati**, non operazioni atomiche con stato persistente.
+
+La robustezza al message drop è già documentata in Sezione 8.1: l'accumulatore di aggregazione in Fase A opera su qualunque sottoinsieme di messaggi ricevuti — se un round produce zero contributi da peer, la Fase A viene semplicemente saltata e il worker procede con il proprio modello invariato. Il round successivo riceverà nuovi aggiornamenti. Non esiste alcuna dipendenza su una soglia minima di messaggi ricevuti per garantire la correttezza dell'algoritmo.
+
+At-most-once è anche coerente con il **requisito di basso traffico di rete** della traccia di progetto: nessun retry implica volume di comunicazione deterministico, pari a $N \times k \times S_{\text{model}}$ per round al massimo.
+
+#### Cosa richiederebbe exactly-once
+
+Per garantire la consegna exactly-once servirebbe:
+
+- un **sequence number per (sender, round)** nel messaggio
+- un registro di deduplicazione lato ricevente (es. set degli `(worker_id, round)` già processati)
+- un meccanismo di retry lato sender fino a conferma esplicita
+
+Oltre alla complessità implementativa, questa soluzione introdurrebbe un problema semantico nel contesto FL: un retry che arriva nel round successivo porterebbe pesi appartenenti al round precedente nell'accumulatore del round corrente, violando la semantica dello staleness check (Sezione 4.4) e potenzialmente peggiorando la convergenza. At-most-once è quindi non solo più semplice, ma **semanticamente più corretto** per questo dominio.
 
 ---
 
