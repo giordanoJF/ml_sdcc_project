@@ -49,9 +49,9 @@ Il dataset FEMNIST, distribuito dal framework LEAF [3], è il benchmark standard
 
 #### Struttura degli oggetti di dominio
 
-L'entità fondamentale del dataset è il **writer** (chiamato `user` nel formato LEAF) — una persona reale che ha scritto caratteri a mano. Ogni writer ha uno stile di scrittura proprio e ha prodotto un certo numero di immagini di caratteri diversi. Il dataset completo conta **3.597 writer** nel training set, per un totale di **734.463 immagini**, con una media di circa 204 immagini per writer.
+L'entità fondamentale del dataset è il **writer** (chiamato `user` nel formato LEAF) — una persona reale che ha scritto caratteri a mano. Ogni writer ha uno stile di scrittura proprio e ha prodotto un certo numero di immagini di caratteri diversi. Il dataset completo conta **3.597 writer** per un totale di **734.463 immagini**, con una media di circa 204 immagini per writer.
 
-LEAF serializza il dataset in file JSON distribuiti in `train/` e `test/`. Ogni file contiene fino a 100 writer e ha la seguente struttura:
+LEAF serializza il dataset in file JSON distribuiti in due cartelle: `train/` e `test/`. **Entrambe le cartelle contengono gli stessi writer**: lo split non divide le persone, ma i campioni di ogni persona — il 90% dei campioni di ogni writer va in `train/`, il 10% in `test/`. Ogni file contiene fino a 100 writer e ha la seguente struttura:
 
 ```json
 {
@@ -81,6 +81,8 @@ I campi hanno il seguente significato:
 
 Il training set completo è distribuito su **36 file JSON**; ogni file copre fino a 100 writer.
 
+**Non esistono cartelle per scrittore.** L'output di `download_femnist.py` è semplicemente `data/femnist/data/train/` e `data/femnist/data/test/` — due cartelle piatte con file JSON. Non c'è una sottocartella per `f1967_21` o per nessun altro scrittore. La suddivisione per scrittore non sparisce: è preservata *dentro* i JSON nella chiave `user_data`, dove ogni writer_id mantiene le proprie immagini separate. È questa struttura che `split_dataset.py` legge per distribuire scrittori ai worker: estrae la lista `users`, prende una fetta contigua per ogni worker, e scrive solo i writer_id di quella fetta nella cartella del worker corrispondente.
+
 #### Trasformazione degli oggetti attraverso la pipeline
 
 I dati subiscono tre trasformazioni successive prima di essere usati dal modello:
@@ -99,7 +101,7 @@ Worker 1 → writer 1199–2397  (~1.199 writer, ~245.000 immagini)
 Worker 2 → writer 2398–3596  (~1.199 writer, ~245.000 immagini)
 ```
 
-Ogni slice viene scritta in un file `data/femnist/worker_{i}/train/data.json` separato, con la stessa struttura JSON originale ma contenente solo i writer di quel worker.
+Lo stesso partizionamento viene applicato **separatamente** sia a `train/` che a `test/`: ogni worker riceve una slice contigua di writer da entrambe le cartelle. Il risultato sono due file per worker: `data/femnist/worker_{i}/train/data.json` e `data/femnist/worker_{i}/test/data.json`, ciascuno con la stessa struttura JSON originale ma contenente solo i writer di quel worker. Il rapporto 90/10 per campione dentro ogni writer — stabilito da LEAF — è preservato intatto.
 
 **3. Appiattimento e tensori (`collect_samples` + `FEMNISTDataset`).**
 All'interno del container, `load_partition` legge il proprio `data.json` e appiattisce tutti i campioni di tutti i writer in due liste parallele:
@@ -121,7 +123,9 @@ La proprietà non-i.i.d. è cruciale per la valutazione realistica del sistema: 
 
 #### Split train/test fisso vs cross-validation
 
-LEAF fornisce uno split train/test predeterminato (90% train, 10% test, configurabile tramite `--tf`). Questo è lo schema adottato da tutte le paper di riferimento sul benchmark FEMNIST — incluse FedAvg [2] e le varianti DiLoCo-inspired — ed è la scelta adottata in questo progetto. La porzione di test viene usata localmente da ogni worker come validation set per il controllo dell'early stopping.
+LEAF fornisce uno split predeterminato configurabile tramite `--tf` (default 0.9 = 90% train, 10% validation). Lo split avviene **per campione dentro ogni scrittore**: entrambe le cartelle `train/` e `test/` contengono gli stessi writer, con campioni diversi. Questo è lo schema adottato da tutte le paper di riferimento sul benchmark FEMNIST — incluse FedAvg [2] e le varianti DiLoCo-inspired — ed è la scelta adottata in questo progetto.
+
+**Nota sul naming**: LEAF chiama la seconda cartella `test/`, ma nel nostro sistema essa è usata esclusivamente come **validation set** — viene misurata ad ogni round in `main_worker.py` dopo la Fase A per l'early stopping e le metriche di convergenza. Non esiste un test set separato tenuto completamente fuori dal ciclo di training. Nel codice, `dataset.py` carica `test/` nel `val_loader` e la funzione di validazione si chiama `validate()`. Per coerenza con l'uso reale, nel resto di questo documento si userà il termine *validation set* (o *validation loss*) anziché *test set*.
 
 Un'alternativa sarebbe la **k-fold cross-validation**, in cui i dati di ogni worker vengono suddivisi in $k$ fold, il training viene ripetuto $k$ volte usando a rotazione un fold diverso come validation, e i risultati vengono mediati. Il confronto tra i due approcci nel contesto FL è il seguente:
 
@@ -129,7 +133,7 @@ Un'alternativa sarebbe la **k-fold cross-validation**, in cui i dati di ogni wor
 |---|---|---|
 | **Costo computazionale** | Training eseguito una sola volta | Training ripetuto $k$ volte per worker |
 | **Stima della generalizzazione** | Singola stima, dipendente dal seed dello split | Stima più robusta, riduce la varianza |
-| **Proprietà non-i.i.d.** | Preservata: LEAF assegna scrittori interi a train o test | Potenzialmente alterata: rimescolare i dati può mescolare gli stili tra fold |
+| **Proprietà non-i.i.d.** | Preservata: lo split avviene per campione dentro ogni scrittore, la distribuzione degli stili rimane intatta | Potenzialmente alterata: rimescolare i dati può mescolare gli stili tra fold |
 | **Standard nella letteratura FL** | Sì — approccio universale nelle paper FL | No — raramente usato in FL |
 | **Complessità implementativa** | Nessuna | Richiede modifiche a `load_partition` e al training loop |
 
@@ -391,7 +395,38 @@ L'early stopping è **locale e indipendente** per ogni worker: non esiste coordi
 
 **Frequenza di interrogazione del registry.** Il registry viene interrogato **una volta per round**, all'inizio della Fase C. Questa scelta è coerente con il requisito di minimizzare il traffico di rete: con H=500 inner steps un round dura tipicamente diversi minuti, quindi aggiornare la lista peer più spesso produrrebbe overhead HTTP senza benefici concreti sulla freschezza. Interrogare il registry meno spesso (es. ogni K round) ridurrebbe ulteriormente il traffico al costo di una visione più stale della topologia. Il trade-off è bilanciato al valore attuale: un'interrogazione per round mantiene la lista allineata con i cambiamenti topologici (worker che si registrano o deregistrano) senza generare traffico aggiuntivo apprezzabile rispetto ai push gRPC che domina il volume totale.
 
-**Re-query reattivo dopo fallimento gRPC.** Un push fallito (codice `UNAVAILABLE` o `DEADLINE_EXCEEDED`) è un segnale che il peer potrebbe essere crashato e potrebbe essersi già deregistrato. Il worker sfrutta questa informazione: se almeno un push gRPC fallisce (esclusi i drop simulati, che sono intenzionali), viene eseguita immediatamente una seconda chiamata a `GET /peers` per ottenere una lista aggiornata. Per ogni peer irraggiungibile viene tentato un sostitutivo scelto tra i peer freschi non ancora contattati in questo round (tracciati nel set `tried`). Questo meccanismo costa **al massimo una HTTP call extra per round**, emessa solo quando si verificano fallimenti reali. Copre il caso più comune: peer crashato con deregistrazione pulita (via `finally` o signal handler). Non risolve il caso di hard crash (SIGKILL, OOM) dove il peer rimane nel registry — documentato come known limitation in Sezione 8.4. Il log di fine Fase C riporta `failed=N, retried=M` per osservabilità diretta.
+**Re-query reattivo dopo fallimento gRPC.** Un push fallito (`UNAVAILABLE` o `DEADLINE_EXCEEDED`) è un segnale che il peer potrebbe essere crashato e deregistrato tra la chiamata iniziale a `GET /peers` e il tentativo di push. Il meccanismo funziona in due fasi distinte.
+
+*Fase normale:* il worker campiona `k` peer casuali, tenta l'invio a ciascuno, e accumula in `failed_targets` i peer che hanno restituito `RpcError`. Il set `tried` viene popolato con tutti i target originali fin dall'inizio, indipendentemente dall'esito.
+
+*Re-query:* solo se `failed_targets` non è vuota, viene eseguita **una singola** chiamata aggiuntiva a `GET /peers`. Dalla lista fresca vengono esclusi tutti i peer già presenti in `tried` — sia quelli che hanno risposto che quelli falliti — per evitare di ritentare nodi già irraggiungibili. Dai rimanenti si campionano esattamente `min(len(failed_targets), len(replacements))` sostituti: uno per ogni fallimento, non di più.
+
+```python
+if failed_targets:
+    fresh_peers = fetch_peers(registry_url)
+    replacements = [p for p in fresh_peers if p != my_address and p not in tried]
+    for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
+        tried.add(replacement)
+        ...
+        send_model(replacement, ...)
+```
+
+Esempio con `gossip_fanout=3`, peer disponibili A, B, C, D, E:
+
+```
+Target iniziali:  [A, B, C]       tried = {A, B, C}
+A → successo
+B → RpcError     failed_targets = [B]
+C → successo
+
+fresh_peers = [A, B, D, E]        ← B nel frattempo potrebbe essersi deregistrato
+replacements = [D, E]              ← A e B esclusi da tried
+campionati = [D]                   ← min(1 fallimento, 2 disponibili) = 1 sostituto
+
+D → successo    sent_count += 1
+```
+
+Il costo totale è **al massimo una HTTP call extra per round**, emessa solo in presenza di fallimenti reali (non drop simulati, che sono intenzionali). Se anche i sostituti falliscono non c'è un secondo livello di re-query: il round prosegue con i push riusciti. Il log di fine Fase C riporta `failed=N, retried=M` per osservabilità diretta. Il meccanismo copre il caso più comune (crash con deregistrazione pulita via `finally` o signal handler); il caso di hard crash SIGKILL è documentato come known limitation in Sezione 8.4.
 
 **Snapshot unico dei pesi.** Il modello viene snapshotted una volta — `weights_snapshot = model.state_dict()` — prima del loop sui target. Tutti i vicini ricevono la stessa versione del modello. Questo evita che modifiche al modello durante l'invio (impossibili in questo design, ma buona pratica) producano incoerenze.
 
@@ -1168,15 +1203,55 @@ Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel 
 
 ### 8.5 Semantiche di Consegna dei Messaggi
 
+#### Premessa: le semantiche si discutono sul failure path, non sul success path
+
+Le semantiche di consegna (at-most-once, at-least-once, exactly-once) descrivono il comportamento del sistema **quando la rete fallisce** — connessione interrotta, timeout, nodo irraggiungibile. Non descrivono il caso nominale: quando TCP funziona e la RPC completa con successo, il messaggio è consegnato esattamente una volta per definizione. La domanda rilevante è: *cosa succede se la consegna fallisce a metà?* È quella risposta che determina la semantica.
+
 #### Garanzie fornite automaticamente da gRPC e Flask
 
-Entrambi i canali di comunicazione usano TCP come trasporto. TCP garantisce **ordine e integrità dei byte**: se una connessione si stabilisce e la trasmissione completa senza eccezione, il payload è arrivato integro e nell'ordine corretto. Questo vale sia per le chiamate gRPC (gossip push) sia per le richieste HTTP al registry (Flask).
+Entrambi i canali di comunicazione usano TCP come trasporto. TCP garantisce **ordine e integrità dei byte** all'interno di una singola connessione: se la trasmissione completa senza eccezione, il payload è arrivato integro e nell'ordine corretto. Questo vale sia per le chiamate gRPC (gossip push) sia per le richieste HTTP al registry (Flask).
 
-Le garanzie a livello applicativo — quante volte un messaggio viene consegnato — dipendono invece dalla logica implementata sopra TCP.
+Le garanzie a livello applicativo — quante volte un messaggio viene consegnato in caso di errore — dipendono invece dalla logica implementata sopra TCP.
 
-#### Gossip push (gRPC): semantica at-most-once
+#### Ricezione concorrente da più peer
 
-Il client (`send_model`) effettua **una sola chiamata RPC** per destinatario. In caso di `RpcError` (timeout, nodo irraggiungibile, rifiuto) la funzione restituisce `False` e il training loop non riprova verso lo stesso peer:
+Uno scenario comune durante la Fase C è che due o più peer inviano i propri pesi allo stesso worker quasi contemporaneamente. Ogni peer apre una propria connessione TCP separata: TCP non sa nulla delle altre connessioni e le gestisce indipendentemente, quindi entrambi i messaggi arrivano integralmente senza interferenze a livello di rete.
+
+Lato receiver, il server gRPC è avviato con un thread pool:
+
+```python
+server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=10))
+```
+
+Ogni chiamata `ReceiveModel` in arrivo viene assegnata a un thread del pool. Due peer concorrenti producono due thread che eseguono `ReceiveModel` in parallelo — nessuno viene scartato o messo in coda indefinitamente.
+
+Il rischio reale è la **scrittura concorrente sull'accumulatore**: senza sincronizzazione, i due thread potrebbero leggere `weighted_sum` nello stesso istante, calcolare i propri incrementi separatamente, e uno sovrascrivere il contributo dell'altro. Il `threading.Lock` in `AggregationBuffer` serializza gli aggiornamenti:
+
+```python
+with self.buffer.lock:
+    # un solo thread alla volta modifica weighted_sum e received_samples
+    self.buffer.weighted_sum[k] += weighted[k]
+    self.buffer.received_samples += sender_samples
+    self.buffer.messages_received += 1
+```
+
+Il secondo thread attende che il primo rilasci il lock, poi accumula il suo contributo. Entrambi gli aggiornamenti vengono registrati correttamente: la concorrenza non causa perdita di dati.
+
+#### Timeout gRPC e il ruolo dell'ACK
+
+Ogni chiamata `ReceiveModel` include un timeout esplicito configurabile (`grpc_timeout_seconds`, default 5.0 s):
+
+```python
+ack = stub.ReceiveModel(message, timeout=timeout)
+```
+
+Se il server non risponde entro questo limite, gRPC solleva `RpcError` con codice `DEADLINE_EXCEEDED`. Il timeout serve a evitare che il training loop rimanga bloccato su un nodo irraggiungibile: senza di esso, una chiamata verso un peer crashato aspetterebbe indefinitamente la risposta TCP.
+
+L'`Ack` restituito dal server (`Ack(accepted=True/False)`) **non è un meccanismo separato di acknowledgment**: è semplicemente la risposta del metodo RPC, come qualsiasi valore di ritorno di una funzione remota. Quando `stub.ReceiveModel` ritorna senza eccezione, significa che la connessione TCP è rimasta aperta per tutto il ciclo richiesta-risposta e che il server ha eseguito `ReceiveModel` fino in fondo. Il campo `accepted` indica se il messaggio ha superato lo staleness check (Sezione 4.4), non se è arrivato fisicamente.
+
+#### Gossip push (gRPC): semantica at-most-once e il caso limite dell'ACK perso
+
+Il client effettua **una sola chiamata RPC** per destinatario, senza retry:
 
 ```python
 success = send_model(target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout)
@@ -1186,23 +1261,54 @@ else:
     failed_targets.append(target)
 ```
 
-Il meccanismo di re-query reattivo (Sezione 4.2) cerca un **peer sostitutivo** dalla lista aggiornata, non riprova lo stesso destinatario. La semantica risultante è quindi **at-most-once per ogni peer**: se la consegna riesce, il messaggio è stato recapitato esattamente una volta; se fallisce, non viene ritentato verso quel nodo.
+Il meccanismo di re-query reattivo (Sezione 4.2) cerca un **peer sostitutivo**, non riprova lo stesso destinatario. La semantica è **at-most-once per peer**.
 
-#### Registry HTTP (Flask): semantica at-least-once
+Il caso limite che giustifica questo nome è il seguente: il server riceve il messaggio, lo accumula correttamente, poi la connessione TCP cade prima che l'`Ack` raggiunga il sender. Il sender riceve `RpcError` e marca la consegna come fallita — ma il messaggio era già stato processato. Senza retry, il messaggio risulta consegnato zero volte dal punto di vista del sender ma una volta dal punto di vista del receiver. Questo è esattamente at-most-once: il sender non riprova, quindi il messaggio è processato **al più una volta** (zero in caso di errore, uno in caso di successo). Per garantire almeno-una-volta servirebbe un retry, ma come discusso nella sezione "Cosa richiederebbe exactly-once", questo introdurrebbe duplicati senza deduplicazione.
 
-`register_worker()` implementa un loop di retry con backoff fisso:
+gRPC non implementa retry automatici di default. Esiste una *retry policy* configurabile via service config, ma richiede deduplicazione lato server ed è disabilitata per scelta in questo progetto.
+
+#### Timeout e retry su Flask: comportamento per endpoint
+
+I tre endpoint del registry hanno comportamenti diversi perché hanno priorità diverse:
+
+**`/register` — at-least-once, retry attivo**
 
 ```python
-for attempt in range(max_retries):
+for attempt in range(max_retries):   # default max_retries=10
     try:
-        response = requests.post(f"{registry_url}/register", ...)
+        response = requests.post(f"{registry_url}/register", ..., timeout=5)
         response.raise_for_status()
         return
     except Exception:
         time.sleep(3)
 ```
 
-In teoria, se la POST va a buon fine ma la risposta si perde in rete prima di tornare al client, il worker ritenterebbe una registrazione già avvenuta — semantica **at-least-once**. In pratica l'operazione è idempotente: il registry sovrascrive silenziosamente (`_registry[worker_id] = address`), quindi un doppio invio non causa inconsistenze.
+La registrazione è critica: senza di essa il worker non è raggiungibile dagli altri peer e non riceve gossip push. Il retry con `timeout=5` per chiamata e `time.sleep(3)` tra tentativi copre il caso in cui il registry container non sia ancora avviato al momento del primo tentativo. L'operazione è idempotente (`_registry[worker_id] = address` sovrascrive silenziosamente), quindi un doppio invio non causa inconsistenze.
+
+**`/peers` — at-most-once, nessun retry**
+
+```python
+def fetch_peers(registry_url: str) -> list[str]:
+    try:
+        return requests.get(f"{registry_url}/peers", timeout=5).json()
+    except Exception as exc:
+        logger.warning(f"Could not fetch peers: {exc}")
+        return []
+```
+
+Un fallimento restituisce una lista vuota: il worker salta la Fase C per quel round e riproverà al round successivo. Non è critico: perdere una query dei peer in un round non compromette la correttezza — al massimo quel round non produce gossip push.
+
+**`/deregister` — best-effort, nessun retry**
+
+```python
+def deregister_worker(registry_url: str, worker_id: str):
+    try:
+        requests.post(f"{registry_url}/deregister", ..., timeout=5)
+    except Exception:
+        pass  # non-critical
+```
+
+La deregistrazione è best-effort: se fallisce, il registry mantiene un'entry stale fino al prossimo riavvio. Gli altri worker riceveranno `UNAVAILABLE` dal gRPC e il meccanismo di re-query reattivo (Sezione 4.2) troverà peer alternativi. Non giustifica un retry perché l'effetto di un fallimento è limitato e temporaneo.
 
 #### Perché at-most-once è la scelta corretta per il gossip push
 

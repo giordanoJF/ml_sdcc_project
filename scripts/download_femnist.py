@@ -71,6 +71,51 @@ def main():
     run([sys.executable, "-m", "pip", "install", "tensorflow-cpu", "Pillow", "numpy"])
 
     # Step 3 — Run LEAF's preprocessing script for FEMNIST with non-i.i.d. split
+    #
+    # preprocess.sh è lo script ufficiale di LEAF che costruisce il dataset FEMNIST
+    # a partire dalle immagini raw di NIST. Esegue in sequenza:
+    #   1. Download delle immagini originali NIST Special Database 19 (~900 MB)
+    #   2. Segmentazione per scrittore: ogni immagine viene attribuita al suo autore
+    #      (identificato da un codice univoco), creando una partizione naturalmente
+    #      non-i.i.d. — ogni scrittore ha il proprio stile di scrittura.
+    #   3. Campionamento (--sf): tiene solo la frazione specificata dei dati.
+    #      Utile per esperimenti veloci (es. --sf 0.05 = 5% dei dati, ~100k immagini
+    #      invece di ~800k), senza cambiare la struttura non-i.i.d. del dataset.
+    #   4. Split per-scrittore e serializzazione in JSON (vedi sotto).
+    #
+    # Come funziona lo split e perché è per scrittore
+    # ------------------------------------------------
+    # Lo split produce due cartelle: train/ e test/. ATTENZIONE: entrambe contengono
+    # GLI STESSI scrittori — non sono due insiemi di persone diverse. La differenza
+    # è che per ogni scrittore, il 90% dei suoi campioni finisce in train/ e il 10%
+    # in test/. Lo split è quindi a livello di campione DENTRO ogni scrittore,
+    # non a livello di scrittore intero.
+    #
+    # L'alternativa sarebbe -t writer: alcuni scrittori interi in train/, altri in
+    # test/. Questo è sbagliato per FL perché split_dataset.py assegna scrittori
+    # a worker: un worker che riceve scrittori finiti interamente in test/ non avrebbe
+    # dati di training; uno che li riceve interamente in train/ non potrebbe validare.
+    # Con -t sample ogni worker ha garantito sia training che validation per tutti i
+    # suoi scrittori assegnati.
+    #
+    # Nota sul naming: LEAF chiama questa cartella "test/", ma nel nostro sistema
+    # viene usata come validation set (misurata ad ogni round in main_worker.py per
+    # l'early stopping). Non esiste un test set separato tenuto fuori dal training.
+    #
+    # Output: train/*.json e test/*.json nel formato
+    #   {"users": [...], "user_data": {"writer_id": {"x": [[784 float]], "y": [int]}}}
+    # letti da split_dataset.py (distribuzione ai worker) e core/dataset.py (PyTorch).
+    #
+    # Usiamo preprocess.sh perché è l'unica modalità supportata da LEAF per la
+    # suddivisione per scrittore (-s niid): farlo manualmente richiederebbe
+    # replicare la pipeline di segmentazione OCR già implementata da LEAF.
+    #
+    # Flag usate:
+    #   -s niid   → split non-i.i.d. per scrittore (obbligatorio per FL realistico)
+    #   --sf      → sampling fraction (1.0 = dataset completo, 0.05 = debug veloce)
+    #   -k 0      → nessun minimo di campioni per utente (include tutti gli scrittori)
+    #   -t sample → split per campione dentro ogni scrittore (non per scrittore intero)
+    #   --tf 0.9  → 90% dei campioni di ogni scrittore in train/, 10% in test/
     femnist_dir = os.path.join(LEAF_DIR, "data", "femnist")
     run(
         [
