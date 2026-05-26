@@ -386,6 +386,16 @@ Una partizione dinamica (che ribilancia i dati al join di nuovi worker) avrebbe 
 
 `core/dataset.py` espone la funzione `load_partition(data_dir, batch_size)` che legge semplicemente tutti i file JSON presenti in `data_dir/train/` e `data_dir/val/` — la stessa interfaccia di lettura indipendentemente da quanti worker esistano. Il splitting è già avvenuto su host; il container non sa nulla della topologia globale.
 
+#### Immutabilità dei dati durante il training
+
+I dati di train, val e test sono caricati **una sola volta** all'avvio del worker e rimangono invariati per tutta la run. Non esiste nessun meccanismo che ricarichi, rimescoli o sostituisca i campioni tra un round e l'altro.
+
+- **Train**: stessi campioni per tutti i round. Il `DataLoader` ha `shuffle=True`, quindi l'ordine dei batch cambia ad ogni epoch, ma il pool di immagini è sempre quello della partizione assegnata a quel worker. L'iteratore infinito garantisce esattamente $H$ step per round indipendentemente dalla dimensione della partizione.
+- **Val**: stessi campioni ogni round, stesso ordine (`shuffle=False`). La val loss al round $r$ è calcolata sulle stesse immagini del round 1 — l'unica variabile è il modello, che nel frattempo ha aggiornato i pesi.
+- **Test** (se `use_test_set: true`): stessi campioni, valutati una sola volta alla fine del training.
+
+Questa immutabilità è un requisito, non una limitazione. Se i dati di validation cambiassero tra round, le val loss di round diversi non sarebbero comparabili e l'early stopping — che decide di fermarsi confrontando la val loss attuale con quella dei round precedenti — non avrebbe senso. La stabilità del set di valutazione è ciò che rende il confronto inter-round significativo.
+
 #### Gestione del ciclo infinito sui batch
 
 Per permettere esattamente $H$ inner steps indipendentemente dalla dimensione della partizione locale, viene utilizzato un generatore infinito:
@@ -830,6 +840,10 @@ python scripts/aggregate_metrics.py
 python scripts/save_experiment.py best_config_with_test
 # → riporta val_accuracy (early stopping) + test_accuracy (stima onesta)
 ```
+
+**Nota importante sul confronto tra Run A e Run B.** La Run B con `use_test_set: true` allena il modello su **80% dei dati** invece del 90% della Run A. Questo significa che la `test_accuracy` di Run B sarà probabilmente leggermente più bassa della `val_accuracy` di Run A per due motivi sovrapposti: (1) meno dati di training, effetto reale e non eliminabile; (2) assenza del bias ottimistico, che è quello che si vuole misurare. Non è possibile separare i due contributi con precisione.
+
+Ciò che Run B garantisce comunque: la `test_accuracy` è una stima onesta della generalizzazione di quella specifica configurazione con 80% di training data. Se la differenza con la `val_accuracy` di Run A è piccola, il bias era trascurabile; se è grande, parte della differenza è bias e parte è l'effetto del training set più piccolo. Per l'obiettivo di questo progetto — validare la convergenza del sistema FL, non pubblicare un benchmark ML — questa ambiguità è accettabile.
 
 Questo procedimento è interamente abilitato dal sistema di metriche descritto nella Sezione 6.
 
@@ -1342,6 +1356,23 @@ Se il container viene terminato con `docker kill` o dall'OOM killer del kernel, 
 
 Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel registry: i worker inviano periodicamente un segnale di vita, e il registry rimuove automaticamente chi non si fa vivo da T secondi. Questo è il pattern adottato in protocolli di membership production-grade come SWIM. Per il perimetro di questo progetto, dove i crash SIGKILL non fanno parte del modello di fault injection, il meccanismo di re-query reattivo costituisce una mitigazione sufficiente.
 
+#### Comportamento del sistema alla perdita di un worker
+
+La tabella seguente riassume tutti gli scenari di terminazione e il loro impatto sul sistema:
+
+| Causa | Segnale | `finally` | Deregistrazione | Impatto sugli altri worker |
+|---|---|:---:|:---:|---|
+| `docker stop` / Ctrl+C | SIGTERM / SIGINT | ✅ | ✅ | Dal round successivo non compare più in `/get_peers`; fanout effettivo si riduce |
+| Crash simulato (`crash_probability`) | `sys.exit(1)` → SystemExit | ✅ | ✅ | Identico al caso sopra |
+| Early stopping | loop `break` → SystemExit | ✅ | ✅ | Deregistrato ma gRPC server ancora attivo; può ricevere push ma non li processa |
+| `docker kill` / OOM killer | SIGKILL | ❌ | ❌ | Entry stale nel registry; altri worker ricevono `UNAVAILABLE` e timeout da 5s per round |
+
+**Adattamento del sistema.** In tutti i casi di terminazione pulita (SIGTERM, SIGINT, crash simulato, early stopping), la riduzione del numero di worker è trasparente: il registry aggiorna la lista, e dalla successiva chiamata a `GET /peers` gli altri worker ottengono una lista senza il nodo uscente. Il `gossip_fanout` effettivo diventa `min(gossip_fanout, peer_disponibili)` — automaticamente, senza nessuna riconfigurazione. I dati e i pesi già aggregati nei round precedenti restano incorporati nei modelli dei worker superstiti: la perdita di un nodo non annulla il lavoro già fatto.
+
+**Degradazione graduale, non catastrofica.** Con 3 worker e `gossip_fanout=2`, la perdita di uno riduce il fanout disponibile a 1 — ogni worker ha un solo peer a cui inviare. La convergenza rallenta ma il training prosegue. Con 2 worker rimasti, ogni worker riceve aggiornamenti da 1 vicino per round invece che da 2: le aggregazioni sono meno ricche ma il sistema non si ferma. Questo comportamento di *graceful degradation* è una proprietà fondamentale dell'architettura P2P — non esiste un coordinatore centrale la cui perdita blocchi l'intero sistema.
+
+**Caso SIGKILL: costo per round.** Se un worker muore senza deregistrarsi, ogni round gli altri worker sprecano `grpc_timeout_seconds` (5s) tentando di raggiungerlo. Con 3 worker e `gossip_fanout=2`, se uno è morto via SIGKILL: ogni round i due superstiti tentano il push, uno fallisce con timeout dopo 5s, attiva il re-query reattivo, ottiene la stessa lista stale, probabilmente fallisce di nuovo. Il costo è ~10s extra per round per worker — non bloccante ma rilevante. La soluzione completa (heartbeat con TTL nel registry) è documentata come known limitation; per il modello di fault injection di questo progetto, dove i crash avvengono via `sys.exit(1)` con deregistrazione pulita, il caso SIGKILL non è nel perimetro degli esperimenti.
+
 ### 8.5 Semantiche di Consegna dei Messaggi
 
 #### Premessa: le semantiche si discutono sul failure path, non sul success path
@@ -1547,6 +1578,17 @@ COPY network/ ./network/
 
 Il layer più costoso è il Layer 3 (installazione di PyTorch): viene rieseguito solo se `requirements.worker.txt` cambia. Ogni modifica al codice Python invalida esclusivamente il Layer 5 — la rebuild richiede secondi invece di minuti. Lo stesso principio vale per `Dockerfile.registry`: prima `requirements.registry.txt`, poi `registry_server.py`.
 
+**Condivisione dell'immagine tra N worker.** Tutti i container worker (`worker_0`, `worker_1`, ..., `worker_N`) sono istanze della **stessa immagine Docker** — non viene costruita una immagine separata per ognuno. `docker compose up --build` con 10 worker esegue `docker build` una sola volta, producendo una singola immagine con i suoi layer. I 10 container vengono poi istanziati da quell'unica immagine: i layer read-only (incluso il Layer 3 con PyTorch, ~750 MB) sono condivisi in memoria e su disco tra tutti i container. Ogni container ha solo un sottile layer scrivibile per i propri file di runtime (log, metriche, checkpoint), che è trascurabile rispetto al Layer 3.
+
+Il risultato pratico è che PyTorch viene scaricato e installato **una volta sola**, indipendentemente da quanti worker si lanciano:
+
+| Operazione | Costo |
+|---|---|
+| Prima build (nessuna cache) | ~250 MB download, ~5 min |
+| Rebuild dopo modifica al codice sorgente | ~secondi (solo Layer 5 invalido) |
+| Rebuild dopo aggiunta dipendenza Python | ~250 MB download, ~5 min (Layer 3 invalido) |
+| `docker compose up` con N=10 worker | stesso costo di N=3 — stessa immagine |
+
 I file generati dalla compilazione Protobuf (`gossip_pb2.py`, `gossip_pb2_grpc.py`) esistono nel container prima che il sorgente venga copiato; il `COPY` successivo non li sovrascrive perché sono esclusi dal repository tramite `.gitignore`.
 
 **Build context e `.dockerignore`.** Durante `docker compose up --build`, Docker trasferisce l'intera directory di progetto al daemon come *build context* prima ancora di valutare la cache. Senza `.dockerignore`, `data/femnist/` (potenzialmente diversi GB) verrebbe trasferita ad ogni build anche con tutti i layer in cache — annullando il vantaggio del caching. Il file `.dockerignore` esclude `data/`, `leaf/`, `scripts/`, i file di documentazione e la cache Python, riducendo il build context al solo sorgente necessario.
@@ -1744,7 +1786,7 @@ docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
 ```
 
-La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) quantifica il bias ottimistico: quanto la val accuracy finale è gonfiata rispetto a una stima su dati mai visti. Se la differenza è trascurabile, l'approccio 90/10 è sufficiente per gli esperimenti di confronto; se è significativa, il test set separato è necessario per metriche assolute affidabili.
+La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) è indicativa del bias ottimistico, ma non lo misura con precisione: Run B allena su **80% dei dati** invece del 90% di Run A, quindi la `test_accuracy` sarà probabilmente più bassa per due motivi sovrapposti — meno dati di training (effetto reale) e assenza del bias ottimistico (effetto che si vuole isolare). I due contributi non sono separabili. Ciò che Run B garantisce è che la `test_accuracy` è una stima onesta della generalizzazione di quella configurazione su dati mai visti in nessuna decisione di training.
 
 ---
 
