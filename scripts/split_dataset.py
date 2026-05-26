@@ -65,6 +65,64 @@ def _build_worker_map(all_users: list[str], num_workers: int) -> dict[str, int]:
     return {user: min(i // chunk_size, num_workers - 1) for i, user in enumerate(all_users)}
 
 
+def _stream_split_val_test(
+    worker_map: dict[str, int],
+    num_workers: int,
+    worker_user_lists: list[list[str]],
+    out_dirs_val: list[str],
+    out_dirs_test: list[str],
+) -> None:
+    """
+    Split LEAF test/ 50/50 per writer into val/ and test/ output files.
+
+    For each writer, the first half of their samples goes to val/ (used for
+    early stopping) and the second half goes to test/ (independent evaluation,
+    never used for any training decision). Both output files contain the same
+    writer IDs. The 20% LEAF test/ becomes 10% val + 10% test.
+    """
+    shard_files = sorted(glob.glob(os.path.join(SRC_DIR, "test", "*.json")))
+
+    val_handles, test_handles = [], []
+    for w in range(num_workers):
+        for handles, out_dirs in [(val_handles, out_dirs_val), (test_handles, out_dirs_test)]:
+            h = open(os.path.join(out_dirs[w], "data.json"), "w")
+            h.write('{"users":')
+            json.dump(worker_user_lists[w], h)
+            h.write(',"user_data":{')
+            handles.append(h)
+
+    first_val = [True] * num_workers
+    first_test = [True] * num_workers
+
+    for idx, shard_path in enumerate(shard_files, 1):
+        print(f"    shard {idx}/{len(shard_files)}: {os.path.basename(shard_path)}")
+        with open(shard_path) as f:
+            shard = json.load(f)
+
+        for user in shard["users"]:
+            w = worker_map[user]
+            x = shard["user_data"][user]["x"]
+            y = shard["user_data"][user]["y"]
+            mid = max(1, len(x) // 2)
+
+            if not first_val[w]:
+                val_handles[w].write(",")
+            val_handles[w].write(json.dumps(user) + ":" + json.dumps({"x": x[:mid], "y": y[:mid]}))
+            first_val[w] = False
+
+            if not first_test[w]:
+                test_handles[w].write(",")
+            test_handles[w].write(json.dumps(user) + ":" + json.dumps({"x": x[mid:], "y": y[mid:]}))
+            first_test[w] = False
+
+        del shard
+        gc.collect()
+
+    for h in val_handles + test_handles:
+        h.write("}}")
+        h.close()
+
+
 def _stream_split(
     split: str,
     worker_map: dict[str, int],
@@ -124,9 +182,38 @@ def _stream_split(
         h.close()
 
 
+def _process_split(
+    src_split: str,
+    dst_split: str,
+    num_workers: int,
+) -> None:
+    """Process a single LEAF split directory → per-worker output directory."""
+    src_dir = os.path.join(SRC_DIR, src_split)
+    print(f"\n[{src_split} → {dst_split}]")
+
+    all_users = _collect_user_ids(src_dir)
+    chunk_size = len(all_users) // num_workers
+    print(f"  {len(all_users)} writers total, ~{chunk_size} per worker")
+
+    worker_map = _build_worker_map(all_users, num_workers)
+
+    worker_user_lists: list[list[str]] = [[] for _ in range(num_workers)]
+    for user in all_users:
+        worker_user_lists[worker_map[user]].append(user)
+
+    out_dirs = []
+    for i in range(num_workers):
+        d = os.path.join(DEST_ROOT, f"worker_{i}", dst_split)
+        os.makedirs(d, exist_ok=True)
+        out_dirs.append(d)
+
+    _stream_split(src_split, worker_map, num_workers, worker_user_lists, out_dirs)
+
+
 def main():
     cfg = _load_config()
     num_workers: int = cfg["network"]["num_workers"]
+    use_test_set: bool = cfg["machine_learning"].get("use_test_set", False)
 
     if not os.path.isdir(SRC_DIR):
         print(f"ERROR: source dataset not found at {SRC_DIR}")
@@ -137,43 +224,45 @@ def main():
     for entry in glob.glob(os.path.join(DEST_ROOT, "worker_*")):
         shutil.rmtree(entry)
 
-    print(f"Splitting FEMNIST into {num_workers} partitions ...")
+    mode = "80/10/10 train/val/test" if use_test_set else "90/10 train/val"
+    print(f"Splitting FEMNIST into {num_workers} partitions [{mode}] ...")
 
-    # LEAF uses "train/" and "test/" as directory names, but the "test/" split
-    # is used as a validation set in our system (measured each round for early
-    # stopping). We rename it to "val/" in the per-worker directories so the
-    # code reflects the actual usage. The LEAF source directories are unchanged.
-    split_mapping = {"train": "train", "test": "val"}
+    # train/ → train/ is identical in both modes
+    _process_split("train", "train", num_workers)
 
-    for src_split, dst_split in split_mapping.items():
-        src_dir = os.path.join(SRC_DIR, src_split)
-        print(f"\n[{src_split} → {dst_split}]")
-
-        # Pass 1: collect writer IDs only (no pixel data)
+    if use_test_set:
+        # LEAF test/ (20%) → split 50/50 per writer: val/ (10%) + test/ (10%).
+        # val/ is used for early stopping only; test/ is evaluated once at the
+        # end of training and never influences any training decision.
+        print("\n[test → val + test (50/50 per writer)]")
+        src_dir = os.path.join(SRC_DIR, "test")
         all_users = _collect_user_ids(src_dir)
         chunk_size = len(all_users) // num_workers
         print(f"  {len(all_users)} writers total, ~{chunk_size} per worker")
 
         worker_map = _build_worker_map(all_users, num_workers)
-
-        # Group writer IDs by worker (strings only — negligible memory)
         worker_user_lists: list[list[str]] = [[] for _ in range(num_workers)]
         for user in all_users:
             worker_user_lists[worker_map[user]].append(user)
 
-        # Create output directories
-        out_dirs = []
+        out_dirs_val, out_dirs_test = [], []
         for i in range(num_workers):
-            d = os.path.join(DEST_ROOT, f"worker_{i}", dst_split)
-            os.makedirs(d, exist_ok=True)
-            out_dirs.append(d)
+            for out_dirs, dst in [(out_dirs_val, "val"), (out_dirs_test, "test")]:
+                d = os.path.join(DEST_ROOT, f"worker_{i}", dst)
+                os.makedirs(d, exist_ok=True)
+                out_dirs.append(d)
 
-        # Pass 2: stream shards, write output files immediately
-        _stream_split(src_split, worker_map, num_workers, worker_user_lists, out_dirs)
+        _stream_split_val_test(worker_map, num_workers, worker_user_lists, out_dirs_val, out_dirs_test)
+    else:
+        # LEAF uses "test/" but we rename it "val/" in per-worker directories
+        # to reflect the actual usage: it is measured each round for early stopping,
+        # not held out as a final test set. The LEAF source directory is unchanged.
+        _process_split("test", "val", num_workers)
 
     print("\nDone. Per-worker partitions written to:")
     for i in range(num_workers):
-        print(f"  data/femnist/worker_{i}/")
+        suffix = "{train,val,test}" if use_test_set else "{train,val}"
+        print(f"  data/femnist/worker_{i}/{suffix}/")
     print("\nNext step: docker compose up --build")
 
 

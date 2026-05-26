@@ -127,25 +127,62 @@ LEAF fornisce uno split predeterminato configurabile tramite `--tf` (default 0.9
 
 **Nota sul naming**: LEAF chiama la seconda cartella `test/`, ma nel nostro sistema essa è usata come **validation set** — misurata ad ogni round dopo la Fase A per l'early stopping e le metriche di convergenza. Non è un test set tenuto fuori dal training. Per evitare ambiguità, `split_dataset.py` rinomina `test/` in `val/` nelle cartelle worker: il codice riflette l'uso reale. `dataset.py` carica `val/` nel `val_loader` e nel resto di questo documento si usa il termine *validation set* (o *validation loss*).
 
-**Assenza di un test set separato.** In ML classico si distinguono tre set: train (ottimizzazione), val (decisioni di training come early stopping), test (valutazione finale su dati mai visti). Il nostro sistema ha solo train e val, usando quest'ultimo per entrambi i ruoli. Questo introduce un **bias ottimistico** nelle metriche finali: l'early stopping si ferma quando le performance su `val/` sono al picco, quindi i valori riportati sono leggermente gonfiati rispetto a un test set indipendente.
+**Assenza di un test set separato.** In ML classico si distinguono tre set con ruoli distinti:
 
-Questa è tuttavia la pratica standard nella letteratura FL su FEMNIST — inclusi il paper LEAF originale [3] e FedAvg [2] — per tre ragioni concrete:
+- **Training set**: il modello ci fa backpropagation sopra. I pesi vengono aggiornati direttamente su questi dati. Il modello li "vede" molte volte e rischia di adattarsi eccessivamente a essi (overfitting).
+- **Validation set**: il modello *non* ci fa backpropagation, ma le decisioni di training sono prese in base alle sue performance — quando fermarsi (early stopping), quale configurazione di iperparametri scegliere, quale checkpoint salvare. Il modello non impara direttamente da questo set, ma viene scelto perché funziona bene su di esso: lo "vede" indirettamente.
+- **Test set**: usato *una sola volta*, dopo che tutte le decisioni di training e selezione del modello sono state prese. Non influenza nessuna scelta. Serve a dare una stima onesta di quanto il modello generalizza su dati completamente nuovi. Se si usa lo stesso set sia per l'early stopping che per la valutazione finale, la metrica risultante è **ottimistica**: si sta misurando quanto bene il modello ha "imparato" quel set, non quanto generalizza su dati mai visti.
+
+Il nostro sistema ha solo train e val, usando quest'ultimo per **due ruoli distinti**:
+1. **Early stopping** — durante ogni run, la val loss decide quando interrompere il training.
+2. **Selezione degli iperparametri** — tra le run, la val accuracy finale è la metrica usata per scegliere la configurazione migliore nella grid search (es. `learning_rate` ∈ {1e-4, 1e-3, 5e-3}, `inner_steps_H` ∈ {100, 500, 1000}, `gossip_fanout` ∈ {1, 2, N-1}).
+
+Entrambi questi usi si basano sullo **stesso identico `val/`** — non esiste una suddivisione interna tra "val per early stopping" e "val per confronto". Questo genera un bias che si accumula su due livelli:
+
+1. **Livello checkpoint**: l'early stopping scatta nel round in cui `val/` è al picco — il modello salvato è già quello ottimizzato per quel set specifico.
+2. **Livello configurazione**: tra le run, si sceglie la configurazione con il val_accuracy più alto — che è già il picco scelto al livello precedente.
+
+L'ordine concreto è:
+
+```
+Run A (lr=1e-3):  training → early stopping su val/ → val_accuracy finale = 0.73
+Run B (lr=1e-4):  training → early stopping su val/ → val_accuracy finale = 0.68
+Confronto: A vince → si sceglie lr=1e-3
+```
+
+Con un test set separato il flusso sarebbe invece:
+
+```
+val/  → usato solo per early stopping (decide quando fermarsi)
+test/ → misurato una sola volta alla fine di ogni run, per confrontare le configurazioni
+```
+
+I due set sarebbero indipendenti: la metrica di confronto non sarebbe influenzata dalle decisioni di stopping. Questo introduce un **bias ottimistico** nelle metriche assolute riportate: i valori finali sono leggermente gonfiati rispetto a quelli che si otterrebbero su un test set indipendente.
+
+**Confronto tra i due approcci possibili:**
+
+| | Train + Val (adottato) | Train + Val + Test |
+|---|---|---|
+| **Metrica finale** | Ottimistica — val usato per early stopping e per scegliere la configurazione | Onesta — test mai visto in nessuna decisione |
+| **Dati per il training** | Maggiori (es. 90% train, 10% val) | Minori (es. 80% train, 10% val, 10% test) |
+| **Validità per confronti relativi** | Sì — il bias è sistematico e si cancella nei confronti tra configurazioni | Sì, con stima assoluta più affidabile |
+| **Standard nella letteratura FL** | Sì — LEAF e FedAvg usano questo schema | No — non adottato nelle paper di riferimento |
+
+Il bias ottimistico è un problema se si vuole affermare "il modello raggiunge X% di accuracy assoluta". Non è un problema per l'obiettivo di questo progetto, che è confrontare configurazioni relative (FL vs no-FL, diversi `gossip_fanout`, diversi `H`): il bias è identico per tutte le configurazioni e si annulla nel confronto.
+
+L'assenza di un test set separato è quindi accettabile per tre ragioni concrete:
 
 1. **Dimensione dei set**: il 10% dei campioni di ogni scrittore, già diviso tra i worker, è una partizione piccola. Suddividerla ulteriormente in val + test produrrebbe set troppo ridotti per stime statisticamente affidabili.
-2. **Bias trascurabile rispetto alla varianza FL**: la fonte di rumore dominante nelle metriche FL è la varianza inter-worker dovuta ai dati non-i.i.d., non il bias da early stopping. Il bias sistematico si cancella nei confronti tra configurazioni (FL vs no-FL, diversi `gossip_fanout`), che è l'obiettivo degli esperimenti.
+2. **Bias trascurabile rispetto alla varianza FL**: la fonte di rumore dominante nelle metriche FL è la varianza inter-worker dovuta ai dati non-i.i.d., non il bias da early stopping. Il bias sistematico si cancella nei confronti tra configurazioni, che è l'obiettivo degli esperimenti.
 3. **Confrontabilità con la letteratura**: usare lo stesso schema di split permette di confrontare i risultati direttamente con i valori riportati nelle paper di riferimento.
 
-Un'alternativa sarebbe la **k-fold cross-validation**, in cui i dati di ogni worker vengono suddivisi in $k$ fold, il training viene ripetuto $k$ volte usando a rotazione un fold diverso come validation, e i risultati vengono mediati. Il confronto tra i due approcci nel contesto FL è il seguente:
+**Perché non usare la k-fold cross-validation.** La k-fold divide i dati in $k$ fold e ripete il training $k$ volte, usando ogni volta un fold diverso come validation. Rispetto allo split fisso, offre una stima più robusta perché ogni campione appare sia in training che in validation, ma presenta tre problemi nel contesto FL su FEMNIST:
 
-| | Split fisso (adottato) | K-fold cross-validation |
-|---|---|---|
-| **Costo computazionale** | Training eseguito una sola volta | Training ripetuto $k$ volte per worker |
-| **Stima della generalizzazione** | Singola stima, dipendente dal seed dello split | Stima più robusta, riduce la varianza |
-| **Proprietà non-i.i.d.** | Preservata: lo split avviene per campione dentro ogni scrittore, la distribuzione degli stili rimane intatta | Potenzialmente alterata: rimescolare i dati può mescolare gli stili tra fold |
-| **Standard nella letteratura FL** | Sì — approccio universale nelle paper FL | No — raramente usato in FL |
-| **Complessità implementativa** | Nessuna | Richiede modifiche a `load_partition` e al training loop |
+1. **Costo computazionale**: $k$ training completi per ogni worker — $k \times$ il tempo attuale.
+2. **Violazione della proprietà non-i.i.d.**: una k-fold standard rimescola i campioni tra fold, potendo distribuire i campioni di un writer in fold diversi. Ogni fold perderebbe così la struttura "per scrittore" che è il punto centrale del benchmark. Una k-fold stratificata per writer — che mantiene ogni writer intero in un solo fold — sarebbe tecnicamente corretta ma richiederebbe di riscrivere `load_partition` con un parametro `fold_index` e modificare il training loop.
+3. **Non standard in FL**: nessuna paper FL su FEMNIST usa k-fold — adottarla impedirebbe di confrontare i risultati con la letteratura.
 
-La cross-validation locale è teoricamente realizzabile: ogni worker dividerebbe indipendentemente la propria partizione in $k$ fold, eseguirebbe $k$ round di training completi e ne medierebbe i risultati. In pratica richiederebbe di: (1) modificare `load_partition` per accettare un parametro `fold_index` e restituire il fold corretto come validation set; (2) avvolgere l'intero training loop in un ciclo esterno su $k$ iterazioni; (3) aggregare le metriche di validazione tra i fold prima di applicare l'early stopping. Il costo computazionale sarebbe $k \times$ quello attuale — ingiustificato per un sistema già distribuito e per l'obiettivo di questo progetto, che è validare la convergenza e non ottimizzare iperparametri.
+Il costo computazionale sarebbe $k \times$ quello attuale — ingiustificato per un sistema già distribuito il cui obiettivo è validare la convergenza, non ottimizzare iperparametri con la massima precisione statistica.
 
 ---
 
@@ -314,7 +351,7 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 5. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`. Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
 6. Rimozione automatica dell'intera directory `leaf/` (~20 GB). Una volta che `data/femnist/data/` esiste, il repository LEAF non serve più — se necessario verrà riclonato automaticamente da GitHub alla prossima esecuzione dello script.
 
-**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker, scrivendo `data/femnist/worker_{i}/{train,val}/data.json` per ciascun worker $i \in [0, N)$. La cartella sorgente `test/` di LEAF viene rinominata `val/` per riflettere l'uso reale nel sistema. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
+**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da `use_test_set` in `config.yaml`: con `false` (default) scrive `data/femnist/worker_{i}/{train,val}/data.json` rinominando la `test/` di LEAF in `val/`; con `true` scrive anche `data/femnist/worker_{i}/test/data.json` dividendo il 20% di LEAF al 50/50 per scrittore (10% val + 10% test). Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
 - **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON, senza caricare i pixel. Produce la lista globale ordinata di tutti i writer, calcola la mappa `writer_id → worker_index` e raggruppa gli ID per worker. Consumo RAM: trascurabile (solo stringhe).
 - **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
@@ -691,12 +728,108 @@ Per **run di produzione** o esperimenti esplorativi dove si vuole evitare comput
 
 ### 5.6 Selezione degli Iperparametri
 
-Il sistema non usa cross-validation (motivata in Sezione 2.3). L'approccio adottato per la selezione degli iperparametri è il **grid search su hold-out fisso**, che è lo stesso approccio usato nei paper di riferimento LEAF e FedAvg:
+Il sistema non usa cross-validation (motivata in Sezione 2.3) né ottimizzazione automatica degli iperparametri (Bayesian optimization, Optuna, ecc.). I parametri in `config.yaml` sono fissi per tutta la durata di ogni run: non cambiano durante il training e non vengono aggiustati in risposta alla val loss. La ricerca è **manuale**: si esegue una run per ogni configurazione, si legge la val accuracy finale, e si sceglie la configurazione migliore a mano.
 
-1. **Subset veloce per l'esplorazione.** Si lancia `download_femnist.py --sf 0.05` per ottenere il 5% del dataset (~170 scrittori). Con questa dimensione, ogni esperimento completa in pochi minuti anche su CPU.
-2. **Grid search.** Si varia un iperparametro alla volta mantenendo gli altri ai valori di default. I candidati principali sono: `learning_rate` (1e-4, 1e-3, 5e-3), `inner_steps_H` (100, 500, 1000), `gossip_fanout` (1, 2, N-1). Per ogni configurazione si lancia `docker compose up` e si osserva la convergenza.
-3. **Metrica di confronto.** Dopo ogni esperimento, `python scripts/aggregate_metrics.py` produce le statistiche globali. La metrica principale è la **mean accuracy finale** (media tra worker), con la **std accuracy** come indicatore di equità (worker che convergono uniformemente sono preferibili a quelli dove un worker eccelle e gli altri no).
-4. **Conferma su dataset completo.** La configurazione migliore trovata sul subset 5% viene rieseguita su `--sf 1.0` per verificare che i risultati si scalino correttamente.
+#### Tassonomia dei parametri
+
+I parametri del sistema si dividono in tre categorie con ruoli distinti:
+
+**Iperparametri ML** — influenzano direttamente la qualità del modello. Sono quelli ottimizzati con la grid search:
+
+| Parametro | Candidati | Default | Effetto |
+|---|---|---|---|
+| `learning_rate` | 1e-4, 1e-3, 5e-3 | 1e-3 | Velocità di convergenza e stabilità del gradiente |
+| `inner_steps_H` | 100, 500, 1000 | 500 | Drift locale tra worker; meno step = meno drift ma più traffico |
+| `batch_size` | 16, 32, 64 | 32 | Stabilità del gradiente e velocità per step |
+
+**Parametri di sistema** — influenzano le metriche ML ma sono determinati dall'architettura del deployment, non ottimizzati come iperparametri. Si studiano negli esperimenti di scalabilità (Sezione 9):
+
+| Parametro | Candidati | Default | Effetto |
+|---|---|---|---|
+| `gossip_fanout` | 1, 2, 3, N-1 | 3 | Trade-off traffico/qualità aggregazione: fanout alto = più aggregazioni per round = convergenza più rapida ma volume di rete proporzionale |
+| `num_workers` | 3, 5, 10 | 3 | Dimensione delle partizioni locali e numero di peer disponibili per l'aggregazione |
+
+`gossip_fanout` è il parametro centrale del progetto: quantifica esattamente il trade-off traffico/convergenza che il sistema intende studiare, ed è il soggetto principale degli esperimenti comparativi. `num_workers` è invece fisso per ogni deployment — lo si varia solo nell'esperimento di scalabilità per misurare come il sistema si comporta al crescere della rete.
+
+**Parametri strutturali** — fissi per design, non si variano negli esperimenti:
+
+| Parametro | Valore | Motivazione |
+|---|---|---|
+| `aggregation_strategy` | FedAvg | Algoritmo di riferimento della letteratura FL |
+| `max_staleness` | 10 | Trade-off accettazione/qualità degli aggiornamenti |
+| `drop_probability`, `crash_probability` | 0.20, 0.05 | Fault injection calibrata per gli esperimenti di robustezza |
+
+#### Metriche per worker e metriche globali
+
+Ogni worker misura le proprie metriche **localmente**: la `val_accuracy` di ogni round è calcolata sul `val/` di quel worker, con il suo modello dopo la FedAvg. Non esiste un nodo che osservi le prestazioni globali in tempo reale. `aggregate_metrics.py` aggrega i CSV post-run:
+
+```
+Per round (vista globale — media tra tutti i worker):
+  Round 10 | mean_acc=0.71 | std_acc=0.04 | min=0.65 | max=0.76
+  Round 11 | mean_acc=0.73 | ...
+
+Per worker (vista individuale):
+  Worker 0: final_acc=0.76 | best_acc=0.78
+  Worker 1: final_acc=0.68 | best_acc=0.71
+  Worker 2: final_acc=0.74 | best_acc=0.75
+```
+
+La metrica principale per confrontare le configurazioni è la **mean val accuracy finale** (media tra worker all'ultimo round). La **std accuracy** indica equità di convergenza: std bassa significa che tutti i worker beneficiano delle aggregazioni in modo uniforme — risultato atteso in un sistema FL sano. Std alta indica che alcuni worker convergono bene e altri no, spesso sintomo di fanout troppo basso o dati troppo sbilanciati.
+
+#### Flusso di grid search
+
+**Fase 1 — Esplorazione veloce (5% del dataset)**
+
+```bash
+python scripts/download_femnist.py --sf 0.05
+python scripts/split_dataset.py && python scripts/generate_compose.py
+```
+
+Con il 5% (~170 scrittori) ogni run completa in pochi minuti anche su CPU. Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per ogni configurazione:
+
+```bash
+# 1. Modifica il parametro in config.yaml
+
+# 2. Pulisci i risultati precedenti
+rm -f data/femnist/worker_*/metrics.csv data/femnist/worker_*/test_result.json
+
+# 3. Lancia la run
+docker compose up --build
+
+# 4. Analizza e archivia prima di passare alla prossima configurazione
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <nome>   # es: lr_1e-3, fanout_2, baseline
+# → salva config.yaml + metriche in results/<timestamp>_<nome>/
+```
+
+Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `test_result.json`, e il `config.yaml` usato. Senza quest'ultimo sarebbe impossibile ricordare quale configurazione ha prodotto quali risultati dopo più run.
+
+**Fase 2 — Conferma sul dataset completo**
+
+```bash
+python scripts/download_femnist.py --sf 1.0   # dataset completo
+python scripts/split_dataset.py && python scripts/generate_compose.py
+# Imposta la configurazione migliore trovata in Fase 1
+docker compose up --build
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py best_config_full
+```
+
+La configurazione migliore trovata sul 5% viene rieseguita su `--sf 1.0` per verificare che i risultati si scalino correttamente.
+
+**Fase 3 — Valutazione finale (opzionale, con test set)**
+
+Se si vuole una stima non influenzata dalle decisioni di early stopping:
+
+```bash
+# Imposta use_test_set: true in config.yaml
+python scripts/download_femnist.py --sf 1.0   # re-download necessario (--tf diverso)
+python scripts/split_dataset.py && python scripts/generate_compose.py
+docker compose up --build
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py best_config_with_test
+# → riporta val_accuracy (early stopping) + test_accuracy (stima onesta)
+```
 
 Questo procedimento è interamente abilitato dal sistema di metriche descritto nella Sezione 6.
 
@@ -1543,21 +1676,24 @@ fault_injection:
 
 ## 11. Istruzioni di Esecuzione
 
-Il workflow segue quattro passi in sequenza. I passi 1 e 2 sono una-tantum; i passi 3 e 4 vanno ripetuti ogni volta che si cambia `num_workers`.
+Il workflow segue quattro passi in sequenza. I passi 1 e 2 sono una-tantum; i passi 3 e 4 vanno ripetuti ogni volta che si cambia `num_workers` o `use_test_set`.
 
 > **Nota di compatibilità — Pillow ≥ 10.0.**
 > Lo script di preprocessing di LEAF (`leaf/data/femnist/preprocess/data_to_json.py`) usa `Image.ANTIALIAS`, rimosso in Pillow 10.0 (2023) in favore di `Image.LANCZOS`. I due identificano lo stesso filtro di ricampionamento (sinc di Lanczos): la sostituzione è puramente nominale e **non altera in alcun modo il dataset prodotto**. `download_femnist.py` applica automaticamente questa patch subito dopo il clone di LEAF, prima di avviare il preprocessing — non è richiesto alcun intervento manuale.
 
 ```bash
-# Passo 1 — Scarica e preprocessa il dataset FEMNIST (una sola volta)
-python scripts/download_femnist.py --sf 1.0
-# --sf 0.05 per un subset veloce (5%); 1.0 per il dataset completo (~2-4 GB)
+# Passo 1 — Imposta use_test_set in config.yaml (prima di scaricare il dataset)
+#   use_test_set: false  →  90/10 train/val  (default, nessun test set separato)
+#   use_test_set: true   →  80/10/10 train/val/test  (test set indipendente)
+#   IMPORTANTE: cambiare use_test_set richiede di ripetere i passi 2 e 3.
 
-# Passo 2 — Imposta i parametri in config.yaml
-#   In particolare: num_workers, gossip_fanout, total_rounds, ecc.
+# Passo 2 — Scarica e preprocessa il dataset FEMNIST
+python scripts/download_femnist.py --sf 1.0
+# --sf 0.05 per un subset veloce (5%); 1.0 per il dataset completo (~2-4 GB).
+# Il flag --tf passato a LEAF (0.9 o 0.8) è letto automaticamente da config.yaml.
 
 # Passo 3 — Partiziona il dataset e rigenera i compose file
-python scripts/split_dataset.py      # crea data/femnist/worker_{i}/
+python scripts/split_dataset.py      # crea data/femnist/worker_{i}/{train,val[,test]}/
 python scripts/generate_compose.py   # rigenera docker-compose.yml e docker-compose.aws.yml
 
 # Passo 4a — Avvia il sistema in locale
@@ -1579,13 +1715,36 @@ docker compose -f docker-compose.aws.yml up worker_0
 python scripts/aggregate_metrics.py
 # Output: tabella per round (mean/std/min/max accuracy), riassunto per worker,
 #         data/femnist/global_metrics.csv, data/femnist/summary.txt
+# Con use_test_set: true, stampa anche la test accuracy finale per ogni worker.
 
 # Per confrontare due configurazioni diverse:
 #   - Prima di ogni esperimento, eliminare i vecchi metrics.csv:
-#     rm data/femnist/worker_*/metrics.csv
+#     rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/test_result.json
 #   - Dopo ogni esperimento, salvare i risultati:
 #     cp data/femnist/global_metrics.csv results/global_metrics_<config>.csv
 ```
+
+### Confronto tra approccio 90/10 e 80/10/10
+
+Per quantificare il bias ottimistico introdotto dall'assenza di un test set separato, eseguire due run con la stessa configurazione di iperparametri cambiando solo `use_test_set`:
+
+```bash
+# Run A — solo val (approccio di default)
+# config.yaml: use_test_set: false
+python scripts/download_femnist.py --sf 0.05
+python scripts/split_dataset.py && python scripts/generate_compose.py
+docker compose up --build
+python scripts/aggregate_metrics.py  # riporta val_accuracy
+
+# Run B — con test set indipendente
+# config.yaml: use_test_set: true
+python scripts/download_femnist.py --sf 0.05  # re-download necessario (--tf diverso)
+python scripts/split_dataset.py && python scripts/generate_compose.py
+docker compose up --build
+python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
+```
+
+La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) quantifica il bias ottimistico: quanto la val accuracy finale è gonfiata rispetto a una stima su dati mai visti. Se la differenza è trascurabile, l'approccio 90/10 è sufficiente per gli esperimenti di confronto; se è significativa, il test set separato è necessario per metriche assolute affidabili.
 
 ---
 

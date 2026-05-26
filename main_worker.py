@@ -11,6 +11,7 @@ Round structure
   Phase B — Local training for exactly H inner steps (AdamW optimizer).
   Phase C — Gossip Push: send own weights to M randomly selected peers.
 """
+import json
 import logging
 import os
 import random
@@ -149,10 +150,13 @@ def main():
     logger.info(f"Starting on {my_address} | device={device} | total_workers={total_workers}")
 
     # --- Dataset: load this worker's pre-split partition ---
-    train_loader, val_loader, local_samples = load_partition(data_dir, batch_size)
+    train_loader, val_loader, test_loader, local_samples = load_partition(data_dir, batch_size)
     # local_samples: number of training examples owned by THIS worker.
     # Kept constant for the entire run; used to weight our contribution in FedAvg.
-    logger.info(f"Loaded {local_samples} local training samples")
+    if test_loader is not None:
+        logger.info(f"Loaded {local_samples} local training samples (80/10/10 mode — test set available)")
+    else:
+        logger.info(f"Loaded {local_samples} local training samples (90/10 mode — no test set)")
 
     # --- Model and optimizer ---
     model = FEMNISTModel(dropout_conv=dropout_conv, dropout_fc=dropout_fc).to(device)
@@ -379,6 +383,21 @@ def main():
         # loop completion all traverse finally. SIGTERM/SIGINT are routed through
         # sys.exit(0) by the signal handlers above. Only SIGKILL bypasses this block.
         deregister_worker(registry_url, worker_id)
+
+    # Final test set evaluation — run once after training, never used for any
+    # training decision (not early stopping, not hyperparameter selection).
+    # Only present when use_test_set: true in config.yaml (80/10/10 mode).
+    if test_loader is not None:
+        test_loss, test_acc = validate(model, test_loader, device)
+        logger.info(f"Test set evaluation — loss={test_loss:.4f}, accuracy={test_acc:.2%}")
+        result_path = os.path.join(data_dir, "test_result.json")
+        with open(result_path, "w") as f:
+            json.dump({
+                "worker_id": worker_id,
+                "test_loss": round(test_loss, 6),
+                "test_accuracy": round(test_acc, 6),
+            }, f)
+        logger.info(f"Test result saved → {result_path}")
 
     # Keep the process alive so Thread 1 can continue serving peers that are
     # still training. Reached only after a clean break from the loop.

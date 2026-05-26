@@ -26,6 +26,7 @@ Output (saved to disk):
 import argparse
 import csv
 import glob
+import json
 import os
 import statistics
 
@@ -210,6 +211,31 @@ def main():
         print("  (checkpoints are saved automatically at the end of each experiment)")
 
     print()
+
+    # ---------------------------------------------------------------------------
+    # Test set results (present only when use_test_set: true in config.yaml)
+    # ---------------------------------------------------------------------------
+    test_result_paths = sorted(glob.glob(
+        os.path.join(args.data_root, "worker_*", "test_result.json")
+    ))
+    if test_result_paths:
+        print("Test set results (unbiased — evaluated once after training):")
+        print("-" * 55)
+        test_accs = []
+        for path in test_result_paths:
+            with open(path) as f:
+                r = json.load(f)
+            print(f"  Worker {r['worker_id']:>2}: test_accuracy={r['test_accuracy']:.4f}  test_loss={r['test_loss']:.4f}")
+            test_accs.append(r["test_accuracy"])
+            summary_lines.append(
+                f"  Worker {r['worker_id']}: test_accuracy={r['test_accuracy']:.4f}  test_loss={r['test_loss']:.4f}"
+            )
+        mean_test = statistics.mean(test_accs)
+        std_test = statistics.stdev(test_accs) if len(test_accs) > 1 else 0.0
+        print(f"\n  Mean test accuracy: {mean_test:.4f}  (std={std_test:.4f})")
+        summary_lines.append(f"\nMean test accuracy: {mean_test:.4f}  std={std_test:.4f}")
+        print("-" * 55)
+        print()
 
     # ---------------------------------------------------------------------------
     # Save outputs

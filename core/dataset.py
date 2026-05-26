@@ -63,15 +63,18 @@ def _read_json_shards(directory: str) -> tuple[list, dict]:
 
 def load_partition(
     data_dir: str, batch_size: int
-) -> tuple[DataLoader, DataLoader, int]:
+) -> tuple[DataLoader, DataLoader, DataLoader | None, int]:
     """
-    Load the train/validation split from the pre-split worker directory.
+    Load the train/val(/test) split from the pre-split worker directory.
 
-    The directory is expected to contain train/ and test/ subdirectories
-    with the JSON files produced by scripts/split_dataset.py.
+    The directory must contain train/ and val/ subdirectories produced by
+    scripts/split_dataset.py. If a test/ subdirectory is also present
+    (use_test_set: true in config.yaml), a test_loader is returned; otherwise
+    test_loader is None. The caller should evaluate test_loader only once, at
+    the end of training — never for early stopping or hyperparameter decisions.
 
     Returns:
-        train_loader, val_loader, num_train_samples
+        train_loader, val_loader, test_loader (or None), num_train_samples
     """
     train_users, train_data = _read_json_shards(os.path.join(data_dir, "train"))
     val_users, val_data = _read_json_shards(os.path.join(data_dir, "val"))
@@ -105,4 +108,16 @@ def load_partition(
         batch_size=batch_size,
         shuffle=False,
     )
-    return train_loader, val_loader, len(train_x)
+
+    test_loader = None
+    test_dir = os.path.join(data_dir, "test")
+    if os.path.isdir(test_dir):
+        test_users, test_data = _read_json_shards(test_dir)
+        test_x, test_y = collect_samples(test_users, test_data)
+        test_loader = DataLoader(
+            FEMNISTDataset(test_x, test_y),
+            batch_size=batch_size,
+            shuffle=False,
+        )
+
+    return train_loader, val_loader, test_loader, len(train_x)

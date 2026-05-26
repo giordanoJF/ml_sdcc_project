@@ -18,12 +18,18 @@ network:
   # end of each round (k-push gossip, Phase C). Higher values increase traffic
   # linearly (k * model_size per round) but improve convergence speed.
   # Typical range: 1 (minimal traffic) to N-1 (full broadcast).
+  # SYSTEM PARAMETER — not a pure ML hyperparameter. Controls the traffic/convergence
+  # trade-off that is the central subject of the comparative experiments.
+  # Experiment candidates: 1, 2, 3 (default), N-1
   gossip_fanout: 3
 
   # Total number of worker containers. After changing this value, regenerate
   # the compose files and re-partition the dataset:
   #   python scripts/split_dataset.py && python scripts/generate_compose.py
-  num_workers: 3
+  # SYSTEM PARAMETER — fixed per deployment. Vary only in scalability experiments
+  # to study how accuracy and convergence change with network size.
+  # Scalability experiment candidates: 3 (default), 5, 10
+  num_workers: 10
 
 federated_learning:
   # Maximum number of training rounds before the process terminates.
@@ -35,6 +41,8 @@ federated_learning:
   # Higher H = less communication, more local drift between workers.
   # Lower H = more communication, models stay closer but traffic increases.
   # Default 500: with batch_size=32 this processes 16000 samples between gossip rounds.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 100, 500 (default), 1000
   inner_steps_H: 500
 
   # Aggregation algorithm applied in Phase A. Currently only FedAvg is implemented.
@@ -65,12 +73,25 @@ machine_learning:
   # Do not change unless you also update the bind mount in the compose files.
   data_dir: "/app/data/femnist"
 
+  # When false (default): 90/10 train/val split. Val is used for both early stopping
+  # and as the final accuracy metric (introduces a small optimistic bias).
+  # When true: 80/10/10 train/val/test split. Val is used only for early stopping;
+  # test/ provides an independent, unbiased final accuracy estimate written to
+  # test_result.json at the end of each worker's training.
+  # IMPORTANT: changing this value requires re-running download_femnist.py
+  # (different --tf flag to LEAF) and split_dataset.py before the next experiment.
+  use_test_set: false
+
   # Mini-batch size for AdamW. Larger batches = more stable gradients but higher
   # memory usage and fewer gradient steps per epoch.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 16, 32 (default), 64
   batch_size: 32
 
   # Learning rate for AdamW. AdamW is less sensitive to this than SGD, but on
   # non-i.i.d. FL partitions a smaller lr (e.g. 1e-4) can reduce inter-worker drift.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 1e-4, 1e-3 (default), 5e-3
   learning_rate: 0.001
 
   # Optimizer. AdamW is used throughout; this field is informational only.

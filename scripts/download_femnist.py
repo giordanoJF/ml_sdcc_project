@@ -19,6 +19,8 @@ import subprocess
 import sys
 import time
 
+import yaml
+
 # Project root is the parent directory of this script's directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEAF_DIR = os.path.join(PROJECT_ROOT, "leaf")
@@ -41,9 +43,15 @@ def main():
     )
     args = parser.parse_args()
 
+    with open(os.path.join(PROJECT_ROOT, "config.yaml")) as f:
+        cfg = yaml.safe_load(f)
+    use_test_set = cfg["machine_learning"].get("use_test_set", False)
+    tf = 0.8 if use_test_set else 0.9
+
     t_start = time.time()
     print("=== FEMNIST download via LEAF ===")
     print(f"Sampling fraction: {args.sf * 100:.0f}%%")
+    print(f"Split mode:        {'80/10/10 train/val/test (use_test_set=true)' if use_test_set else '90/10 train/val (use_test_set=false)'}")
     print(f"Output directory:  {DEST_DIR}\n")
 
     os.chdir(PROJECT_ROOT)
@@ -101,7 +109,7 @@ def main():
             "--sf", str(args.sf), # fraction of data to keep
             "-k", "0",            # no minimum samples per user
             "-t", "sample",       # split by sample (not by writer)
-            "--tf", "0.9",        # 90% train / 10% test
+            "--tf", str(tf),      # 0.9 → 90/10 (val only), 0.8 → 80/20 (val+test)
         ],
         cwd=femnist_dir,
     )
