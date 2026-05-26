@@ -29,7 +29,7 @@ network:
   # SYSTEM PARAMETER — fixed per deployment. Vary only in scalability experiments
   # to study how accuracy and convergence change with network size.
   # Scalability experiment candidates: 3 (default), 5, 10
-  num_workers: 10
+  num_workers: 3
 
 federated_learning:
   # Maximum number of training rounds before the process terminates.

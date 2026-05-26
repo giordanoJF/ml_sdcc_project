@@ -21,3 +21,4 @@ leaf/
 /pdf/
 /docker-compose.yml
 /docker-compose.aws.yml
+/.venwsl/
