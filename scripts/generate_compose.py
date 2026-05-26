@@ -38,6 +38,7 @@ def write_local_compose(num_workers: int, registry_port: int) -> None:
         worker_blocks += [
             "",
             f"  worker_{i}:",
+            "    image: fl-worker",
             "    build:",
             "      context: .",
             "      dockerfile: Dockerfile.worker",
