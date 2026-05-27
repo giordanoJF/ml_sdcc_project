@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width initial-scale=1"><style type="text/css">html {overflow-x: initial !important;}</style>
+<style type="text/css" id="style-base">:root { --bg-color: #ffffff; --text-color: #333333; --select-text-bg-color: #B5D6FC; --select-text-font-color: auto; --monospace: "Lucida Console",Consolas,"Courier",monospace; --title-bar-height: 20px; }
+.mac-os-11 { --title-bar-height: 28px; }
+html { font-size: 14px; background-color: var(--bg-color); color: var(--text-color); font-family: "Helvetica Neue", Helvetica, Arial, "Segoe UI Emoji", "SF Pro", sans-serif; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4, h5 { white-space: pre-wrap; }
+body { margin: 0px; padding: 0px; height: auto; inset: 0px; font-size: 1rem; line-height: 1.428571; overflow-x: hidden; background: inherit; }
+iframe { margin: auto; }
+a.url { word-break: break-all; }
+a:active, a:hover { outline: 0px; }
+.in-text-selection, ::selection { text-shadow: none; background: var(--select-text-bg-color); color: var(--select-text-font-color); }
+#write { margin: 0px auto; height: auto; width: inherit; word-break: normal; overflow-wrap: break-word; position: relative; white-space: normal; overflow-x: visible; padding-top: 36px; }
+#write.first-line-indent p { text-indent: 2em; }
+#write.first-line-indent li p, #write.first-line-indent p *, #write.first-line-indent svg * { text-indent: 0px; }
+#write.first-line-indent li { margin-left: 2em; }
+.for-image #write { padding-left: 8px; padding-right: 8px; }
+body.typora-export { padding-left: 30px; padding-right: 30px; }
+.typora-export .footnote-line, .typora-export li, .typora-export p { white-space: pre-wrap; }
+.typora-export .task-list-item input { pointer-events: none; }
+@media screen and (max-width: 500px) {
+  body.typora-export { padding-left: 0px; padding-right: 0px; }
+  #write { padding-left: 20px; padding-right: 20px; }
+}
+#write li > figure:last-child { margin-bottom: 0.5rem; }
+#write ol, #write ul { position: relative; }
+img { max-width: 100%; vertical-align: middle; image-orientation: from-image; }
+button, input, select, textarea { color: inherit; font-style: inherit; font-variant-caps: inherit; font-weight: inherit; font-width: inherit; font-size: inherit; line-height: inherit; font-family: inherit; font-size-adjust: inherit; font-kerning: inherit; font-variant-alternates: inherit; font-variant-ligatures: inherit; font-variant-numeric: inherit; font-variant-east-asian: inherit; font-variant-position: inherit; font-variant-emoji: inherit; font-feature-settings: inherit; font-optical-sizing: inherit; font-variation-settings: inherit; }
+input[type="checkbox"], input[type="radio"] { line-height: normal; padding: 0px; }
+*, ::after, ::before { box-sizing: border-box; }
+#write h1, #write h2, #write h3, #write h4, #write h5, #write h6, #write p, #write pre { width: inherit; position: relative; }
+#write svg h1, #write svg h2, #write svg h3, #write svg h4, #write svg h5, #write svg h6, #write svg p { position: static; white-space: nowrap; overflow: visible; }
+foreignObject { overflow: visible; }
+p { line-height: inherit; }
+h1, h2, h3, h4, h5, h6 { break-after: avoid-page; break-inside: avoid; orphans: 4; }
+p { orphans: 4; }
+li p { orphans: 1; }
+h1 { font-size: 2rem; }
+h2 { font-size: 1.8rem; }
+h3 { font-size: 1.6rem; }
+h4 { font-size: 1.4rem; }
+h5 { font-size: 1.2rem; }
+h6 { font-size: 1rem; }
+.md-math-block, .md-rawblock, h1, h2, h3, h4, h5, h6, p { margin-top: 1rem; margin-bottom: 1rem; }
+.hidden { display: none; }
+.md-blockmeta { color: rgb(204, 204, 204); font-weight: 700; font-style: italic; }
+a { cursor: pointer; }
+sup.md-footnote { padding: 2px 4px; background-color: rgba(238, 238, 238, 0.7); color: rgb(85, 85, 85); border-radius: 4px; cursor: pointer; }
+sup.md-footnote a, sup.md-footnote a:hover { color: inherit; text-transform: inherit; text-decoration: inherit; }
+#write input[type="checkbox"] { cursor: pointer; width: inherit; height: inherit; }
+figure { overflow-x: auto; margin: 1.2em 0px; max-width: calc(100% + 16px); padding: 0px; }
+figure > table { margin: 0px; }
+thead, tr { break-inside: avoid; break-after: auto; }
+thead { display: table-header-group; }
+table { border-collapse: collapse; border-spacing: 0px; width: 100%; overflow: auto; break-inside: auto; text-align: left; }
+table.md-table td { min-width: 32px; }
+.CodeMirror-gutters { border-right-width: 0px; border-right-style: none; border-right-color: currentcolor; background-color: inherit; }
+.CodeMirror-linenumber { -webkit-user-select: none; }
+.CodeMirror { text-align: left; }
+.CodeMirror-placeholder { opacity: 0.3; }
+.CodeMirror pre { padding: 0px 4px; }
+.CodeMirror-lines { padding: 0px; }
+div.hr:focus { cursor: none; }
+#write pre { white-space: pre-wrap; }
+#write.fences-no-line-wrapping pre { white-space: pre; }
+#write pre.ty-contain-cm { white-space: normal; }
+.CodeMirror-gutters { margin-right: 4px; }
+.md-fences { font-size: 0.9rem; display: block; break-inside: avoid; text-align: left; overflow: visible; white-space: pre; background: inherit; position: relative !important; }
+.md-fences-adv-panel { width: 100%; margin-top: 10px; text-align: center; padding-top: 0px; padding-bottom: 8px; overflow-x: auto; }
+#write .md-fences.mock-cm { white-space: pre-wrap; }
+.md-fences.md-fences-with-lineno { padding-left: 0px; }
+#write.fences-no-line-wrapping .md-fences.mock-cm { white-space: pre; overflow-x: auto; }
+.md-fences.mock-cm.md-fences-with-lineno { padding-left: 8px; }
+.CodeMirror-line, twitterwidget { break-inside: avoid; }
+svg { break-inside: avoid; }
+.footnotes { opacity: 0.8; font-size: 0.9rem; margin-top: 1em; margin-bottom: 1em; }
+.footnotes + .footnotes { margin-top: 0px; }
+.md-reset { margin: 0px; padding: 0px; border: 0px; outline: 0px; vertical-align: top; background: 0px 0px; text-decoration: none; text-shadow: none; float: none; position: static; width: auto; height: auto; white-space: nowrap; cursor: inherit; line-height: normal; font-weight: 400; text-align: left; box-sizing: content-box; direction: ltr; }
+li div { padding-top: 0px; }
+blockquote { margin: 1rem 0px; }
+li .mathjax-block, li p { margin: 0.5rem 0px; }
+li blockquote { margin: 1rem 0px; }
+li { margin: 0px; position: relative; }
+blockquote > :last-child { margin-bottom: 0px; }
+blockquote > :first-child, li > :first-child { margin-top: 0px; }
+.footnotes-area { color: rgb(136, 136, 136); margin-top: 0.714rem; padding-bottom: 0.143rem; white-space: normal; }
+#write .footnote-line { white-space: pre-wrap; }
+@media print {
+  body, html { border: 1px solid transparent; height: 99%; break-after: avoid; break-before: avoid; font-variant-ligatures: no-common-ligatures; }
+  #write { margin-top: 0px; border-color: transparent !important; padding-top: 0px !important; padding-bottom: 0px !important; }
+  .typora-export * { print-color-adjust: exact; }
+  .typora-export #write { break-after: avoid; }
+  .typora-export #write::after { height: 0px; }
+  .is-mac table { break-inside: avoid; }
+  #write > p:nth-child(1) { margin-top: 0px; }
+  .typora-export-show-outline .typora-export-sidebar { display: none; }
+  figure { overflow-x: visible; }
+}
+.footnote-line { margin-top: 0.714em; font-size: 0.7em; }
+a img, img a { cursor: pointer; }
+pre.md-meta-block { font-size: 0.8rem; min-height: 0.8rem; white-space: pre-wrap; background: rgb(204, 204, 204); display: block; overflow-x: hidden; }
+p > .md-image:only-child:not(.md-img-error) img, p > img:only-child { display: block; margin: auto; }
+#write.first-line-indent p > .md-image:only-child:not(.md-img-error) img { left: -2em; position: relative; }
+p > .md-image:only-child { display: inline-block; width: 100%; }
+#write .MathJax_Display { margin: 0.8em 0px 0px; }
+.md-math-block { width: 100%; }
+.md-math-block:not(:empty)::after { display: none; }
+.MathJax_ref { fill: currentcolor; }
+[contenteditable="true"]:active, [contenteditable="true"]:focus, [contenteditable="false"]:active, [contenteditable="false"]:focus { outline: 0px; box-shadow: none; }
+.md-task-list-item { position: relative; list-style-type: none; }
+.task-list-item.md-task-list-item { padding-left: 0px; }
+.md-task-list-item > input { position: absolute; top: 0px; left: 0px; margin-left: -1.2em; margin-top: calc(1em - 10px); border: medium; }
+.math { font-size: 1rem; }
+.md-toc { min-height: 3.58rem; position: relative; font-size: 0.9rem; border-radius: 10px; }
+.md-toc-content { position: relative; margin-left: 0px; }
+.md-toc-content::after, .md-toc::after { display: none; }
+.md-toc-item { display: block; color: rgb(65, 131, 196); }
+.md-toc-item a { text-decoration: none; }
+.md-toc-inner:hover { text-decoration: underline; }
+.md-toc-inner { display: inline-block; cursor: pointer; }
+.md-toc-h1 .md-toc-inner { margin-left: 0px; font-weight: 700; }
+.md-toc-h2 .md-toc-inner { margin-left: 2em; }
+.md-toc-h3 .md-toc-inner { margin-left: 4em; }
+.md-toc-h4 .md-toc-inner { margin-left: 6em; }
+.md-toc-h5 .md-toc-inner { margin-left: 8em; }
+.md-toc-h6 .md-toc-inner { margin-left: 10em; }
+@media screen and (max-width: 48em) {
+  .md-toc-h3 .md-toc-inner { margin-left: 3.5em; }
+  .md-toc-h4 .md-toc-inner { margin-left: 5em; }
+  .md-toc-h5 .md-toc-inner { margin-left: 6.5em; }
+  .md-toc-h6 .md-toc-inner { margin-left: 8em; }
+}
+a.md-toc-inner { font-size: inherit; font-style: inherit; font-weight: inherit; line-height: inherit; }
+.footnote-line a:not(.reversefootnote) { color: inherit; }
+.reversefootnote { font-family: ui-monospace, sans-serif; }
+.md-attr { display: none; }
+.md-fn-count::after { content: "."; }
+code, pre, samp, tt { font-family: var(--monospace); }
+kbd { margin: 0px 0.1em; padding: 0.1em 0.6em; font-size: 0.8em; color: rgb(36, 39, 41); background: rgb(255, 255, 255); border: 1px solid rgb(173, 179, 185); border-radius: 3px; box-shadow: rgba(12, 13, 14, 0.2) 0px 1px 0px, rgb(255, 255, 255) 0px 0px 0px 2px inset; white-space: nowrap; vertical-align: middle; }
+.md-comment { color: rgb(162, 127, 3); opacity: 0.6; font-family: var(--monospace); }
+code { text-align: left; vertical-align: initial; }
+a.md-print-anchor { white-space: pre !important; border-width: medium !important; border-style: none !important; border-color: currentcolor !important; display: inline-block !important; position: absolute !important; width: 1px !important; right: 0px !important; outline: 0px !important; background: 0px 0px !important; text-decoration: initial !important; text-shadow: initial !important; }
+.os-windows.monocolor-emoji .md-emoji { font-family: "Segoe UI Symbol", sans-serif; }
+.md-diagram-panel > svg { max-width: 100%; }
+[lang="flow"] svg, [lang="mermaid"] svg { max-width: 100%; height: auto; }
+[lang="mermaid"] .node text { font-size: 1rem; }
+table tr th { border-bottom-width: 0px; border-bottom-style: none; border-bottom-color: currentcolor; }
+video { max-width: 100%; display: block; margin: 0px auto; }
+iframe { max-width: 100%; width: 100%; border: medium; }
+.highlight td, .highlight tr { border: 0px; }
+mark { background: rgb(255, 255, 0); color: rgb(0, 0, 0); }
+.md-html-inline .md-plain, .md-html-inline strong, mark .md-inline-math, mark strong { color: inherit; }
+.md-expand mark .md-meta { opacity: 0.3 !important; }
+mark .md-meta { color: rgb(0, 0, 0); }
+@media print {
+  .typora-export h1, .typora-export h2, .typora-export h3, .typora-export h4, .typora-export h5, .typora-export h6 { break-inside: avoid; }
+}
+.md-diagram-panel .messageText { stroke: none !important; }
+.md-diagram-panel .start-state { fill: var(--node-fill); }
+.md-diagram-panel .edgeLabel rect { opacity: 1 !important; }
+.md-fences.md-fences-math { font-size: 1em; }
+.md-fences-advanced:not(.md-focus) { padding: 0px; white-space: nowrap; border: 0px; }
+.md-fences-advanced:not(.md-focus) { background: inherit; }
+.mermaid-svg { margin: auto; }
+.typora-export-show-outline .typora-export-content { max-width: 1440px; margin: auto; display: flex; flex-direction: row; }
+.typora-export-sidebar { width: 300px; font-size: 0.8rem; margin-top: 80px; margin-right: 18px; }
+.typora-export-show-outline #write { --webkit-flex: 2; flex: 2 1 0%; }
+.typora-export-sidebar .outline-content { position: fixed; top: 0px; max-height: 100%; overflow: hidden auto; padding-bottom: 30px; padding-top: 60px; width: 300px; }
+@media screen and (max-width: 1024px) {
+  .typora-export-sidebar, .typora-export-sidebar .outline-content { width: 240px; }
+}
+@media screen and (max-width: 800px) {
+  .typora-export-sidebar { display: none; }
+}
+.outline-content li, .outline-content ul { margin-left: 0px; margin-right: 0px; padding-left: 0px; padding-right: 0px; list-style: none; overflow-wrap: anywhere; }
+.outline-content ul { margin-top: 0px; margin-bottom: 0px; }
+.outline-content strong { font-weight: 400; }
+.outline-expander { width: 1rem; height: 1.428571rem; position: relative; display: table-cell; vertical-align: middle; cursor: pointer; padding-left: 4px; }
+.outline-expander::before { content: ""; position: relative; font-family: Ionicons; display: inline-block; font-size: 8px; vertical-align: middle; }
+.outline-item { padding-top: 3px; padding-bottom: 3px; cursor: pointer; }
+.outline-expander:hover::before { content: ""; }
+.outline-h1 > .outline-item { padding-left: 0px; }
+.outline-h2 > .outline-item { padding-left: 1em; }
+.outline-h3 > .outline-item { padding-left: 2em; }
+.outline-h4 > .outline-item { padding-left: 3em; }
+.outline-h5 > .outline-item { padding-left: 4em; }
+.outline-h6 > .outline-item { padding-left: 5em; }
+.outline-label { cursor: pointer; display: table-cell; vertical-align: middle; text-decoration: none; color: inherit; }
+.outline-label:hover { text-decoration: underline; }
+.outline-item:hover { border-color: rgb(245, 245, 245); background-color: var(--item-hover-bg-color); }
+.outline-item:hover { margin-left: -28px; margin-right: -28px; border-left-width: 28px; border-left-style: solid; border-left-color: transparent; border-right-width: 28px; border-right-style: solid; border-right-color: transparent; }
+.outline-item-single .outline-expander::before, .outline-item-single .outline-expander:hover::before { display: none; }
+.outline-item-open > .outline-item > .outline-expander::before { content: ""; }
+.outline-children { display: none; }
+.info-panel-tab-wrapper { display: none; }
+.outline-item-open > .outline-children { display: block; }
+.typora-export .outline-item { padding-top: 1px; padding-bottom: 1px; }
+.typora-export .outline-item:hover { margin-right: -8px; border-right-width: 8px; border-right-style: solid; border-right-color: transparent; }
+.typora-export .outline-expander::before { content: "+"; font-family: inherit; top: -1px; }
+.typora-export .outline-expander:hover::before, .typora-export .outline-item-open > .outline-item > .outline-expander::before { content: "−"; }
+.typora-export-collapse-outline .outline-children { display: none; }
+.typora-export-collapse-outline .outline-item-open > .outline-children, .typora-export-no-collapse-outline .outline-children { display: block; }
+.typora-export-no-collapse-outline .outline-expander::before { content: "" !important; }
+.typora-export-show-outline .outline-item-active > .outline-item .outline-label { font-weight: 700; }
+.md-inline-math-container mjx-container { zoom: 0.95; }
+mjx-container { break-inside: avoid; }
+.md-alert.md-alert-note { border-left-color: rgb(9, 105, 218); }
+.md-alert.md-alert-important { border-left-color: rgb(130, 80, 223); }
+.md-alert.md-alert-warning { border-left-color: rgb(154, 103, 0); }
+.md-alert.md-alert-tip { border-left-color: rgb(31, 136, 61); }
+.md-alert.md-alert-caution { border-left-color: rgb(207, 34, 46); }
+.md-alert { padding: 0px 1em; margin-bottom: 16px; color: inherit; border-left-width: 0.25em; border-left-style: solid; border-left-color: rgb(0, 0, 0); }
+.md-alert-text-note { color: rgb(9, 105, 218); }
+.md-alert-text-important { color: rgb(130, 80, 223); }
+.md-alert-text-warning { color: rgb(154, 103, 0); }
+.md-alert-text-tip { color: rgb(31, 136, 61); }
+.md-alert-text-caution { color: rgb(207, 34, 46); }
+.md-alert-text { font-size: 0.9rem; font-weight: 700; }
+.md-alert-text svg { fill: currentcolor; position: relative; top: 0.125em; margin-right: 1ch; overflow: visible; }
+.md-alert-text-container::after { content: attr(data-text); text-transform: capitalize; pointer-events: none; margin-right: 1ch; }
+
+</style>
+<style type="text/css" id="style-codemirror">.CodeMirror { height: auto; }
+.CodeMirror.cm-s-inner { background: inherit; }
+.CodeMirror-scroll { overflow: auto hidden; z-index: 3; }
+.CodeMirror-gutter-filler, .CodeMirror-scrollbar-filler { background-color: rgb(255, 255, 255); }
+.CodeMirror-gutters { border-right-width: 1px; border-right-style: solid; border-right-color: rgb(221, 221, 221); background: inherit; white-space: nowrap; }
+.CodeMirror-linenumber { padding: 0px 3px 0px 5px; text-align: right; color: rgb(153, 153, 153); }
+.cm-s-inner .cm-keyword { color: rgb(119, 0, 136); }
+.cm-s-inner .cm-atom, .cm-s-inner.cm-atom { color: rgb(34, 17, 153); }
+.cm-s-inner .cm-number { color: rgb(17, 102, 68); }
+.cm-s-inner .cm-def { color: rgb(0, 0, 255); }
+.cm-s-inner .cm-variable { color: rgb(0, 0, 0); }
+.cm-s-inner .cm-variable-2 { color: rgb(0, 85, 170); }
+.cm-s-inner .cm-variable-3 { color: rgb(0, 136, 85); }
+.cm-s-inner .cm-string { color: rgb(170, 17, 17); }
+.cm-s-inner .cm-property { color: rgb(0, 0, 0); }
+.cm-s-inner .cm-operator { color: rgb(152, 26, 26); }
+.cm-s-inner .cm-comment, .cm-s-inner.cm-comment { color: rgb(170, 85, 0); }
+.cm-s-inner .cm-string-2 { color: rgb(255, 85, 0); }
+.cm-s-inner .cm-meta { color: rgb(85, 85, 85); }
+.cm-s-inner .cm-qualifier { color: rgb(85, 85, 85); }
+.cm-s-inner .cm-builtin { color: rgb(51, 0, 170); }
+.cm-s-inner .cm-bracket { color: rgb(153, 153, 119); }
+.cm-s-inner .cm-tag { color: rgb(17, 119, 0); }
+.cm-s-inner .cm-attribute { color: rgb(0, 0, 204); }
+.cm-s-inner .cm-header, .cm-s-inner.cm-header { color: rgb(0, 0, 255); }
+.cm-s-inner .cm-quote, .cm-s-inner.cm-quote { color: rgb(0, 153, 0); }
+.cm-s-inner .cm-hr, .cm-s-inner.cm-hr { color: rgb(153, 153, 153); }
+.cm-s-inner .cm-link, .cm-s-inner.cm-link { color: rgb(0, 0, 204); }
+.cm-negative { color: rgb(221, 68, 68); }
+.cm-positive { color: rgb(34, 153, 34); }
+.cm-header, .cm-strong { font-weight: 700; }
+.cm-del { text-decoration: line-through; }
+.cm-em { font-style: italic; }
+.cm-link { text-decoration: underline; }
+.cm-error { color: red; }
+.cm-invalidchar { color: red; }
+.cm-constant { color: rgb(38, 139, 210); }
+.cm-defined { color: rgb(181, 137, 0); }
+div.CodeMirror span.CodeMirror-matchingbracket { color: rgb(0, 255, 0); }
+div.CodeMirror span.CodeMirror-nonmatchingbracket { color: rgb(255, 34, 34); }
+.cm-s-inner .CodeMirror-activeline-background { background: inherit; }
+.CodeMirror { position: relative; overflow: hidden; }
+.CodeMirror-scroll { height: 100%; outline: 0px; position: relative; box-sizing: content-box; background: inherit; }
+.CodeMirror-sizer { position: relative; }
+.CodeMirror-gutter-filler, .CodeMirror-hscrollbar, .CodeMirror-scrollbar-filler, .CodeMirror-vscrollbar { position: absolute; z-index: 6; display: none; outline: 0px; }
+.CodeMirror-vscrollbar { right: 0px; top: 0px; overflow: hidden; }
+.CodeMirror-hscrollbar { bottom: 0px; left: 0px; overflow: auto hidden; }
+.CodeMirror-scrollbar-filler { right: 0px; bottom: 0px; }
+.CodeMirror-gutter-filler { left: 0px; bottom: 0px; }
+.CodeMirror-gutters { position: absolute; left: 0px; top: 0px; padding-bottom: 10px; z-index: 3; overflow-y: hidden; }
+.CodeMirror-gutter { white-space: normal; height: 100%; box-sizing: content-box; padding-bottom: 30px; margin-bottom: -32px; display: inline-block; }
+.CodeMirror-gutter-wrapper { position: absolute; z-index: 4; background: 0px 0px !important; border: medium !important; }
+.CodeMirror-gutter-background { position: absolute; top: 0px; bottom: 0px; z-index: 4; }
+.CodeMirror-gutter-elt { position: absolute; cursor: default; z-index: 4; }
+.CodeMirror-lines { cursor: text; }
+.CodeMirror pre { border-radius: 0px; border-width: 0px; background: 0px 0px; font-family: inherit; font-size: inherit; margin: 0px; white-space: pre; overflow-wrap: normal; color: inherit; z-index: 2; position: relative; overflow: visible; }
+.CodeMirror-wrap pre { overflow-wrap: break-word; white-space: pre-wrap; word-break: normal; }
+.CodeMirror-code pre { border-right-width: 30px; border-right-style: solid; border-right-color: transparent; width: fit-content; }
+.CodeMirror-wrap .CodeMirror-code pre { border-right-width: medium; border-right-style: none; border-right-color: currentcolor; width: auto; }
+.CodeMirror-linebackground { position: absolute; inset: 0px; z-index: 0; }
+.CodeMirror-linewidget { position: relative; z-index: 2; overflow: auto; }
+.CodeMirror-wrap .CodeMirror-scroll { overflow-x: hidden; }
+.CodeMirror-measure { position: absolute; width: 100%; height: 0px; overflow: hidden; visibility: hidden; }
+.CodeMirror-measure pre { position: static; }
+.CodeMirror div.CodeMirror-cursor { position: absolute; visibility: hidden; border-right-width: medium; border-right-style: none; border-right-color: currentcolor; width: 0px; }
+.CodeMirror div.CodeMirror-cursor { visibility: hidden; }
+.CodeMirror-focused div.CodeMirror-cursor { visibility: inherit; }
+.cm-searching { background: rgba(255, 255, 0, 0.4); }
+span.cm-underlined { text-decoration: underline; }
+span.cm-strikethrough { text-decoration: line-through; }
+.cm-tw-syntaxerror { color: rgb(255, 255, 255); background-color: rgb(153, 0, 0); }
+.cm-tw-deleted { text-decoration: line-through; }
+.cm-tw-header5 { font-weight: 700; }
+.cm-tw-listitem:first-child { padding-left: 10px; }
+.cm-tw-box { border-style: solid; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px; border-color: inherit; border-top-width: 0px !important; }
+.cm-tw-underline { text-decoration: underline; }
+@media print {
+  .CodeMirror div.CodeMirror-cursor { visibility: hidden; }
+}
+
+</style>
+<link rel="stylesheet" href="learnerlab_files/css.css" type="text/css">
+<style type="text/css" id="style-theme_css">:root {
+    --side-bar-bg-color: #fafafa;
+    --control-text-color: #777;
+}
+
+@include-when-export url(https://fonts.googleapis.com/css?family=Open+Sans:400italic,700italic,700,400&subset=latin,latin-ext);
+
+/* open-sans-regular - latin-ext_latin */
+  /* open-sans-italic - latin-ext_latin */
+    /* open-sans-700 - latin-ext_latin */
+    /* open-sans-700italic - latin-ext_latin */
+  html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    font-family: "Open Sans","Clear Sans", "Helvetica Neue", Helvetica, Arial, 'Segoe UI Emoji', 'SF Pro', sans-serif;
+    color: rgb(51, 51, 51);
+    line-height: 1.6;
+}
+
+#write {
+    max-width: 860px;
+  	margin: 0 auto;
+  	padding: 30px;
+    padding-bottom: 100px;
+}
+
+@media only screen and (min-width: 1400px) {
+	#write {
+		max-width: 1024px;
+	}
+}
+
+@media only screen and (min-width: 1800px) {
+	#write {
+		max-width: 1200px;
+	}
+}
+
+#write > ul:first-child,
+#write > ol:first-child{
+    margin-top: 30px;
+}
+
+a {
+    color: #4183C4;
+}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    position: relative;
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+    font-weight: bold;
+    line-height: 1.4;
+    cursor: text;
+}
+h1:hover a.anchor,
+h2:hover a.anchor,
+h3:hover a.anchor,
+h4:hover a.anchor,
+h5:hover a.anchor,
+h6:hover a.anchor {
+    text-decoration: none;
+}
+h1 tt,
+h1 code {
+    font-size: inherit;
+}
+h2 tt,
+h2 code {
+    font-size: inherit;
+}
+h3 tt,
+h3 code {
+    font-size: inherit;
+}
+h4 tt,
+h4 code {
+    font-size: inherit;
+}
+h5 tt,
+h5 code {
+    font-size: inherit;
+}
+h6 tt,
+h6 code {
+    font-size: inherit;
+}
+h1 {
+    font-size: 2.25em;
+    line-height: 1.2;
+    border-bottom: 1px solid #eee;
+}
+h2 {
+    font-size: 1.75em;
+    line-height: 1.225;
+    border-bottom: 1px solid #eee;
+}
+
+/*@media print {
+    .typora-export h1,
+    .typora-export h2 {
+        border-bottom: none;
+        padding-bottom: initial;
+    }
+
+    .typora-export h1::after,
+    .typora-export h2::after {
+        content: "";
+        display: block;
+        height: 100px;
+        margin-top: -96px;
+        border-top: 1px solid #eee;
+    }
+}*/
+
+h3 {
+    font-size: 1.5em;
+    line-height: 1.43;
+}
+h4 {
+    font-size: 1.25em;
+}
+h5 {
+    font-size: 1em;
+}
+h6 {
+   font-size: 1em;
+    color: #777;
+}
+p,
+blockquote,
+ul,
+ol,
+dl,
+table{
+    margin: 0.8em 0;
+}
+li>ol,
+li>ul {
+    margin: 0 0;
+}
+hr {
+    height: 2px;
+    padding: 0;
+    margin: 16px 0;
+    background-color: #e7e7e7;
+    border: 0 none;
+    overflow: hidden;
+    box-sizing: content-box;
+}
+
+li p.first {
+    display: inline-block;
+}
+ul,
+ol {
+    padding-left: 30px;
+}
+ul:first-child,
+ol:first-child {
+    margin-top: 0;
+}
+ul:last-child,
+ol:last-child {
+    margin-bottom: 0;
+}
+blockquote {
+    border-left: 4px solid #dfe2e5;
+    padding: 0 15px;
+    color: #777777;
+}
+blockquote blockquote {
+    padding-right: 0;
+}
+table {
+    padding: 0;
+    word-break: initial;
+}
+table tr {
+    border: 1px solid #dfe2e5;
+    margin: 0;
+    padding: 0;
+}
+table tr:nth-child(2n),
+thead {
+    background-color: #f8f8f8;
+}
+table th {
+    font-weight: bold;
+    border: 1px solid #dfe2e5;
+    border-bottom: 0;
+    margin: 0;
+    padding: 6px 13px;
+}
+table td {
+    border: 1px solid #dfe2e5;
+    margin: 0;
+    padding: 6px 13px;
+}
+table th:first-child,
+table td:first-child {
+    margin-top: 0;
+}
+table th:last-child,
+table td:last-child {
+    margin-bottom: 0;
+}
+
+.CodeMirror-lines {
+    padding-left: 4px;
+}
+
+.code-tooltip {
+    box-shadow: 0 1px 1px 0 rgba(0,28,36,.3);
+    border-top: 1px solid #eef2f2;
+}
+
+.md-fences,
+code,
+tt {
+    border: 1px solid #e7eaed;
+    background-color: #f8f8f8;
+    border-radius: 3px;
+    padding: 0;
+    padding: 2px 4px 0px 4px;
+    font-size: 0.9em;
+}
+
+code {
+    background-color: #f3f4f4;
+    padding: 0 2px 0 2px;
+}
+
+.md-fences {
+    margin-bottom: 15px;
+    margin-top: 15px;
+    padding-top: 8px;
+    padding-bottom: 6px;
+}
+
+
+.md-task-list-item > input {
+  margin-left: -1.3em;
+}
+
+@media print {
+    html {
+        font-size: 13px;
+    }
+    pre {
+        page-break-inside: avoid;
+        word-wrap: break-word;
+    }
+}
+
+.md-fences {
+	background-color: #f8f8f8;
+}
+#write pre.md-meta-block {
+	padding: 1rem;
+    font-size: 85%;
+    line-height: 1.45;
+    background-color: #f7f7f7;
+    border: 0;
+    border-radius: 3px;
+    color: #777777;
+    margin-top: 0 !important;
+}
+
+.mathjax-block>.code-tooltip {
+	bottom: .375rem;
+}
+
+.md-mathjax-midline {
+    background: #fafafa;
+}
+
+#write>h3.md-focus:before{
+	left: -1.5625rem;
+	top: .375rem;
+}
+#write>h4.md-focus:before{
+	left: -1.5625rem;
+	top: .285714286rem;
+}
+#write>h5.md-focus:before{
+	left: -1.5625rem;
+	top: .285714286rem;
+}
+#write>h6.md-focus:before{
+	left: -1.5625rem;
+	top: .285714286rem;
+}
+.md-image>.md-meta {
+    /*border: 1px solid #ddd;*/
+    border-radius: 3px;
+    padding: 2px 0px 0px 4px;
+    font-size: 0.9em;
+    color: inherit;
+}
+
+.md-tag {
+    color: #a7a7a7;
+    opacity: 1;
+}
+
+.md-toc { 
+    margin-top:20px;
+    padding-bottom:20px;
+}
+
+.sidebar-tabs {
+    border-bottom: none;
+}
+
+#typora-quick-open {
+    border: 1px solid #ddd;
+    background-color: #f8f8f8;
+}
+
+#typora-quick-open-item {
+    background-color: #FAFAFA;
+    border-color: #FEFEFE #e5e5e5 #e5e5e5 #eee;
+    border-style: solid;
+    border-width: 1px;
+}
+
+/** focus mode */
+.on-focus-mode blockquote {
+    border-left-color: rgba(85, 85, 85, 0.12);
+}
+
+header, .context-menu, .megamenu-content, footer{
+    font-family: "Segoe UI", "Arial", sans-serif;
+}
+
+.file-node-content:hover .file-node-icon,
+.file-node-content:hover .file-node-open-state{
+    visibility: visible;
+}
+
+.mac-seamless-mode #typora-sidebar {
+    background-color: #fafafa;
+    background-color: var(--side-bar-bg-color);
+}
+
+.mac-os #write{
+    caret-color: AccentColor;
+}
+
+.md-lang {
+    color: #b4654d;
+}
+
+/*.html-for-mac {
+    --item-hover-bg-color: #E6F0FE;
+}*/
+
+#md-notification .btn {
+    border: 0;
+}
+
+.dropdown-menu .divider {
+    border-color: #e5e5e5;
+    opacity: 0.4;
+}
+
+.ty-preferences .window-content {
+    background-color: #fafafa;
+}
+
+.ty-preferences .nav-group-item.active {
+    color: white;
+    background: #999;
+}
+
+.menu-item-container a.menu-style-btn {
+    background-color: #f5f8fa;
+    background-image: linear-gradient( 180deg , hsla(0, 0%, 100%, 0.8), hsla(0, 0%, 100%, 0)); 
+}
+</style>
+<style type="text/css" id="style-lp">ol, ul {padding-left: 40px}</style>
+<style type="text/css" id="style-mac-print"> @media print { @page {margin: 0 0 0 0;} body.typora-export {padding-left: 0; padding-right: 0;} #write {padding:0;}}</style>
+
+<title>readme</title>
+<!-- START Inserted by CORE -->
+<style type="text/css">
+   #ssb_alexa_blue {
+   background-color: #3366ff;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #3366ff;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_alexa_ocean {
+   background-color: #00a0d2;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #00a0d2;
+   white-space: nowrap
+   }
+   #ssb_alexa_sand {
+   background-color: #f2f2f2;
+   font-weight: bold;
+   font-size: 90%;
+   color: #00a0d2;
+   position: relative;
+   top: -1px;
+   border-color: #dcdcdc;
+   border-style: solid;
+   border-width: 2px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_alexa_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #00a0d2;
+   position: relative;
+   top: -1px;
+   border-color: #00a0d2;
+   border-style: solid;
+   border-width: 2px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_blue {
+   background-color: #257ACF;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   border-radius: 5px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_catalog_orange {
+   background-color: #E36000;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   border-radius: 1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_catalog_red {
+   background-color: #D90000;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   border-radius: 5px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_dark_blue {
+   color: white;
+   background-color: darkblue;
+   border-radius: 3px;
+   padding: 0px 6px;
+   white-space: nowrap
+   }
+   #ssb_grafana_blue {
+   background-color: #00678b;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #00678b;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_grafana_green {
+   background-color: #629300;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #629300;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_grafana_orange {
+   background-color: #ec8427;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #ec8427;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_grey {
+   background-color: #DEDEDE;
+   font-weight: bold;
+   font-size: 90%;
+   color: #444;
+   position: relative;
+   top: -1px;
+   border-radius: 5px;
+   border-width: 1px;
+   border-style: solid;
+   border-color: #444;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_grey_square {
+   background-color: #DEDEDE;
+   font-weight: bold;
+   font-size: 90%;
+   color: #444;
+   position: relative;
+   top: -1px;
+   border-radius: 1px;
+   border-width: 1px;
+   border-style: solid;
+   border-color: #444;
+   padding-top: 2px;
+   padding-bottom: 2px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_iot_blue {
+   background-color: #00A1C9;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #00A1C9;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_iot_grey {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: gray;
+   position: relative;
+   top: -1px;
+   border-color: gray;
+   border-radius: 2px;
+   border-style: solid;
+   border-width: 1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_iot_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #00A1C9;
+   position: relative;
+   top: -1px;
+   border-color: #00A1C9;
+   border-radius: 2px;
+   border-style: solid;
+   border-width: 1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_kibana_blue {
+   background-color: #0079a5;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #0079a5;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_kibana_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #0079a5;
+   position: relative;
+   top: -1px;
+   border-color: #0079a5;
+   border-radius: 2px;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_lambda_orange {
+   background-color: #ec7211;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_lambda_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #545b64;
+   position: relative;
+   top: -1px;
+   border-color: #545b64;
+   border-radius: 2px;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_maroon {
+   color: white;
+   background-color: darkred;
+   border-radius: 3px;
+   padding: 0px 6px;
+   white-space: nowrap
+   }
+   #ssb_orange {
+   background-color: #ec7211;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssl_orange {
+   color: #ec7211;
+   font-weight: bold
+   }
+   #ssb_orange_oval {
+   background-color: #ec7211;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-radius: 20px;
+   white-space: nowrap
+   }
+   #ssb_oval {
+   background-color: #DEDEDE;
+   font-weight: bold;
+   font-size: 90%;
+   color: #444;
+   position: relative;
+   top: -1px;
+   border-radius: 20px;
+   border-width: 1px;
+   border-style: solid;
+   border-color: #444;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_start_lab {
+   background-color: #34A853;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   border-radius: 2px;
+   padding-left: 10px;
+   padding-right: 10px;
+   padding-top: 3px;
+   padding-bottom: 3px
+   }
+   #ssb_open_console {
+   background-color: white;
+   font-family: Google Sans;
+   font-weight: bold;
+   font-size: 90%;
+   color: #1a73e8;
+   border-color: #dadce0;
+   border-radius: 4px;
+   border-width: 2px;
+   border-style: solid;
+   outline-color: #ffffff;
+   padding-top: 5px;
+   padding-bottom: 5px;
+   padding-left: 10px;
+   padding-right: 10px
+   }
+   #ssb_rds_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #545b64;
+   position: relative;
+   top: -1px;
+   border-color: #545b64;
+   border-radius: 2px;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_red {
+   background-color: #D93025;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   border-radius: 2px;
+   padding-left: 10px;
+   padding-right: 10px;
+   padding-top: 3px;
+   padding-bottom: 3px
+   }
+   #ssb_red_oval {
+   background-color: #D93025;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-radius: 20px;
+   white-space: nowrap
+   }
+   #ssb_s3_blue {
+   background-color: #329AD6;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_s3_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #329AD6;
+   position: relative;
+   top: -1px;
+   border-color: #329AD6;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_services {
+   background-color: #232f3e;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_square_lex {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #1166bb;
+   position: relative;
+   top: -1px;
+   border-color: #c4cbcd;
+   border-style: solid;
+   border-width: 2px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px
+   }
+   #ssb_ssm_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #545b64;
+   position: relative;
+   top: -1px;
+   border-color: #545b64;
+   border-radius: 2px;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssb_white {
+   background-color: white;
+   font-weight: bold;
+   font-size: 90%;
+   color: #545b64;
+   position: relative;
+   top: -1px;
+   border-color: #545b64;
+   border-radius: 2px;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssbox_cloudformation_blue {
+   font-weight: bold;
+   background-color: #f1faff;
+   font-size: 90%;
+   border-color: #00A1C9;
+   border-width: 1px;
+   border-style: solid;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   }
+   #ssl_alexa_ocean {
+   color: #00a0d2;
+   font-weight: bold
+   }
+   #ssl_blue {
+   color: #1166bb;
+   font-weight: bold
+   }
+   #ssl_catalog_orange {
+   color: #E16706;
+   font-weight: bold
+   }
+   #ssb_codestar_blue {
+   background-color: #329AD6;
+   font-weight: bold;
+   font-size: 80%;
+   color: white;
+   position: relative;
+   top: -1px;
+   border-radius: 1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   white-space: nowrap
+   }
+   #ssb_cognito_blue {
+   background-color: #2a7fd4;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #0055aa;
+   border-radius: 2px;
+   white-space: nowrap
+   }
+   #ssb_eb_blue {
+   background-color: #0f6dca;
+   font-weight: bold;
+   font-size: 90%;
+   color: white;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #0055aa;
+   border-width: 1px;
+   border-style: solid;
+   border-radius: 4px;
+   white-space: nowrap;
+   }
+   #ssb_eb_grey {
+   background-color: #e5e5e5;
+   font-weight: bold;
+   font-size: 90%;
+   color: 444444;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: #bbbbbb;
+   border-width: 1px;
+   border-style: solid;
+   border-radius: 4px;
+   white-space: nowrap
+   }
+   #ssb_voc_grey {
+   background-color: #F2F3F4;
+   font-size: 90%;
+   color: black;
+   position: relative;
+   top: -1px;
+   padding-top: 3px;
+   padding-bottom: 3px;
+   padding-left: 10px;
+   padding-right: 10px;
+   border-color: grey;
+   border-width: 1px;
+   border-style: solid;
+   white-space: nowrap
+   }
+   </style>
+<!-- END Inserted by CORE -->
+
+<!-- START Inserted by CORE -->
+<link rel="stylesheet" href="learnerlab_files/all_002.css" integrity="sha384-B4dIYHKNBt8Bc12p+WXckhzcICo0wtJAoU8YZTY5qE0Id1GSseTk6S+L3BlXeVIU" crossorigin="anonymous">
+<style>
+	.ssb_qwiklab_green{
+		background-color: yellowgreen;
+		font-weight: bold;
+		font-size: 90%;
+		color: white;
+		border-radius: 5px;
+		padding-top: 3px;
+		padding-bottom: 3px;
+		padding-left: 10px;
+		padding-right: 10px;
+		white-space: nowrap;
+	}
+	.ssb_blue {
+		background-color: #257ACF;
+		font-weight: bold;
+		font-size: 90%;
+		color: white;
+		border-radius: 5px;
+		padding-top: 3px;
+		padding-bottom: 3px;
+		padding-left: 10px;
+		padding-right: 10px;
+		white-space: nowrap;
+	}
+	.ssb_voc_grey {
+		background-color: #F2F3F4;
+		font-weight: normal;
+		font-size: 90%;
+		color: black;
+		border-radius: 3px;
+		border: 1px solid gray;
+		padding-top: 5px;
+		padding-bottom: 5px;
+		padding-left: 6px;
+		padding-right: 6px;
+		white-space: nowrap;
+	}
+	.ssb_grey {
+		background-color: #DEDEDE;
+		font-weight: bold;
+		font-size: 90%;
+		color: #444;
+		position: relative;
+		top:-1px;
+		border-radius: 5px;
+		border-width: 1px;
+		border-style: solid;
+		border-color: #444;
+		padding-top: 3px;
+		padding-bottom: 3px;
+		padding-left: 10px;
+		padding-right: 10px;
+		white-space: nowrap;
+	}
+	.ssl_alexa_ocean {
+		color: #00a0d2;
+		font-weight: bold;
+	}
+
+ 	.ssb_services {
+		background-color:#232f3e;
+		font-weight:bold;
+		font-size:90%;
+		color:white;
+		padding-top:3px;
+		padding-bottom:3px;
+		padding-left:10px;
+		padding-right:10px;
+	}
+
+	.ssb_orange {
+		background-color:#ec7211;
+		font-weight:bold;
+		font-size:90%;
+		color:white;
+		padding-top:3px;
+		padding-bottom:3px;
+		padding-left:10px;
+		padding-right:10px;
+		white-space:
+		nowrap;
+	}
+	.ssbox_cloudformation_blue {
+		font-weight:bold;
+		background-color:#f1faff;
+		font-size:90%;
+		border-color:#00A1C9;
+		border-width:1px;
+		border-style:solid;
+		padding-top:3px;
+		padding-bottom:3px;
+		padding-left:10px;
+		padding-right:10px;
+	}
+	.ssb_ssm_white {
+		background-color:white;
+		font-weight:bold;
+		font-size:90%;
+		color:#545b64;
+		border-color:#545b64;
+		border-radius:2px;
+		border-width:1px;
+		border-style:solid;
+		padding-top:3px;
+		padding-bottom:3px;
+		padding-left:10px;
+		padding-right:10px;
+	}
+</style>
+
+<!-- END Inserted by CORE -->
+
+</head>
+<body class="typora-export"><div class="typora-export-content">
+<div id="write" class=""><link rel="stylesheet" href="learnerlab_files/all.css"><h1 id="learner-lab"><span>Learner Lab</span></h1><p><a href="#envOverview" target="_blank" rel="noopener noreferrer"><span>Environment Overview</span></a>
+<a href="#envNav" target="_blank" rel="noopener noreferrer"><span>Environment Navigation </span></a>
+<a href="#mgmtConsole" target="_blank" rel="noopener noreferrer"><span>Access the AWS Management Console </span></a>
+<a href="#regionRest" target="_blank" rel="noopener noreferrer"><span>Region restriction </span></a>
+<a href="#services" target="_blank" rel="noopener noreferrer"><span>Service usage and other restrictions </span></a>
+<a href="#terminal" target="_blank" rel="noopener noreferrer"><span>Using the terminal in the browser </span></a>
+<a href="#clicommands" target="_blank" rel="noopener noreferrer"><span>Running AWS CLI commands </span></a>
+<a href="#sdk" target="_blank" rel="noopener noreferrer"><span>Using the AWS SDK for Python </span></a>
+<a href="#budget" target="_blank" rel="noopener noreferrer"><span>Preserving your budget&nbsp;</span></a>
+<a href="#ec2" target="_blank" rel="noopener noreferrer"><span>Accessing EC2 Instances&nbsp;</span></a>
+<a href="#ssh" target="_blank" rel="noopener noreferrer"><span>SSH Access to EC2 Instances </span></a>
+<a href="#sshwindows" target="_blank" rel="noopener noreferrer"><span>SSH Access from Windows</span></a>
+<a href="#sshmac" target="_blank" rel="noopener noreferrer"><span>SSH Access from a Mac</span></a></p><p><em><span>Instructions last updated: 2025-06-24</span></em></p><h3 id="&lt;a-idenvoverview&gt;&lt;a&gt;environment-overview"><a id="envOverview"></a><span>Environment Overview</span></h3><p><span>This Learner Lab provides a sandbox environment for ad-hoc exploration of AWS services.</span></p><p><strong><span>This environment is long-lived</span></strong><span>. When the session timer runs to 0:00, the session will end, but any data and resources that you created in the AWS account will be retained. If you later launch a new session (for example, the next day), you will find that your work is still in the lab environment. </span></p><p><span>Running EC2 instances will be stopped and then automatically restarted the next time you start a session. SageMaker notebook instances will be stopped, but not restarted the next time you start a session. SageMaker canvas apps will remain running unless you delete them.</span></p><p><a id="monitor"></a><i class="fas fa-exclamation-triangle" style="color:red"></i><span> </span><strong><span>IMPORTANT</span></strong><span>: Monitor your lab budget in the lab interface above. Whenever you have an active lab session, the latest known remaining budget information will display at the top of this screen. This data comes from AWS Budgets which typically updates every 8 to 12 hours. Therefore </span><em><span>the remaining budget that you see may not reflect your most recent account activity</span></em><span>.  </span><strong><u><span>If you exceed your lab budget your lab account will be disabled and all progress and resources will be lost</span></u></strong><span>. Therefore, it is important for you to manage your spending. Read about </span><a href="#budget" target="_blank" rel="noopener noreferrer"><span>how to preserve your budget</span></a><span>.</span></p><p>&nbsp;</p><h3 id="&lt;a-idenvnav&gt;&lt;a&gt;environment-navigation"><a id="envNav"></a><span>Environment Navigation</span></h3><p><span>Use the </span><i class="fas fa-info"></i><span> </span><strong><span>Readme</span></strong><span> link above to return to these instructions at any time.</span></p><p><span>Use the </span><i class="fas fa-info"></i><span> </span><strong><span>AWS Details</span></strong><span> link above to access information about your environment.</span></p><p><i class="fas fa-check-circle"></i><span> </span><strong><span>Tip:</span></strong><span> you can resize this panel at anytime by dragging the bar to the left of these instructions to make it wider or narrower.</span></p><p><span>Use the </span><i class="fas fa-undo"></i><span> </span><strong><span>Reset</span></strong><span> link above if you ever want to reset your AWS account back to the way it was in the beginning, before you ever ran sessions of this lab environment.  Note that it will not reset your budget. </span><i class="fas fa-exclamation-triangle" style="color:red"></i><span> </span><em><strong><span>CAUTION</span></strong></em><span>: if you choose reset and then choose Yes to confirm that you do want to reset, you will </span><em><span>permanently delete</span></em><span> everything that you have created or stored in the AWS account.</span></p><p>&nbsp;</p><h3 id="&lt;a-idmgmtconsole&gt;&lt;a&gt;access-the-aws-management-console"><a id="mgmtConsole"></a><span>Access the AWS Management Console</span></h3><ol start=""><li><p><span>At the top of these instructions, choose </span><br><span> </span><i class="fas fa-caret-right"></i><span> </span><strong><span>Start Lab</span></strong><span> to start the lab session.</span></p><ul><li><p><span>The lab session is started and session information is displayed.</span></p></li><li><p><span>A timer above shows the time remaining in the session.</span></p><p><i class="fas fa-check-circle"></i><span> </span><strong><span>Tip:</span></strong><span> You can refresh the session length at any time by choosing Start Lab again before the timer reaches 0:00.</span></p></li></ul></li><li><p><span>Choose the </span><i class="fas fa-info"></i><span> Readme link to return to these instructions.</span></p></li><li><p><span>Connect to the AWS Management Console by choosing the </span><strong><span>AWS</span></strong><span> link above the terminal window.</span></p><ul><li><p><span>You should be connected to the AWS Management Console.</span></p><p><strong><span>Tip</span></strong><span>: If a new browser tab does not open, a banner or icon is usually at the top of your browser with the message that your browser is preventing the site from opening pop-up windows. Choose the banner or icon, and then choose </span><strong><span>Allow pop-ups</span></strong><span>.</span></p><p><i class="fas fa-info-circle"></i><span> </span><strong><span>Tip</span></strong><span>: if you are interested in interacting with the AWS account programmatically, read the </span><a href="#terminal" target="_blank" rel="noopener noreferrer"><span>Using the terminal in the browser </span></a><span> section below for details.</span></p><p>&nbsp;</p></li></ul></li></ol><h2 id="&lt;a-idregionrest&gt;&lt;a&gt;region-restriction"><a id="regionRest"></a><span>Region restriction</span></h2><p><span>All service access is limited to the </span><strong><span>us-east-1</span></strong><span> and </span><strong><span>us-west-2</span></strong><span> Regions unless mentioned otherwise in the service details below. If you load a service console page in another AWS Region you will see access error messages.</span></p><p>&nbsp;</p><h2 id="&lt;a-idservices&gt;&lt;a&gt;service-usage-and-other-restrictions"><a id="services"></a><span>Service usage and other restrictions</span></h2><p><span>The following services can be used. Specific limitations apply as documented.  Any attempt to exceed a service limit, may result in immediate deactivation of the AWS account and all resources in the account may be immediately deleted.  Services restrictions are subject to change.</span></p><h5 id="amazon-api-gateway"><span>Amazon API Gateway</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-app-mesh"><span>AWS App Mesh</span></h5><h5 id="application-auto-scaling"><span>Application Auto Scaling</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-athena"><span>Amazon Athena</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-aurora"><span>Amazon Aurora</span></h5><h5 id="aws-backup"><span>AWS Backup</span></h5><h5 id="aws-batch"><span>AWS Batch</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-certificate-manager-acm"><span>AWS Certificate Manager (ACM)</span></h5><h5 id="aws-cloud9"><span>AWS Cloud9</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported Instance types: nano, micro, small, medium, large, and c4.xlarge. </span><strong><span>Note</span></strong><span>: Not all instance types are supported in all AZs.</span></p></li><li><p><strong><span>Tip</span></strong><span>: When creating a new Cloud9 instance with the </span><em><span>New EC2 instance</span></em><span> environment type, in </span><em><span>Network settings</span></em><span> choose </span><strong><span>Secure Shell (SSH)</span></strong><span>.</span></p></li></ul><h5 id="aws-cloudformation"><span>AWS CloudFormation</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-cloudshell"><span>AWS CloudShell</span></h5><ul><li><p><span>You can use Amazon Q suggestions in CloudShell if you switch from the default Bash to Z shell by running the </span><code>zsh</code><span> command. Once in the Z shell prompt, start typing a command to get suggestions. For example, type </span><code>aws</code><span> and then wait. It may offer a suggestion such as </span><code>aws s3 cp s3://...</code><span>. You can accept code completions by using the right arrow key on your keyboard. You can see alternate suggestions — if there are any available — before accepting a suggestion, by using the Tab key. </span></p></li></ul><h5 id="aws-cloudtrail"><span>AWS CloudTrail</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>You can create a CloudTrail, but you cannot enable CloudWatch logging for the trail.</span></p></li></ul><h5 id="amazon-cloudwatch"><span>Amazon CloudWatch</span></h5><h5 id="aws-codecommit"><span>AWS CodeCommit</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-codedeploy"><span>AWS CodeDeploy</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-config"><span>AWS Config</span></h5><h5 id="aws-cost-and-usage-report"><span>AWS Cost and Usage Report</span></h5><h5 id="aws-cost-explorer"><span>AWS Cost Explorer</span></h5><h5 id="aws-deepcomposer"><span>AWS DeepComposer</span></h5><h5 id="aws-deeplens"><span>AWS DeepLens</span></h5><h5 id="aws-deepracer"><span>AWS DeepRacer</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-directory-service"><span>AWS Directory Service</span></h5><h5 id="amazon-dynamodb"><span>Amazon DynamoDB</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-ec2-auto-scaling"><span>Amazon EC2 Auto Scaling</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported Instance types: nano, micro, small, medium, and large.</span></p></li><li><p><span>Read the </span><em><span>Concurrently running instances limits</span></em><span> details documented in the EC2 service details below to be aware of further restrictions.</span></p></li><li><p><em><span>Recommendation</span></em><span>: size to your actual need to avoid using up your cost budget.</span></p></li></ul><h5 id="aws-elastic-beanstalk"><span>AWS Elastic Beanstalk</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><em><span>To create an application</span></em><span>: choose </span><strong><span>Create Application</span></strong><span>, give it an application name,  choose a platform, then choose </span><strong><span>Configure more options</span></strong><span>. Scroll down to the Security panel and choose </span><strong><span>Edit</span></strong><span>. For </span><em><span>Service role</span></em><span>, choose </span><strong><span>LabRole</span></strong><span>. If the environment is in the us-east-1 AWS Region, for </span><em><span>EC2 key pair,</span></em><span> choose </span><strong><span>vockey</span></strong><span> and for </span><em><span>IAM instance profile</span></em><span>, choose </span><strong><span>LabInstanceProfile</span></strong><span>. Choose </span><strong><span>Save</span></strong><span>, then choose </span><strong><span>Create app</span></strong><span>.</span></p></li><li><p><span>Supported Instance types: nano, micro, small, medium, and large. If you attempt to launch a larger instance type, it will be terminated.</span></p></li></ul><h5 id="amazon-elastic-block-store-ebs"><span>Amazon Elastic Block Store (EBS)</span></h5><ul><li><p><span>Maximum volume size is 100GB</span></p></li><li><p><span>PIOPs not supported</span></p></li></ul><h5 id="amazon-elastic-compute-cloud-ec2"><span>Amazon Elastic Compute Cloud (EC2)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported AMIs: </span></p><ul><li><p><span>AMI available in us-east-1 or us-west-2. For example, Quick Start AMIs, My AMIs, and Community AMIs. </span></p></li><li><p><span>AWS Marketplace AMIs are not supported. AMIs such as MacOS that must launch as a dedicated instance or on a dedicated host are also not supported. </span></p></li><li><p><span>Recommendation: To launch an instance with a guest OS of </span><em><strong><span>Microsoft Windows</span></strong></em><span>, </span><em><strong><span>Amazon Linux</span></strong></em><span>, or one of many other popular Linux distributions, choose "Launch Instances", then choose from the ones available in the "Quick Start" tab.</span></p></li></ul></li><li><p><span>Supported Instance types: nano, micro, small, medium, and large.</span></p></li><li><p><span>On-Demand instances only</span></p></li><li><p><em><span>Concurrently running instances limits</span></em><span> per supported region: </span></p><ul><li><p><span>Maximum of 9 concurrently running EC2 instances, regardless of instance size. If you attempt to launch more, the excess instances will be terminated (and 9 will be left running).</span></p><p><span>Note: Service such as EMR, Elastic Beanstalk may also launch EC2 instances. The 9 concurrent running EC2 instances limit applies across all services that create instances visible in the EC2 console.</span></p></li><li><p><span>Maximum of 32 vCPU used by concurrently running instances, regardless of instance size or instance count. For example, t2.micro instances use 1 vCPU each, so you could run up to 32 of them in us-west-2 (but still only 9 of them in us-east-1 because of the other limitation listed above)</span></p><p><span>Note: The maximum 32 vCPU limit also applies across all services that create instances visible in the EC2 console.</span></p></li><li><p><strong><span>Caution</span></strong><span>: Any attempt to have 20 or more concurrently running instances (regardless of size), will result in immediate deactivation of the AWS account and all resources in the account will be immediately deleted.</span></p></li></ul><ul><li><p><em><span>Recommendation</span></em><span>: size to your actual need to avoid using up your cost budget.</span></p></li></ul></li><li><p><span>EBS volumes - sizes up to 100 GB and type must be General Purpose SSD (</span><code>gp2</code><span>, </span><code>gp3</code><span> ) cold HDD (</span><code>sc1</code><span>), or standard.</span></p></li><li><p><span>Key pairs - If you are creating an EC2 instance in any AWS Region other than us-east-1, the vockey key pair will not be available. In such cases, you should create a new key pair and download it when creating the EC2 instance. Then use the new key pair to connect to that instance.</span></p></li><li><p><span>The EC2 Fleet feature is not supported in Learner Labs.</span></p></li><li><p><span>A role named </span><strong><span>LabRole</span></strong><span> and an instance profile named </span><strong><span>LabInstanceProfile</span></strong><span> have been pre-created for you. You can attach the role (via the instance profile) to an EC2 instance when you want to access an EC2 instance (terminal in the browser) using AWS Systems Manager Session Manager. The role also grants permissions to any applications running on the instance to access many other AWS services from the instance.</span></p></li><li><p><strong><span>Tips</span></strong><span>: </span></p><ul><li><p><span>When your session ends, the lab environment </span><em><span>may</span></em><span> place any running instances into a 'stopped' state. </span></p><p><i class="fas fa-exclamation-triangle" style="color:yellow"></i><span> If you have enabled "Stop protection" on any instances, this protection will be removed when the session ends and the instance will still be stopped. Stop protection will </span><em><span>not</span></em><span> be re-enabled automatically when you later start a new session.</span></p></li><li><p><span>When you start a new session, the lab environment will start all instances that were previously stopped by you or stopped by the lab environment when the lab session ended. </span></p></li><li><p><span>Instances that have been stopped and started again will be assigned a new IPv4 public IP address unless you have an elastic IP address associated with the instance.</span></p></li></ul></li><li><p><strong><span>Recommendations</span></strong><span>: </span></p><ul><li><p><span>To preserve your lab budget, stop any running EC2 instances before you are done using the account for the day (and terminate them if not longer needed). </span></p></li><li><p><span>Be aware of all instances you keep in the account between sessions because they will run (and cut into your budget) when you start the lab again unless you remember to turn stop them manually after starting the lab.</span></p></li></ul></li></ul><h5 id="amazon-elastic-container-registry-ecr"><span>Amazon Elastic Container Registry (ECR)</span></h5><ul><li><p><span>The LabRole IAM role has read-only access to this service and as a console user you have write access to this service.</span></p></li></ul><h5 id="amazon-elastic-container-service-ecs"><span>Amazon Elastic Container Service (ECS)</span></h5><ul><li><p><span>Supported Instance types: nano, micro, small, medium, and large.</span></p></li><li><p><span>Tips:</span></p><ul><li><p><strong><span>When creating a cluster</span></strong><span>: To avoid permissions errors (cannot create role), if attempting to create a cluster that uses EC2 instances for the infrastructure (instead of Fargate), create an auto scaling group using the EC2 console first, then choose to use that existing auto scaling group when creating the ECS cluster.</span></p><ul><li><p><span>If you see a message "</span><em><span>the ECS service linked role could not be assumed</span></em><span>" choose the back button and then try again. This sometimes happens if the service linked role does not yet exist in your account.</span></p></li></ul></li><li><p><strong><span>When creating a task definition</span></strong><span>: To avoid permissions errors, be sure to set </span><em><span>LabRole</span></em><span> as the task role and task execution role.</span></p></li></ul></li></ul><h5 id="amazon-elastic-file-system-efs"><span>Amazon Elastic File System (EFS)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-elastic-kubernetes-service-eks"><span>Amazon Elastic Kubernetes Service (EKS)</span></h5><ul><li><p><span>This service can assume the IAM Roles having identifier </span><em><span>LabEksClusterRole</span></em><span> created for </span><em><span>Cluster</span></em><span> and </span><em><span>Node</span></em><span>.</span></p></li><li><p><span>Supported Instance types: nano, micro, small, medium, and large.</span></p></li></ul><h5 id="elastic-load-balancing-elb"><span>Elastic Load Balancing (ELB)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-elastic-mapreduce-emr"><span>Amazon Elastic MapReduce (EMR)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported Instance types: nano, micro, small, medium, and large. If you attempt to launch a larger instance type, it will be terminated. </span></p></li><li><p><strong><span>Tip</span></strong><span>: If you have any trouble successfully launching a cluster, try using the m4.large instance type. </span><em><span>Example</span></em><span> EMR cluster configuration details:</span></p><ul><li><p><em><span>Cluster configuration</span></em><span>: Instance groups, Primary: </span><strong><span>m4.large</span></strong><span>, Core: </span><strong><span>m4.large</span></strong><span>, Task -1: </span><strong><span>m4.large</span></strong></p></li><li><p><em><span>Provisioning configuration</span></em><span>: Core: 1 instance and Task -1: 1 instance</span></p></li><li><p><em><span>Security configuration</span></em><span>: EC2 key pair: </span><strong><span>vockey</span></strong></p></li><li><p><em><span>IAM roles</span></em><span>: </span><em><span>Amazon EMR service role</span></em><span>: choose existing: </span><strong><span>EMR_DefaultRole</span></strong><span>, </span><em><span>EC2 instance profile for Amazon EMR</span></em><span>: choose existing: </span><strong><span>EMR_EC2_DefaultRole</span></strong></p></li></ul></li><li><p><strong><span>Note:</span></strong><span> If you encounter the issue with S3 bucket creation as part of cluster creation:</span></p><ul><li><p><span>Expand the section - </span><strong><span>Cluster logs</span></strong><span> and </span><strong><span>Uncheck</span></strong><span> the value for </span><em><span>Publish cluster-specific logs to Amazon S3</span></em><span>, and proceed with cluster creation. The logs will not be stored in s3 bucket, but cluster will get created.</span></p></li></ul></li><li><p><span>Maximum of 32 vCPU used by concurrently running EC2 instances in an AWS Region. Note that you are also limited to launching no more than nine (9) instances (of any size) in a Region at once.</span></p><p><strong><span>Note</span></strong><span>: </span><em><span>An EMR cluster will not continue to work if your session ends</span></em><span>. In Learner Labs, session end causes the EC2 instances that the EMR cluster uses to be stopped, and stopping an EMR cluster is not supported (by AWS). </span><em><span>Recommendation</span></em><span>: write EMR job results to S3 if you need to preserve your results, before you end your current Learner Labs session, then read the results back into a new EMR cluster as needed when you start your next Learner Labs session.</span></p></li></ul><h5 id="amazon-elasticache"><span>Amazon ElastiCache</span></h5><h5 id="amazon-eventbridge"><span>Amazon EventBridge</span></h5><ul><li><p><span>This service can assume the LabRole IAM role. </span></p></li><li><p><span>Use LabRole if creating an EventBridge Pipe.</span></p></li></ul><h5 id="aws-fargate"><span>AWS Fargate</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-glue"><span>AWS Glue</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p><p><strong><span>Note:</span></strong><span> The following limitations apply to the AWS Glue ETL job configuration</span></p><ul><li><p><span>Allowed Worker type: G.1X, Standard </span></p></li><li><p><span>Maximum number of workers: 10</span></p></li><li><p><span>Maximum Concurrency: 1</span></p></li></ul></li></ul><h5 id="aws-glue-databrew"><span>AWS Glue DataBrew</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-guardduty"><span>Amazon GuardDuty</span></h5><h5 id="aws-health"><span>AWS Health</span></h5><h5 id="aws-identity-and-access-management-iam"><span>AWS Identity and Access Management (IAM)</span></h5><ul><li><p><span>Extremely limited access. You cannot create users or groups. You cannot create roles, except that you can create service-linked roles.</span></p></li><li><p><span>Service role creation is generally permitted. If the service needs to create a role for you, you may need to retry role creation if it fails the first time.</span></p></li><li><p><span>A role named </span><strong><span>LabRole</span></strong><span> has been pre-created for you. This role is designed to be used when you want to attach a role to a resource in an AWS service. It grants many AWS services access to other AWS services and has permissions very similar to the permissions you have as a user in the console.  </span></p><ul><li><p><span>Example use: attach the LabRole via the instance profile named </span><strong><span>LabInstanceProfile</span></strong><span> to an EC2 instance for terminal in the browser access to an EC2 instance guest OS using AWS Systems Manager Session Manager.</span></p></li><li><p><span>Another example: Attach the LabRole to a Lambda function so that the Lambda function can access S3, CloudWatch, RDS, or some other service.</span></p></li><li><p><span>Another example: Attach the LabRole to a SageMaker notebook instance so that the instance can access files in an S3 bucket.</span></p></li></ul></li></ul><h5 id="amazon-inspector"><span>Amazon Inspector</span></h5><h5 id="aws-iot-1-click"><span>AWS IoT 1-Click</span></h5><h5 id="aws-iot-core"><span>AWS IoT Core</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-iot-greengrass"><span>AWS IoT Greengrass</span></h5><h5 id="aws-key-management-service-kms"><span>AWS Key Management Service (KMS)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-kinesis"><span>Amazon Kinesis</span></h5><ul><li><p><span>If attempting to create a </span><em><span>Kineses Data Analytics Studio notebook</span></em><span>, choose "Create with custom settings" and then choose </span><strong><span>LabRole</span></strong><span> in the IAM settings area. </span></p></li><li><p><span>If attempting to create a </span><em><span>Kinesis Delivery Stream</span></em><span>, choose "Advance settings" and then choose to use the existing </span><strong><span>LabRole</span></strong><span>.</span></p></li></ul><h5 id="aws-lambda"><span>AWS Lambda</span></h5><ul><li><p><strong><span>Tip</span></strong><span>: Attach the existing </span><strong><span>LabRole</span></strong><span> to any function that you create if that function will need permissions to interact with other AWS services.</span></p></li><li><p><span>A maximum of 10 concurrent running Lambda execution environment instances are permitted. Reference the </span><a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html" target="_blank" rel="noopener noreferrer"><span>documentation</span></a><span> to understand how concurrency is calculated.</span></p></li></ul><h5 id="amazon-machine-learning-amazon-ml"><span>Amazon Machine Learning (Amazon ML)</span></h5><h5 id="aws-marketplace-subscriptions"><span>AWS Marketplace Subscriptions</span></h5><ul><li><p><span>Extremely limited read-only access.</span></p></li></ul><h5 id="aws-mobile-hub"><span>AWS Mobile Hub</span></h5><h5 id="aws-opsworks"><span>AWS OpsWorks</span></h5><h5 id="amazon-q-developer"><span>Amazon Q Developer</span></h5><ul><li><p><span>Amazon Q Developer offers many features, including inline code suggestions that can be used in a variety of code editors including the AWS Lambda code editor. For a listing of IDEs that support generating inline suggestions, see the </span><a href="https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/setting-up-AWS-coding-env.html" target="_blank" rel="noopener noreferrer"><span>AWS Documentation</span></a><span>.</span></p><p><strong><span>Note</span></strong><span>: Some IDEs refer to the auto-suggestion feature under the name CodeWhisperer. CodeWhisperer features are moving to Amazon Q Developer. </span></p></li></ul><h5 id="amazon-redshift"><span>Amazon Redshift</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported instance type: ra3.large</span></p></li><li><p><span>Supported cluster size: maximum two instances</span></p></li></ul><h5 id="amazon-rekognition"><span>Amazon Rekognition</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p><p><strong><span>Note:</span></strong><span> Service usage is subject to the following limits, which are sufficient for exploring service features or creating sample apps for educational purposes.</span></p><ul><li><p><span>Rekognition Detected Face Limit - 1000</span></p></li><li><p><span>Rekognition Detected Label Limit - 1000                                                          </span></p></li><li><p><span>Rekognition Max Inference Unit - 1</span></p></li><li><p><span>Rekognition InService Inference Unit -1 </span></p></li></ul></li></ul><h5 id="amazon-relational-database-service-rds"><span>Amazon Relational Database Service (RDS)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported database engines: Amazon Aurora (Provisioned), Oracle, Microsoft SQL, MySQL, PostgreSQL and MariaDB. Note: if you are creating an RDS instance using a CloudFormation template, be sure to specify the engine type using lower-case letters.</span></p></li><li><p><span>Supported instance types: nano, micro, small, and medium (Tip: choose </span><em><span>Burstable classes</span></em><span> to find these).</span></p></li><li><p><span>Supported storage types: EBS volumes - size up to 100 GB and type General Purpose SSD (gp2). PIOPS storage types are not supported.</span></p></li><li><p><span>On-Demand DB instance class types only.</span></p></li><li><p><em><strong><span>Enhanced monitoring is not supported</span></strong></em><span> (you must </span><em><span>uncheck</span></em><span> this default setting in the </span><em><span>Additional configuration / Monitoring</span></em><span> panel).</span></p></li><li><p><strong><span>Tip</span></strong><span>: to preserve your lab budget, stop any running RDS instances before you are done using the account for the day (or terminate them if not longer needed). </span></p></li><li><p><strong><span>Caution</span></strong><span>: When a lab sessions ends, the lab environment may not stop an RDS instance or cluster that you leave running. Also, even if you </span><em><span>do</span></em><span> stop an RDS instance, if you leave it stopped for seven days, </span><em><span>AWS will start it again automatically</span></em><span>, which will increase the cost impact.</span></p></li></ul><h5 id="aws-resource-groups--tag-editor"><span>AWS Resource Groups &amp; Tag Editor</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-route-53"><span>Amazon Route 53</span></h5><ul><li><p><span>You cannot register a domain.</span></p></li></ul><h5 id="amazon-sagemaker"><span>Amazon SageMaker</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li><li><p><span>Supported SageMaker instance types: ml.t3.medium, ml.t3.large, ml.t3.xlarge, ml.m5.large, ml.m5.xlarge, ml.c5.large, ml.c5.xlarge only.</span></p></li><li><p><span>Maximum Sagemaker Notebooks: 2</span></p></li><li><p><span>Maximum Sagemaker Apps: 2</span></p></li><li><p><span>To </span><strong><span>create</span></strong><span> a </span><strong><span>SageMaker</span></strong><span> </span><strong><span>Domain</span></strong><span>:</span></p><ul><li><p><span>Choose </span><strong><span>Domains</span></strong><span> and then choose </span><strong><span>Create domain</span></strong><span>. </span></p></li><li><p><span>Choose </span><strong><span>Set up for organizations</span></strong><span> and choose </span><strong><span>Set up</span></strong><span>.</span></p><ul><li><p><span>Step 1: Set up Domain details &amp; users</span></p><ul><li><p><span>Give the domain a name such as </span><code>myDomain</code><span>.</span></p></li><li><p><span>Keep the </span><strong><span>Login through IAM</span></strong><span> default.</span></p></li><li><p><span>Leave </span><em><span>Who will use Sagemaker</span></em><span> blank.</span></p></li><li><p><span>Choose </span><strong><span>Next</span></strong><span>.</span></p></li></ul></li><li><p><span>Step 2: Configure roles and ML activities</span></p><ul><li><p><span>Choose </span><strong><span>Use an existing role</span></strong><span>.</span></p></li><li><p><span>Set the </span><em><span>Default execution role</span></em><span> to </span><strong><span>LabRole</span></strong><span>.</span></p></li><li><p><span>Choose </span><strong><span>Next</span></strong><span>.</span></p></li></ul></li><li><p><span>Step 3: Configure Applications</span></p><p><span>Note: Ignore and close any message about servicequotas:RequestServiceQuotaIncrease permissions issues.</span></p><ul><li><p><span>In the </span><em><span>StageMaker Studio</span></em><span> panel, choose </span><strong><span>SageMaker Studio - New</span></strong><span>.</span></p></li><li><p><span>In the </span><em><span>JupyterLab</span></em><span> panel</span></p><ul><li><p><span>Choose </span><strong><span>Enable idle shutdown</span></strong><span> and set it to </span><code>60</code><span> minutes.</span></p></li><li><p><span>Choose </span><strong><span>Allow users to set custom idle shutdown time</span></strong><span> and set the Maximum to </span><code>600</code><span>.</span></p></li></ul></li><li><p><span>In the </span><em><span>Canvas</span></em><span> panel</span></p><ul><li><p><span>Choose </span><strong><span>Configure Canvas</span></strong><span>.</span></p></li><li><p><span>Scroll down to </span><strong><span>Canvas Ready-to-use models configuration</span></strong><span> and choose </span><strong><span>Use an existing execution role</span></strong><span>.</span></p></li><li><p><span>For </span><strong><span>Execution role name</span></strong><span>, choose </span><strong><span>Enter a custom IAM role ARN</span></strong><span>.</span></p></li><li><p><span>For Custom IAM role ARN, paste in the ARN of LabRole. It will be in the formation </span><code>arn:aws:iam::ACCOUNT_ID:role/LabRole</code><span> where </span><code>ACCOUNT_ID</code><span> is your actual Account ID. </span></p></li></ul></li><li><p><span>In the </span><em><span>CodeEditor</span></em><span> panel:</span></p><ul><li><p><span>Choose </span><strong><span>Enable idle shutdown</span></strong><span> and set it to </span><code>60</code><span> minutes.</span></p></li><li><p><span>Choose </span><strong><span>Allow users to set custom idle shutdown time</span></strong><span> and set the Maximum to </span><code>600</code><span>.</span></p></li></ul></li></ul></li><li><p><span>Step 4: Customize Studio UI - Optional</span></p><ul><li><p><span>Scroll to the bottom and choose </span><strong><span>Next</span></strong><span>.</span></p></li></ul></li><li><p><span>Step 5: Set up network settings</span></p><ul><li><p><span>Choose either VPC only or </span><em><span>Public internet access</span></em><span> are both options.</span></p></li><li><p><span>Example: </span></p><ul><li><p><span>Choose </span><strong><span>VPC Only</span></strong><span>.</span></p></li><li><p><span>For VPC for Studio to use: Choose the Default VPC.</span></p></li><li><p><span>Choose the </span><strong><span>VPC Console</span></strong><span> link. A new browser tab opens the VPC console. In the </span><em><span>Resource map</span></em><span> tab, make note of the subsets that are public. Public subnets are the ones that are connected to a route table that routes to an "igw-..."  (internet gateway) network connection.</span></p></li><li><p><span>Back in the SageMaker console, choose at least two of the identified public subnets.</span></p></li><li><p><span>Choose the default security group.</span></p></li><li><p><span>Choose </span><strong><span>Next</span></strong><span>.</span></p></li></ul></li></ul></li><li><p><span>Step 6: Configure storage</span></p><ul><li><p><span>Scroll to the bottom and choose </span><strong><span>Next</span></strong><span>.</span></p></li></ul></li><li><p><span>Step 7:  Review and create</span></p><ul><li><p><span>Scroll to the bottom and choose </span><strong><span>Submit</span></strong><span>.</span></p></li></ul></li></ul></li><li><p><span>Wait for the Domain to be created. It typically takes 5 to 8 minutes to complete. Refresh the browser tab occasionally to more quickly know when it has completed.</span></p></li></ul></li><li><p><span>To create a SageMaker </span><strong><span>user profile</span></strong><span>:</span></p><ul><li><p><span>In the list of SageMaker domains, choose the name link of the domain you created. </span></p></li><li><p><span>In the User profiles tab, choose </span><strong><span>Add user</span></strong><span>. </span></p></li><li><p><span>In </span><em><span>General settings</span></em><span>, for </span><em><span>Execution role</span></em><span> choose </span><strong><span>LabRole</span></strong><span> and then choose </span><strong><span>Next</span></strong><span>. </span></p></li><li><p><span>In </span><em><span>Step 2</span></em><span>: Choose </span><strong><span>Next</span></strong><span>.</span></p></li><li><p><span>In </span><em><span>Step 3</span></em><span>: Choose </span><strong><span>Next</span></strong><span>. </span></p></li><li><p><span>In </span><em><span>Step 4</span></em><span>: Keep </span><em><span>Inherit settings from domain</span></em><span> selected and choose </span><strong><span>Next</span></strong><span>.</span></p></li><li><p><span>In Step 5: Scroll to the bottom and choose </span><strong><span>Submit</span></strong><span>.</span></p></li></ul></li><li><p><span>To create a Code Editor space, so that you can use </span><strong><span>Visual Studio Code Open Source</span></strong><span>:</span></p><ul><li><p><span>Choose </span><strong><span>Studio</span></strong><span>.</span></p></li><li><p><span>In the </span><em><span>Get started</span></em><span> panel, verify the user profile you created is selected and choose </span><strong><span>Open Studio</span></strong><span>.</span></p></li><li><p><span>Choose </span><strong><span>Skip Tour</span></strong><span> for now then from the </span><strong><span>Applications</span></strong><span> panel choose </span><strong><span>Code Editor</span></strong><span>.</span></p></li><li><p><span>Choose the </span><strong><span>Create Code Editor space</span></strong><span> button in the top right corner. </span></p></li><li><p><span>Give it a name such as </span><code>mySpace</code><span> and then choose </span><strong><span>Create space</span></strong><span>.</span></p></li><li><p><span>Verify the space settings before running it. The defaults, such as the default ml.t3.medium instance type are supported.</span></p></li><li><p><span>Choose </span><strong><span>Run space</span></strong><span>. </span></p></li><li><p><span>Once the space has started choose Open Code Editor.</span></p><p><span>A new browser tab opens, displaying an IDE. Refer to the </span><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/code-editor.html" target="_blank" rel="noopener noreferrer"><span>AWS Documentation</span></a><span> to learn more about Code Editor in SageMaker Studio.</span></p></li></ul></li><li><p><span>There is limited support for </span><strong><span>SageMaker Studio</span></strong><span> features. Some SageMaker JumpStart projects require more access permissions than we can grant in Learner Labs.</span></p><ul><li><p><span>To use SageMaker Studio, first create a SageMaker domain and user profile (steps documented above). </span></p></li><li><p><span>Once you have a domain and user profile, choose </span><strong><span>Studio</span></strong><span>. Then, from </span><strong><span>Applications</span></strong><span> list in the top left corner, choose an application.</span></p><ul><li><p><em><span>For example</span></em><span>, choose  </span><strong><span>JupyterLab</span></strong><span> and then choose </span><strong><span>Create JupyterLab space</span></strong><span>. Give the space a name and choose </span><strong><span>Create space</span></strong><span>. Then choose </span><strong><span>Run space</span></strong><span>. Wait for the JupyterLab space to start, then choose </span><strong><span>Open JupyterLab</span></strong><span>. Once in the JupyterLab UI can you claunch a notebook, console, or other type of resource.</span></p></li></ul></li><li><p><span>If you have a running </span><em><span>studio space</span></em><span>, it will appear as a running </span><em><span>App</span></em><span> in the SageMaker Studio console.</span></p></li></ul></li><li><p><span>There is limited support for </span><strong><span>SageMaker Canvas</span></strong><span> features. There are many SageMaker Canvas models (including many Ready-to-use models) that are not supported in Learner Labs. For example, if a model is "powered by" an AWS service that is not supported in Learner Labs, then the model will not run in Learner Labs.</span></p><ul><li><p><span>To use SageMaker Canvas, first create a SageMaker domain and user profile (see the steps above). </span></p></li><li><p><span>Once you have a domain and user profile, from the </span><em><span>User profiles</span></em><span> list in the row with the profile you want to use, choose </span><strong><span>Launch</span></strong><span> &gt; </span><strong><span>Canvas</span></strong><span>. The SageMaker Canvas console appears.</span></p></li></ul></li><li><p><span>You can create </span><strong><span>SageMaker Notebook instances</span></strong><span>. </span></p></li><li><p><strong><span>Tips to preserve your budget</span></strong><span>: </span></p><ul><li><p><span>Choose the </span><strong><span>SageMaker dashboard</span></strong><span> link to view recent activity including running jobs, models, or instances. Stop or delete anything that is running and that you no longer need.</span></p></li><li><p><span>When your session ends, the lab environment </span><em><span>may</span></em><span> place running SageMaker notebook instances into a 'stopped' state. Stopped SageMaker notebook instances will </span><em><span>not</span></em><span> be automatically restarted when you start a new session.</span></p></li><li><p><span>When using SageMaker Canvas or SageMaker Studio, logout of the </span><strong><span>session</span></strong><span> when you are done working with it. </span><em><span>Consider deleting SageMaker Canvas and SageMaker Studio apps that are no longer needed</span></em><span>. </span></p></li></ul></li></ul><h5 id="aws-secrets-manager"><span>AWS Secrets Manager</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="aws-security-hub"><span>AWS Security Hub</span></h5><h5 id="aws-security-token-service-sts"><span>AWS Security Token Service (STS)</span></h5><h5 id="aws-serverless-application-repository-sar"><span>AWS Serverless Application Repository (SAR)</span></h5><h5 id="aws-service-catalog"><span>AWS Service Catalog</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-simple-notification-service-sns"><span>Amazon Simple Notification Service (SNS)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-simple-queue-service-sqs"><span>Amazon Simple Queue Service (SQS)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-simple-storage-service-s3"><span>Amazon Simple Storage Service (S3)</span></h5><ul><li><p><span>This service can assume the LabRole IAM role.</span></p></li></ul><h5 id="amazon-simple-storage-service-glacier-s3-glacier"><span>Amazon Simple Storage Service Glacier (S3 Glacier)</span></h5><ul><li><p><span>You cannot create a vault lock</span></p></li></ul><h5 id="amazon-simple-workflow-service-swf"><span>Amazon Simple Workflow Service (SWF)</span></h5><h5 id="aws-step-functions"><span>AWS Step Functions</span></h5><h5 id="aws-systems-manager-ssm"><span>AWS Systems Manager (SSM)</span></h5><ul><li><p><span>A role named </span><strong><span>LabRole</span></strong><span> and an instance profile named </span><strong><span>LabInstanceProfile</span></strong><span> have been pre-created for you. You can attach the role (via the instance profile) to an EC2 instance when you want to access an EC2 instance (terminal in the browser) using AWS Systems Manager Session Manager.</span></p></li></ul><h5 id="amazon-textract"><span>Amazon Textract</span></h5><h5 id="aws-trusted-advisor"><span>AWS Trusted Advisor</span></h5><h5 id="amazon-virtual-private-cloud-amazon-vpc"><span>Amazon Virtual Private Cloud (Amazon VPC)</span></h5><h5 id="aws-waf---web-application-firewall"><span>AWS WAF - Web Application Firewall</span></h5><h5 id="aws-well-architected-tool"><span>AWS Well-Architected Tool</span></h5><h2 id="&lt;a-idterminal&gt;&lt;a&gt;accessing-a-terminal-in-the-browser"><a id="terminal"></a><span>Accessing a Terminal in the browser</span></h2><p><strong><span>AWS CloudShell</span></strong><span> is an AWS service that provides a terminal in the browser. You can access it in the AWS Management Console, at the top of the screen, by choosing the AWS CloudShell icon (highlighted in red in the screen capture below).</span></p><p><span class="md-image"><img src="learnerlab_files/cloudshell-prompt.png" alt="cloudshell icon" width="450" border="1px solid" align="left"></span></p><p><span>Other ways to access a terminal in the browser:</span></p><ul><li><p><span>Launch an </span><strong><span>EC2 instance</span></strong><span> to which you have attached the </span><strong><span>LabInstanceProfile</span></strong><span> (which attaches the LabRole IAM role) and then connect to the terminal on it using EC2 Instance Connect.</span></p></li></ul><p><span>Further tips:</span></p><ul><li><p><span>AWS CloudShell and EC2 instances of type Amazon Linux 2 have the AWS CLI client already installed. </span></p></li><li><p><span>AWS CloudShell has AWS account credentials pre-configured in the environment.</span></p></li></ul><p>&nbsp;</p><h3 id="&lt;a-idclicommands&gt;&lt;a&gt;running-aws-cli-commands"><a id="clicommands"></a><span>Running AWS CLI commands</span></h3><p><span>Here is an example AWS CLI command to try running in a terminal. If you have created any EC2 instances in the default account Region, running this command will provide information about them:</span></p><pre class="md-fences md-end-block ty-contain-cm modeLoaded" spellcheck="false" lang="bash"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="bash"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 9.5px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: currentcolor;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: currentcolor;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation"><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">aws ec2 describe-instances</span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom-width: 0px; border-bottom-style: solid; border-bottom-color: transparent; top: 23px;"></div><div class="CodeMirror-gutters" style="display: none; height: 23px;"></div></div></div></pre><p><span>See the </span><a href="https://docs.aws.amazon.com/cli/latest/reference/" target="_blank" rel="noopener noreferrer"><span>AWS CLI Command Reference</span></a><span> documentation for details on how to use the AWS CLI.</span></p><p>&nbsp;</p><h3 id="&lt;a-idsdk&gt;&lt;a&gt;using-the-aws-sdk-for-python"><a id="sdk"></a><span>Using the AWS SDK for Python</span></h3><p><span>AWS CloudShell also has Python 3 installed with the boto3 library available. You can use it to run AWS Python SDK code. For example:</span></p><pre class="md-fences md-end-block ty-contain-cm modeLoaded" spellcheck="false" lang="python"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="python"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 9.5px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: currentcolor;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: currentcolor;"><div class="CodeMirror-measure"><pre><span>xxxxxxxxxx</span></pre></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-error">$</span> <span class="cm-variable">python3</span></span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">&gt;&gt;&gt;</span> <span class="cm-keyword">import</span> <span class="cm-variable">boto3</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">&gt;&gt;&gt;</span> <span class="cm-variable">ec2</span> <span class="cm-operator">=</span> <span class="cm-variable">boto3</span>.<span class="cm-property">client</span>(<span class="cm-string">'ec2'</span>, <span class="cm-variable">region_name</span><span class="cm-operator">=</span><span class="cm-string">'us-east-1'</span>) &nbsp;</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">&gt;&gt;&gt;</span> <span class="cm-variable">ec2</span>.<span class="cm-property">describe_regions</span>()</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">&gt;&gt;&gt;</span> <span class="cm-variable">exit</span>()</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-error">$</span></span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom-width: 0px; border-bottom-style: solid; border-bottom-color: transparent; top: 138px;"></div><div class="CodeMirror-gutters" style="display: none; height: 138px;"></div></div></div></pre><p><span>See the </span><a href="https://boto3.amazonaws.com/v1/documentation/api/latest/index.html" target="_blank" rel="noopener noreferrer"><span>documentation</span></a><span> for details on how to use the AWS SDK for Python.</span></p><p>&nbsp;</p><h2 id="&lt;a-idbudget&gt;&lt;a&gt;preserving-your-budget"><a id="budget"></a><span>Preserving your budget</span></h2><p><span>Remember,  </span><em><u><span>if you exceed your lab budget your lab account will be disabled and all progress and resources will be lost</span></u></em><span>. Details on how to monitor your budget are provided </span><a href="#monitor" target="_blank" rel="noopener noreferrer"><span>above</span></a><span>.</span></p><p><em><span>Suggestions to avoid overspending</span></em><span>:</span></p><ul><li><p><span>Launch only the number of instances you need, sized to your requirements.</span></p></li><li><p><span>Typically, it is compute-type resources that you leave running that most quickly use up your budget. Turn these off when no longer needed, or better yet, delete them.</span></p></li><li><p><span>Example compute-type resources:</span></p><ul><li><p><span>EC2, RDS, NAT Gateway</span></p></li><li><p><span>SageMaker notebook instances, and SageMaker canvas apps.</span></p></li><li><p><span>EMR, ECS or EKS clusters</span></p></li><li><p><span>Elastic Beanstalk applications</span></p></li></ul></li><li><p><span>Use the </span><a href="https://calculator.aws/" target="_blank" rel="noopener noreferrer"><span>AWS Pricing Calculator</span></a><span> to estimate cost.  </span></p><ul><li><p><span>For example, the estimate shown in the screenshot below calculated the cost of running the following resources for a month:</span></p><ul><li><p><span>One t3.medium size Linux </span><em><span>EC2 instance</span></em><span> running 6 hours per day for a month in the us-east-1 Region.</span></p></li><li><p><span>One db.t2.small size MySQL </span><em><span>RDS database</span></em><span> with 30GB of storage, in a single AZ, left running for a month in the us-east-1 Region.</span></p></li><li><p><span>One </span><em><span>NAT Gateway</span></em><span> left running, processing 1GB per month in the us-east-1 Region</span></p><p><span class="md-image"><img src="learnerlab_files/calc.png" alt="cost estimate" width="960" border="1px solid" align="left"></span></p><p><em><span>Pricing is subject to change. The calculation above is only an example from a point in time in the past.</span></em></p></li></ul></li></ul></li></ul><p><em><span>Additional suggestions for how to reduce cost</span></em><span>:</span></p><ul><li><p><span>Discover what resources exist in your account using the </span><strong><span>Tag Editor</span></strong><span> feature.</span></p><p><strong><span>Note</span></strong><span>: This tool does not find </span><em><span>all</span></em><span> resource types, but it can locate many types.</span></p><ul><li><p><span>Open the </span><em><span>Resource Groups &amp; Tag Editor</span></em><span> console and choose </span><strong><span>Tag Editor</span></strong><span>.</span></p></li><li><p><span>For </span><em><span>Regions</span></em><span>, choose </span><strong><span>us-east-1</span></strong><span> and </span><strong><span>us-west-2</span></strong><span> and for </span><em><span>Resource types</span></em><span>, choose </span><strong><span>All supported resource types</span></strong><span>. Finally, choose </span><strong><span>Search resources</span></strong><span>.</span></p></li><li><p><span>Give the search a moment to complete. You will see a large number of warnings appear at the top of the screen, indicating that you do not have permissions to view certain resources. You can ignore these warnings.</span></p></li><li><p><span>Scroll down to the </span><em><span>Resource search results</span></em><span> panel to see the resources that were found.</span></p><ul><li><p><span>Some of the resources already existed in your account when you started the lab and they will not use up a significant amount of your budget.  These include IAM resources, two Lambda functions, a number of security groups and other VPC-related resources.</span></p></li><li><p><span>However, you may notice other resources in the search results that are resources you created, and perhaps no longer need.</span></p></li></ul></li></ul></li><li><p><span>Build your solutions using </span><strong><span>CloudFormation templates</span></strong><span>.</span></p><ul><li><p><span>You can use the service to create a stack that creates multiple resources across AWS services. Then, when you don't need the resources anymore, delete the stack (which will delete all the resources it created). You can always, use the same template to create a new stack to create the resources again during your next session.</span></p></li></ul></li><li><p><span>Access </span><strong><span>AWS Trusted Advisor</span></strong><span> and review the cost optimization results. The service can help you to identify EC2 instances with low utilization rates, idle RDS instances or Classic Load Balancers, under utilized EBS volumes, and other conditions that can help you save the money remaining in your lab budget.</span></p></li></ul><p>&nbsp;</p><h2 id="&lt;a-idec2&gt;&lt;a&gt;accessing-ec2-instances"><a id="ec2"></a><span>Accessing EC2 Instances</span></h2><p><span>When launching EC2 instances in the default us-east-1 Region in this environment, choose the option to use the existing key pair named </span><em><strong><span>vockey</span></strong></em><span> at the time of launch.  Then:</span></p><ul><li><p><span>Choose the </span><i class="fas fa-info"></i><span> </span><strong><span>AWS Details</span></strong><span> link above these instructions.</span></p><ul><li><p><span>If you are using a Windows desktop or laptop, choose the </span><strong><span>Download PPK</span></strong><span> button and save the </span><strong><span>labsuser.ppk</span></strong><span> file. You can use this file to connect via SSH to a Linux EC2 instance or Windows EC2 instance, typically using a tool such as PuTTY.</span></p></li><li><p><span>If you are using a MacOS desktop or laptop, choose the </span><strong><span>Download PEM</span></strong><span> button and save the </span><strong><span>labsuser.pem</span></strong><span> file. You can use this file to connect via SSH to a Linux EC2 instance or Windows EC2 instance, typically using a terminal window.</span></p></li></ul></li><li><p><strong><span>To connect via Remote Desktop to a Windows EC2 instance</span></strong><span>:</span></p><ul><li><p><span>In the EC2 Console, choose </span><strong><span>Instances</span></strong><span> and choose the instance you want to connect to</span></p></li><li><p><span>From the </span><strong><span>Actions</span></strong><span> menu choose </span><strong><span>Get Windows Password</span></strong></p></li><li><p><span>Next to </span><em><span>Key Pair Path</span></em><span> choose </span><strong><span>Browse</span></strong><span>.</span></p></li><li><p><span>Browse to and select the labsuser.pem file you downloaded earlier.</span></p></li><li><p><span>Choose </span><strong><span>Decrypt Password</span></strong><span>.</span></p></li><li><p><span>The connection information will now display, including the instance's Public DNS, Administrator user name, and the decrypted password.</span></p></li><li><p><span>Use a Remote Desktop Protocol (RDP) client to connect to the desktop of the EC2 instance using these connection details.</span></p></li><li><p><strong><span>To connect using SSH to a Linux instance, see the next section</span></strong><span>.</span></p></li></ul></li></ul><h2 id="&lt;a-idssh&gt;&lt;a&gt;ssh-access-to-an-ec2-instance-you-launch"><a id="ssh"></a><span>SSH access to an EC2 Instance you launch</span></h2><p><span>The steps below describe how to use the SSH key to connect to your instance.</span></p><p><strong><span>Tip</span></strong><span>: Assuming you launched the instance with the vockey key pair, and that you have opened TCP port 22 in the instance's security group, you can also SSH to an EC2 instance by using the terminal to the side of these instructions. The terminal already has the key pair available to it. Simply enter the command </span><code>ssh -i ~/.ssh/labsuser.pem ec2-user@&lt;public-ip&gt;</code><span> where </span><code>&lt;public-ip&gt;</code><span> is the actual IPv4 public address of the instance.</span></p><h3 id="&lt;a-idsshwindows&gt;&lt;a&gt;&lt;i-classfab-fa-windows&gt;&lt;i&gt;-windows-users-using-ssh-to-connect"><a id="sshwindows"></a><i class="fab fa-windows"></i><span> Windows Users: Using SSH to Connect</span></h3><p><i class="fas fa-comment"></i><span> These instructions are for Windows users only.</span></p><ol start=""><li><p><span>Download needed software.</span></p><ul><li><p><span>You will use </span><strong><span>PuTTY</span></strong><span> to SSH to Amazon EC2 instances. If you do not have PuTTY installed on your computer, </span><a href="https://the.earth.li/~sgtatham/putty/latest/w64/putty.exe" target="_blank" rel="noopener noreferrer"><span>download it here</span></a><span>.</span></p></li></ul></li><li><p><span>Open </span><strong><span>putty.exe</span></strong></p></li><li><p><span>Configure PuTTY to not timeout:</span></p><ul><li><p><span>Choose </span><strong><span>Connection</span></strong></p></li><li><p><span>Set </span><strong><span>Seconds between keepalives</span></strong><span> to </span><code>30</code></p></li></ul><p><span>This allows you to keep the PuTTY session open for a longer period of time.</span></p></li><li><p><span>Configure your PuTTY session:</span></p><ul><li><p><span>Choose </span><strong><span>Session</span></strong></p></li><li><p><strong><span>Host Name (or IP address):</span></strong><span> Copy and paste the </span><strong><span>IPv4 Public IP address</span></strong><span> for the instance. To find it, return to the EC2 Console and choose </span><strong><span>Instances</span></strong><span>. Check the box next to the instance and in the </span><em><span>Description</span></em><span> tab copy the </span><strong><span>IPv4 Public IP</span></strong><span> value.</span></p></li><li><p><span>Back in PuTTy, in the </span><strong><span>Connection</span></strong><span> list, expand </span><i class="far fa-plus-square"></i><span> </span><strong><span>SSH</span></strong></p></li><li><p><span>Choose </span><strong><span>Auth</span></strong><span> (don't expand it)</span></p></li><li><p><span>Choose </span><strong><span>Browse</span></strong></p></li><li><p><span>Browse to and select the .ppk file that you downloaded</span></p></li><li><p><span>Choose </span><strong><span>Open</span></strong><span> to select it</span></p></li><li><p><span>Choose </span><strong><span>Open</span></strong></p></li></ul></li><li><p><span>Choose </span><strong><span>Yes</span></strong><span>, to trust the host and connect to it.</span></p></li><li><p><span>When prompted </span><strong><span>login as</span></strong><span>, enter: </span><code>ec2-user</code></p><p><span>This will connect you to the EC2 instance.</span></p></li></ol><p>&nbsp;</p><h3 id="&lt;a-idsshmac&gt;&lt;a&gt;macos-&lt;i-classfab-fa-apple&gt;&lt;i&gt;-and-linux-&lt;i-classfab-fa-linux&gt;&lt;i&gt;-users---using-ssh-to-connect"><a id="sshmac"></a><span>macOS </span><i class="fab fa-apple"></i><span> and Linux </span><i class="fab fa-linux"></i><span> Users - Using SSH to Connect</span></h3><p><span>These instructions are for Mac/Linux users only.</span></p><ol start=""><li><p><span>Read through the two bullet points in this step before you start to complete the actions, because you will not be able see these instructions when the AWS Details panel is open.</span></p><ul><li><p><span>Choose the </span><i class="fas fa-info"></i><span> </span><strong><span>AWS Details</span></strong><span> link above these instructions.</span></p></li><li><p><span>Choose the </span><strong><span>Download PEM</span></strong><span> button and save the </span><strong><span>labsuser.pem</span></strong><span> file.</span></p><p><span>Typically your browser will save it to the Downloads directory.</span></p></li></ul></li><li><p><span>Open a terminal window, and change directory </span><code>cd</code><span> to the directory where the .pem file was downloaded.</span></p><p><span>For example, run this command, if it was saved to your Downloads directory:</span></p><pre class="md-fences md-end-block ty-contain-cm modeLoaded" spellcheck="false" lang="plain"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="plain"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 9.5px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: currentcolor;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: currentcolor;"><div class="CodeMirror-measure"><pre><span>xxxxxxxxxx</span></pre></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation"><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">cd ~/Downloads</span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom-width: 0px; border-bottom-style: solid; border-bottom-color: transparent; top: 23px;"></div><div class="CodeMirror-gutters" style="display: none; height: 23px;"></div></div></div></pre></li><li><p><span>Change the permissions on the key to be read only, by running this command:</span></p><pre class="md-fences md-end-block ty-contain-cm modeLoaded" spellcheck="false" lang="plain"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="plain"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 9.5px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: currentcolor;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: currentcolor;"><div class="CodeMirror-measure"><pre><span>xxxxxxxxxx</span></pre></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation"><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">chmod 400 labsuser.pem</span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom-width: 0px; border-bottom-style: solid; border-bottom-color: transparent; top: 23px;"></div><div class="CodeMirror-gutters" style="display: none; height: 23px;"></div></div></div></pre></li><li><p><span>Return to the AWS Management Console, and in the EC2 service, choose </span><strong><span>Instances</span></strong><span>.</span></p><p><span>Check the box next to the instance you want to connect to.</span></p></li><li><p><span>In the </span><em><span>Description</span></em><span> tab, copy the </span><strong><span>IPv4 Public IP</span></strong><span> value.</span></p></li><li><p><span>Return to the terminal window and run this command (replace </span><strong><span>&lt;public-ip</span><span>&gt;</span></strong><span> with the actual public IP address you copied):</span></p><pre class="md-fences md-end-block ty-contain-cm modeLoaded" spellcheck="false" lang="plain"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="plain"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 9.5px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: currentcolor;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: currentcolor;"><div class="CodeMirror-measure"><pre><span>xxxxxxxxxx</span></pre></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation"><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">ssh -i &lt;filename&gt;.pem ec2-user@&lt;public-ip&gt;</span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom-width: 0px; border-bottom-style: solid; border-bottom-color: transparent; top: 23px;"></div><div class="CodeMirror-gutters" style="display: none; height: 23px;"></div></div></div></pre></li><li><p><span>Type </span><code>yes</code><span> when prompted to allow a first connection to this remote SSH server.</span></p><p><span>Because you are using a key pair for authentication, you will not be prompted for a password.</span></p><p>&nbsp;</p></li></ol><p><span>© 2022 Amazon Web Services, Inc. and its affiliates. All rights reserved. This work may not be reproduced or redistributed, in whole or in part, without prior written permission from Amazon Web Services, Inc. Commercial copying, lending, or selling is prohibited.</span></p></div></div>
+<script defer="defer" src="learnerlab_files/v833ccba57c9e4d2798f2e76cebdd09a11778172276447.js" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;a73834a4a1444e9ab89e8da06da41720&quot;,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}" crossorigin="anonymous"></script>
+
+</body></html>
