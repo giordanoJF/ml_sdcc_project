@@ -33,6 +33,9 @@ import json
 import os
 import statistics
 
+import torch
+import yaml
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,10 +44,6 @@ import statistics
 def load_worker_csv(path: str) -> list[dict]:
     with open(path, newline="") as f:
         return list(csv.DictReader(f))
-
-
-def _f(value: float, decimals: int = 4) -> str:
-    return f"{value:.{decimals}f}"
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +215,6 @@ def main():
     # Gracefully skipped if config is absent or has changed since the experiment.
     total_rounds_cfg = None
     try:
-        import yaml
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
         )
@@ -316,7 +314,6 @@ def main():
         print("\nModel weight divergence (pairwise L2 distance of final weights):")
         print("-" * 55)
         try:
-            import torch
             checkpoints = {}
             for path in checkpoint_paths:
                 worker_dir = os.path.basename(os.path.dirname(path))

@@ -3,8 +3,8 @@ FEMNIST dataset loading (LEAF format).
 
 Each worker's partition is pre-split by scripts/split_dataset.py and
 mounted into the container at the path specified by data_dir in config.yaml.
-This module simply loads whatever train/ and test/ JSON files are present
-in that directory — no runtime splitting logic.
+This module simply loads whatever train/ and val/ (and optionally test/)
+JSON files are present in that directory — no runtime splitting logic.
 
 Data model at this stage:
   - One writer  = one real person with a unique handwriting style.
