@@ -131,14 +131,78 @@ aws:
   # you create a custom key pair in us-west-2.
   region: "us-east-1"
 
-  # EC2 instance type for worker nodes.
-  # Learner Lab supports: nano, micro, small, medium, large — NOT xlarge or larger.
-  # t3.small (2 vCPU, 2 GB RAM) is sufficient for a single PyTorch worker with --sf 0.05.
-  # t3.medium (2 vCPU, 4 GB RAM) is safer for larger batch sizes or --sf 1.0.
+  # EC2 instance type for worker nodes (multi-instance mode: one EC2 per worker).
+  # Memory bottleneck: dataset tensors loaded entirely in RAM by FEMNISTDataset.
+  # Each FEMNIST image = 784 float32 = 3.1 KB; full dataset ~800k images.
+  # Per-worker dataset RAM (approx):
+  #   3 workers → ~267k images/worker → ~830 MB tensors + ~300 MB PyTorch = ~1.1 GB
+  #   5 workers → ~160k images/worker → ~500 MB tensors + ~300 MB PyTorch = ~800 MB
+  #   8 workers → ~100k images/worker → ~310 MB tensors + ~300 MB PyTorch = ~610 MB
+  # Model weights are negligible (~7 MB for this CNN).
+  # Learner Lab supports: t3.micro (1 GB), t3.small (2 GB), t3.medium (4 GB), t3.large (8 GB).
+  #   t3.micro  — NOT sufficient (1 GB OOM with 3–5 workers on full dataset)
+  #   t3.small  — sufficient for all worker counts with full dataset (2 GB > 1.1 GB worst case)
+  #   t3.medium — comfortable headroom; useful if you add larger batches or data augmentation
+  # Cost note: a 30-min run costs $0.005 on t3.small vs $0.010 on t3.medium — both negligible.
   instance_type_worker: "t3.small"
 
-  # EC2 instance type for the registry (lightweight Flask server, <100 MB RAM).
+  # EC2 instance type for the registry (Flask service-discovery server, <50 MB RAM).
+  # t3.micro (1 GB) is more than sufficient; no reason to use anything larger.
   instance_type_registry: "t3.micro"
+
+  # EC2 instance type for single-EC2 mode (ALL worker containers run on one machine).
+  # Memory is additive: N workers × per-worker RAM (see instance_type_worker comment).
+  # With full dataset:
+  #   3 workers → ~3.3 GB total → t3.medium (4 GB) is borderline; t3.large (8 GB) is safe
+  #   5 workers → ~4.0 GB total → t3.large (8 GB) required
+  #   8 workers → ~4.9 GB total → t3.large (8 GB) sufficient
+  # Learner Lab does NOT support t3.xlarge or larger in most sandbox accounts.
+  # Cost note: t3.large costs $0.083/hr — a 30-min accuracy run costs ~$0.04, negligible.
+  instance_type_single: "t3.large"
+
+  # Availability Zone within the region. Pinning ALL instances to the same AZ
+  # keeps worker-to-worker gRPC gossip on intra-AZ private networking, which is FREE.
+  # Cross-AZ private traffic costs $0.01/GB each direction — with gossip_fanout=3,
+  # 200 rounds, and an 8-worker run the model transfer totals ~33 GB → ~$0.33 cross-AZ
+  # vs $0 same-AZ. Small but free to eliminate.
+  # Valid AZs per region:
+  #   us-east-1 → us-east-1a (default), us-east-1b, us-east-1c, ...
+  #   us-west-2 → us-west-2a, us-west-2b, us-west-2c, ...
+  # Must be consistent with the region above.
+  availability_zone: "us-east-1a"
+
+  # EBS root volume (GB) for each worker EC2 instance (multi-instance mode).
+  # Disk usage breakdown per worker:
+  #   OS + apt packages           : ~5 GB
+  #   Docker engine               : ~1 GB
+  #   Worker image build          : ~3 GB  (python:3.11-slim + PyTorch + grpcio)
+  #   Dataset partition (train/val): ~0.5–2 GB  (lower with more workers or --sf 0.05)
+  #   Docker build cache          : ~1 GB
+  # Recommended range: 15 GB (8 workers, --sf 0.05) – 30 GB (3 workers, full dataset).
+  # Default 20 GB covers all configurations comfortably.
+  # Cost: gp3 = $0.08/GB/month → 20 GB = $0.002/hr; negligible during runs.
+  # Risk: if instances are stopped but not destroyed (resume scenario), EBS keeps
+  # charging at this rate until destroy is run.
+  volume_size_worker: 20
+
+  # EBS root volume (GB) for the registry EC2 instance.
+  # The registry runs only a lightweight Flask server (<50 MB); 8 GB is more than enough.
+  # Range: 8–15 GB. No reason to exceed 15 GB.
+  # Cost: 8 GB × $0.08/month = $0.0009/hr.
+  volume_size_registry: 8
+
+  # EBS root volume (GB) for the single-EC2 instance.
+  # All worker containers share this disk. Docker layer caching means the worker
+  # image is stored only once (~3 GB); dataset partitions for ALL workers are here.
+  # Disk usage breakdown:
+  #   OS + Docker daemon          : ~6 GB
+  #   Worker image (shared layers): ~3 GB  (built once, all containers reuse it)
+  #   Registry image              : ~0.3 GB
+  #   All dataset partitions      : ~0.5 GB (--sf 0.05) to ~4 GB (3 workers, full)
+  #   Docker build cache          : ~1 GB
+  # Recommended range: 20 GB (up to 5 workers, full dataset) – 30 GB (8 workers).
+  # Cost: gp3 = $0.08/GB/month → 20 GB ≈ $0.002/hr.
+  volume_size_single: 20
 
   # IMPORTANT — Learner Lab hard limits:
   #   - Maximum 9 concurrently running EC2 instances in a region.

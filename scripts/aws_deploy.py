@@ -1,20 +1,72 @@
 #!/usr/bin/env python3
 """
-AWS multi-instance deployment orchestrator for P2P Federated Learning.
+AWS deployment orchestrator for P2P Federated Learning.
 
-Each EC2 instance runs exactly one Docker container (one worker or the registry).
-Workers communicate over real TCP/IP via private IPs within the same VPC,
-producing genuine network latency instead of loopback communication.
+Supports two deployment modes:
+  - Single EC2:      all containers (N workers + registry) on one instance.
+                     Uses docker-compose.yml, just like local mode.
+  - Multi-instance:  one container per EC2 instance, workers communicate
+                     over real TCP/IP between separate machines.
 
-Workflow
---------
+--- SINGLE EC2 ---
+
   # 0. Set Learner Lab credentials (copy from the AWS Academy panel each session)
   export AWS_ACCESS_KEY_ID=...
   export AWS_SECRET_ACCESS_KEY=...
   export AWS_SESSION_TOKEN=...
 
-  # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, ...)
+  # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, aws.instance_type_single)
   # 2. Download and split dataset (once, or when use_test_set / num_workers changes)
+  python scripts/download_femnist.py
+  python scripts/split_dataset.py
+  python scripts/generate_compose.py
+
+  # 3. Provision the instance via Terraform (creates EC2 + installs Docker automatically)
+  python scripts/aws_deploy.py provision_single
+
+  # 4. Upload project, install dependencies, start training
+  scp -r . ubuntu@<ip>:~/project
+  ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
+    cd ~/project
+    pip install -r requirements.debug.txt
+    docker compose up --build
+
+  # 5. Analyze results (still on EC2 host)
+  python scripts/aggregate_metrics.py
+  python scripts/save_experiment.py <name>
+
+  # 6. Destroy the instance to stop billing
+  python scripts/aws_deploy.py destroy_single
+
+  # --- If the Learner Lab session expired while the instance was still running ---
+  #
+  # The Learner Lab has a ~4h session limit. If it expires before you run
+  # destroy_single, AWS stops the instance automatically. Data on disk (metrics.csv,
+  # dataset) survives. But the Docker containers are stopped.
+  #
+  # When you start a new session, the instance restarts with a NEW public IP.
+  # resume_single updates the Terraform state so the new IP is known.
+  #
+  # Then, depending on what happened:
+  #
+  #   Case A — training had already finished:
+  #     python scripts/aws_deploy.py resume_single   # prints new IP
+  #     ssh ubuntu@<new_ip>
+  #       python scripts/aggregate_metrics.py
+  #       python scripts/save_experiment.py <name>
+  #     python scripts/aws_deploy.py destroy_single
+  #
+  #   Case B — training was still running when session expired (model state lost):
+  #     python scripts/aws_deploy.py resume_single   # prints new IP
+  #     ssh ubuntu@<new_ip>
+  #       cd ~/project && docker compose up          # restart from round 1
+  #     python scripts/aws_deploy.py destroy_single
+
+--- MULTI-INSTANCE ---
+
+  # 0. Set Learner Lab credentials (same as above)
+  # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, aws.instance_type_worker)
+  # 2. Download and split dataset
   python scripts/download_femnist.py
   python scripts/split_dataset.py
 
@@ -37,17 +89,45 @@ Workflow
   # 7. Destroy all instances to stop billing (IMPORTANT: do this after every session)
   python scripts/aws_deploy.py destroy
 
-  # --- Resuming after a Learner Lab session restart ---
-  # When a new lab session starts, EC2 instances are restarted with NEW public IPs.
-  # Run 'resume' to refresh Terraform state before using status/logs/collect:
-  python scripts/aws_deploy.py resume
+  # --- If the Learner Lab session expired while instances were still running ---
+  #
+  # The Learner Lab has a ~4h session limit. If it expires before you run destroy,
+  # AWS stops all instances automatically. Data on disk (metrics.csv, dataset
+  # partitions) survives on EBS. But Docker containers are stopped and do not
+  # restart automatically (workers have no restart policy).
+  #
+  # When you start a new session, all instances restart with NEW public IPs.
+  # resume updates the Terraform state so the new IPs are known.
+  #
+  # Then, depending on what happened:
+  #
+  #   Case A — training had already finished before the session expired:
+  #     python scripts/aws_deploy.py resume    # prints new IPs for all instances
+  #     python scripts/aws_deploy.py collect   # SCP metrics.csv from each worker
+  #     python scripts/aggregate_metrics.py
+  #     python scripts/save_experiment.py <name>
+  #     python scripts/aws_deploy.py destroy
+  #
+  #   Case B — training was still running when the session expired (model state lost,
+  #            no checkpointing — training must restart from round 1):
+  #     python scripts/aws_deploy.py resume    # prints new IPs
+  #     python scripts/aws_deploy.py deploy    # rebuild images, restart containers
+  #     # ... wait for training to finish ...
+  #     python scripts/aws_deploy.py collect
+  #     python scripts/aws_deploy.py destroy
 
 Usage
 -----
   python scripts/aws_deploy.py <command> [args]
 
-Commands
---------
+Commands — single EC2
+---------------------
+  provision_single   Create one EC2 instance via Terraform (docker-compose mode)
+  destroy_single     Terminate the single EC2 instance
+  resume_single      Refresh Terraform state after a session restart (IP changed)
+
+Commands — multi-instance
+-------------------------
   provision   Create EC2 instances and security group via Terraform
   deploy      Build Docker images, upload dataset partitions, start containers
   collect     Download metrics.csv (and test_result.json) from each worker
@@ -70,9 +150,10 @@ from pathlib import Path
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).parent.parent
-TERRAFORM_DIR = PROJECT_ROOT / "terraform"
-DATA_ROOT = PROJECT_ROOT / "data" / "femnist"
+PROJECT_ROOT         = Path(__file__).parent.parent
+TERRAFORM_DIR        = PROJECT_ROOT / "terraform"
+TERRAFORM_SINGLE_DIR = PROJECT_ROOT / "terraform" / "single"
+DATA_ROOT            = PROJECT_ROOT / "data" / "femnist"
 
 SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
@@ -110,16 +191,16 @@ def _scp_from(ip: str, key_path: str, remote: str, local: Path, *, recursive: bo
 
 
 # ---------------------------------------------------------------------------
-# Helpers: Terraform
+# Helpers: Terraform (dir-parametric so multi and single can share them)
 # ---------------------------------------------------------------------------
 
-def _terraform(*args):
-    subprocess.run(["terraform", f"-chdir={TERRAFORM_DIR}", *args], cwd=PROJECT_ROOT, check=True)
+def _terraform(terraform_dir: Path, *args):
+    subprocess.run(["terraform", f"-chdir={terraform_dir}", *args], cwd=PROJECT_ROOT, check=True)
 
 
-def _terraform_output() -> dict:
+def _terraform_output(terraform_dir: Path) -> dict:
     result = subprocess.run(
-        ["terraform", f"-chdir={TERRAFORM_DIR}", "output", "-json"],
+        ["terraform", f"-chdir={terraform_dir}", "output", "-json"],
         cwd=PROJECT_ROOT, capture_output=True, text=True, check=True,
     )
     raw = json.loads(result.stdout)
@@ -184,19 +265,122 @@ def _build_on_instance(ip: str, key_path: str, archive: str, role: str):
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# Commands — single EC2
+# ---------------------------------------------------------------------------
+
+def cmd_provision_single(cfg: dict):
+    """Create one EC2 instance via Terraform (single-EC2 / docker-compose mode).
+
+    Docker is installed automatically via user_data; this command waits until
+    the instance is SSH-reachable and Docker is ready before returning.
+    """
+    aws_cfg = cfg.get("aws", {})
+    key_path = os.path.expanduser(aws_cfg.get("key_path", "~/Downloads/labsuser.pem"))
+
+    tfvars = {
+        "key_name":           aws_cfg.get("key_name", "vockey"),
+        "region":             aws_cfg.get("region", "us-east-1"),
+        "availability_zone":  aws_cfg.get("availability_zone", "us-east-1a"),
+        "instance_type":      aws_cfg.get("instance_type_single", "t3.large"),
+        "volume_size":        aws_cfg.get("volume_size_single", 20),
+    }
+    tfvars_path = TERRAFORM_SINGLE_DIR / "terraform.tfvars"
+    with open(tfvars_path, "w") as f:
+        for k, v in tfvars.items():
+            f.write(f'{k} = "{v}"\n' if isinstance(v, str) else f"{k} = {v}\n")
+    print(f"Written {tfvars_path}")
+
+    _terraform(TERRAFORM_SINGLE_DIR, "init")
+    _terraform(TERRAFORM_SINGLE_DIR, "apply", "-auto-approve")
+
+    out = _terraform_output(TERRAFORM_SINGLE_DIR)
+    ip  = out["public_ip"]
+    print(f"\nInstance: {ip}  (private {out['private_ip']})")
+
+    print("Waiting for SSH + Docker to be ready...")
+    if _wait_for_docker(ip, key_path):
+        print(f"  {ip}: ready")
+    else:
+        print(f"  WARNING: instance may not be fully ready yet — wait a moment before connecting.")
+
+    print(f"\nNext steps:")
+    print(f"  scp -r . ubuntu@{ip}:~/project")
+    print(f"  ssh -i {key_path} ubuntu@{ip}")
+    print(f"    cd ~/project")
+    print(f"    pip install -r requirements.debug.txt")
+    print(f"    docker compose up --build")
+
+
+def cmd_destroy_single():
+    """Terminate the single EC2 instance and remove its security group."""
+    _terraform(TERRAFORM_SINGLE_DIR, "destroy", "-auto-approve")
+
+
+def cmd_resume_single():
+    """Refresh Terraform state after a Learner Lab session restart (single EC2).
+
+    The Learner Lab has a ~4h session limit. To avoid expiry during a long run,
+    click "Start Lab" again before the timer reaches 0:00 to renew the session —
+    this makes resume_single unnecessary.
+
+    If the session expires before destroy_single is run, AWS stops the instance
+    automatically — data on EBS (metrics.csv, dataset) survives, but Docker
+    containers are stopped.
+
+    When a new session starts and the instance restarts, it gets a NEW public IP.
+    This command syncs the Terraform state file so the new IP is known.
+
+    After this command, check whether training had finished (Case A) or not (Case B):
+
+      Case A — training finished:
+        ssh ubuntu@<new_ip> "cd ~/project && python scripts/aggregate_metrics.py"
+        python scripts/aws_deploy.py destroy_single
+
+      Case B — training was mid-run (model state lost, no checkpointing):
+        ssh ubuntu@<new_ip> "cd ~/project && docker compose up"  # restart from round 1
+        python scripts/aws_deploy.py destroy_single
+    """
+    print("Refreshing Terraform state for single EC2 instance...")
+    _terraform(TERRAFORM_SINGLE_DIR, "apply", "-refresh-only", "-auto-approve")
+    out = _terraform_output(TERRAFORM_SINGLE_DIR)
+    print(f"\nInstance: {out['public_ip']}  (private {out['private_ip']})")
+
+
+# ---------------------------------------------------------------------------
+# Commands — multi-instance
 # ---------------------------------------------------------------------------
 
 def cmd_resume():
-    """Refresh Terraform state after a Learner Lab session restart.
+    """Refresh Terraform state after a Learner Lab session restart (multi-instance).
 
-    When a lab session ends and restarts, EC2 instances are stopped and
-    restarted with new public IPv4 addresses. This command syncs Terraform
-    state with the actual AWS state so that status/logs/collect use correct IPs.
+    The Learner Lab has a ~4h session limit. To avoid expiry during a long run,
+    click "Start Lab" again before the timer reaches 0:00 to renew the session —
+    this makes resume unnecessary.
+
+    If the session expires before destroy is run, AWS stops all instances
+    automatically — data on EBS (metrics.csv, dataset partitions) survives,
+    but Docker containers are stopped (workers have no restart policy).
+
+    When a new session starts and instances restart, they get NEW public IPs.
+    This command syncs the Terraform state file so the new IPs are known.
+    It does not change anything on AWS and does not restart containers.
+
+    After this command, check whether training had finished (Case A) or not (Case B):
+
+      Case A — training finished before the session expired:
+        python scripts/aws_deploy.py collect   # metrics.csv is on disk, SCP works
+        python scripts/aggregate_metrics.py
+        python scripts/aws_deploy.py destroy
+
+      Case B — training was mid-run (model state in RAM was lost, no checkpointing):
+        python scripts/aws_deploy.py deploy    # re-upload source, restart containers
+        # training restarts from round 1
+        python scripts/aws_deploy.py collect
+        python scripts/aws_deploy.py destroy
     """
     print("Refreshing Terraform state (public IPs may have changed after session restart)...")
-    _terraform("apply", "-refresh-only", "-auto-approve")
-    out = _terraform_output()
+    _terraform(TERRAFORM_DIR, "apply", "-refresh-only", "-auto-approve")
+    out = _terraform_output(TERRAFORM_DIR)
     print(f"\nRegistry : {out['registry_public_ip']}  (private {out['registry_private_ip']})")
     for i, (pub, priv) in enumerate(zip(out["worker_public_ips"], out["worker_private_ips"])):
         print(f"Worker {i:2d}: {pub}  (private {priv})")
@@ -226,6 +410,9 @@ def cmd_provision(cfg: dict):
         "num_workers":            num_workers,
         "instance_type_worker":   aws_cfg.get("instance_type_worker", "t3.small"),
         "instance_type_registry": aws_cfg.get("instance_type_registry", "t3.micro"),
+        "volume_size_worker":     aws_cfg.get("volume_size_worker", 20),
+        "volume_size_registry":   aws_cfg.get("volume_size_registry", 8),
+        "availability_zone":      aws_cfg.get("availability_zone", "us-east-1a"),
         "key_name":               aws_cfg.get("key_name", "vockey"),
         "region":                 aws_cfg.get("region", "us-east-1"),
         "registry_port":          net_cfg["registry_port"],
@@ -238,10 +425,10 @@ def cmd_provision(cfg: dict):
             f.write(f'{k} = "{v}"\n' if isinstance(v, str) else f"{k} = {v}\n")
     print(f"Written {tfvars_path}")
 
-    _terraform("init")
-    _terraform("apply", "-auto-approve")
+    _terraform(TERRAFORM_DIR, "init")
+    _terraform(TERRAFORM_DIR, "apply", "-auto-approve")
 
-    out = _terraform_output()
+    out = _terraform_output(TERRAFORM_DIR)
     print(f"\nRegistry : {out['registry_public_ip']}  (private {out['registry_private_ip']})")
     for i, (pub, priv) in enumerate(zip(out["worker_public_ips"], out["worker_private_ips"])):
         print(f"Worker {i:2d}: {pub}  (private {priv})")
@@ -258,7 +445,7 @@ def cmd_deploy(cfg: dict):
     reg_port    = net_cfg["registry_port"]
     img_source  = aws_cfg.get("image_source", "build")
 
-    out          = _terraform_output()
+    out          = _terraform_output(TERRAFORM_DIR)
     reg_pub      = out["registry_public_ip"]
     reg_priv     = out["registry_private_ip"]
     worker_pubs  = out["worker_public_ips"]
@@ -384,7 +571,7 @@ def cmd_collect(cfg: dict):
     key_path = os.path.expanduser(aws_cfg["key_path"])
     num_workers = net_cfg["num_workers"]
 
-    out         = _terraform_output()
+    out         = _terraform_output(TERRAFORM_DIR)
     worker_pubs = out["worker_public_ips"]
 
     print("Collecting metrics...")
@@ -412,7 +599,7 @@ def cmd_status(cfg: dict):
     aws_cfg  = cfg.get("aws", {})
     key_path = os.path.expanduser(aws_cfg["key_path"])
 
-    out      = _terraform_output()
+    out      = _terraform_output(TERRAFORM_DIR)
     all_ips  = [out["registry_public_ip"]] + out["worker_public_ips"]
     labels   = ["registry"] + [f"worker_{i}" for i in range(len(out["worker_public_ips"]))]
 
@@ -429,7 +616,7 @@ def cmd_logs(cfg: dict, worker_id: str):
     aws_cfg  = cfg.get("aws", {})
     key_path = os.path.expanduser(aws_cfg["key_path"])
 
-    out = _terraform_output()
+    out = _terraform_output(TERRAFORM_DIR)
     if worker_id == "registry":
         ip        = out["registry_public_ip"]
         container = "fl-registry"
@@ -445,7 +632,7 @@ def cmd_logs(cfg: dict, worker_id: str):
 
 def cmd_destroy():
     """Terminate all EC2 instances and remove the security group."""
-    _terraform("destroy", "-auto-approve")
+    _terraform(TERRAFORM_DIR, "destroy", "-auto-approve")
 
 
 # ---------------------------------------------------------------------------
@@ -464,17 +651,24 @@ def _check_terraform():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AWS multi-instance FL deployment orchestrator",
+        description="AWS FL deployment orchestrator (single EC2 and multi-instance)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("provision", help="Create EC2 instances via Terraform")
+
+    # Single EC2 commands
+    sub.add_parser("provision_single", help="Create one EC2 instance via Terraform (docker-compose mode)")
+    sub.add_parser("destroy_single",   help="Terminate the single EC2 instance")
+    sub.add_parser("resume_single",    help="Refresh state after a session restart (single EC2)")
+
+    # Multi-instance commands
+    sub.add_parser("provision", help="Create EC2 instances via Terraform (multi-instance mode)")
     sub.add_parser("deploy",    help="Build images, upload data, start containers")
     sub.add_parser("collect",   help="Download metrics from all workers")
     sub.add_parser("status",    help="Show container status on all instances")
     sub.add_parser("destroy",   help="Terminate all EC2 instances")
-    sub.add_parser("resume",    help="Refresh state after a Learner Lab session restart (IPs change)")
+    sub.add_parser("resume",    help="Refresh state after a Learner Lab session restart (multi-instance)")
     p = sub.add_parser("logs",  help="Tail logs from a worker or registry")
     p.add_argument("id", nargs="?", default="0", help="Worker ID or 'registry' (default: 0)")
 
@@ -482,13 +676,16 @@ def main():
     _check_terraform()
     cfg = _load_config()
 
-    if   args.command == "provision": cmd_provision(cfg)
-    elif args.command == "deploy":    cmd_deploy(cfg)
-    elif args.command == "collect":   cmd_collect(cfg)
-    elif args.command == "status":    cmd_status(cfg)
-    elif args.command == "destroy":   cmd_destroy()
-    elif args.command == "resume":    cmd_resume()
-    elif args.command == "logs":      cmd_logs(cfg, args.id)
+    if   args.command == "provision_single": cmd_provision_single(cfg)
+    elif args.command == "destroy_single":   cmd_destroy_single()
+    elif args.command == "resume_single":    cmd_resume_single()
+    elif args.command == "provision":        cmd_provision(cfg)
+    elif args.command == "deploy":           cmd_deploy(cfg)
+    elif args.command == "collect":          cmd_collect(cfg)
+    elif args.command == "status":           cmd_status(cfg)
+    elif args.command == "destroy":          cmd_destroy()
+    elif args.command == "resume":           cmd_resume()
+    elif args.command == "logs":             cmd_logs(cfg, args.id)
 
 
 if __name__ == "__main__":
