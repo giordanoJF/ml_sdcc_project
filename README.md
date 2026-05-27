@@ -4,7 +4,7 @@
 
 - Docker + Docker Compose
 - Python 3.11+
-- Terraform (only for AWS multi-instance deploy)
+- Terraform (for both AWS single-EC2 and multi-instance deploy)
 
 ```bash
 pip install -r requirements.debug.txt
@@ -56,8 +56,34 @@ python scripts/save_experiment.py <name>   # e.g. fanout_3, lr_1e-3, baseline
 # Archives config + metrics to results/<timestamp>_<name>/  and cleans working dir.
 ```
 
-For **single EC2**: SSH into the instance, upload the project
-(`scp -r . ubuntu@<ip>:~/project`), then run the same commands above.
+For **single EC2** — Terraform handles instance creation and Docker install automatically:
+
+```bash
+# Each session: export credentials from Learner Lab panel
+# (AWS Academy → Start Lab → AWS Details → Show → copy the three values below)
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...
+
+# Edit config.yaml: aws.key_name, aws.key_path, aws.instance_type_single (default t3.large)
+# One-time: install Terraform — https://developer.hashicorp.com/terraform/install
+
+python scripts/aws_deploy.py provision_single   # create EC2 instance, wait for Docker ready
+
+# Follow the printed instructions (scp + ssh), then on the EC2 host:
+scp -r . ubuntu@<ip>:~/project
+ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
+  cd ~/project
+  pip install -r requirements.debug.txt          # for analysis scripts (run on host, not in container)
+  docker compose up --build
+  python scripts/aggregate_metrics.py
+  python scripts/save_experiment.py <name>
+
+python scripts/aws_deploy.py destroy_single     # IMPORTANT: stop billing
+
+# If the lab session restarted (instance has new public IP):
+python scripts/aws_deploy.py resume_single
+```
 
 **Experiment workflow:**
 - *Phase 1 — hyperparameter search*: fix `num_workers` (e.g. 3), vary one parameter at a time, repeat the two commands above.
@@ -72,12 +98,13 @@ See `report.md` section 11.1.1 for detailed per-step tables (who does what, on w
 
 ```bash
 # One-time prerequisites
-# - us-east-1: use the pre-existing "vockey" key pair — AWS Details → Download PEM
-# - us-west-2: create a new key pair in EC2 Console
-# Edit config.yaml: aws.key_name, aws.key_path
-# Install Terraform: https://developer.hashicorp.com/terraform/install
+# - Install Terraform: https://developer.hashicorp.com/terraform/install
+# - Key pair: us-east-1 → use "vockey" (AWS Details → Download PEM → ~/Downloads/labsuser.pem)
+#             us-west-2 → create a new key pair in EC2 Console
+# - Edit config.yaml: aws.key_name, aws.key_path
 
-# Each session: export credentials from AWS Academy panel
+# Each session: export credentials from Learner Lab panel
+# (AWS Academy → Start Lab → AWS Details → Show → copy the three values below)
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_SESSION_TOKEN=...

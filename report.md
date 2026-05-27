@@ -1664,7 +1664,7 @@ Macchina locale (orchestratore)
                         comunicazione via IP privati
 ```
 
-Ogni worker registra il proprio **IP privato** come indirizzo gRPC (variabile `MY_HOST`). Le connessioni inter-worker rimangono all'interno della VPC, senza uscire su Internet: latenza più bassa, nessun costo di trasferimento dati. L'orchestratore (macchina locale) accede alle istanze via SSH tramite i loro IP pubblici solo per deploy, monitoring e raccolta metriche.
+Ogni worker registra il proprio **IP privato** come indirizzo gRPC (variabile `MY_HOST`). Le connessioni inter-worker rimangono all'interno della VPC, senza uscire su Internet: latenza più bassa e nessun costo di trasferimento dati. Tutte le istanze sono pinate alla **stessa Availability Zone** (parametro `aws.availability_zone` in `config.yaml`): il traffico IP privato intra-AZ è gratuito in AWS, mentre il traffico cross-AZ costa $0.01/GB per direzione — con gossip_fanout=3 e 200 round l'importo sarebbe ~$0.33 su 8 worker, evitabile a costo zero. L'orchestratore (macchina locale) accede alle istanze via SSH tramite i loro IP pubblici solo per deploy, monitoring e raccolta metriche.
 
 #### Provisioning con Terraform
 
@@ -1738,23 +1738,41 @@ Il Learner Lab impone limiti precisi che determinano le scelte architetturali e 
 
 **Scelta delle istanze**
 
-Per i worker è stato scelto `t3.small` (2 vCPU, 2 GB RAM):
-- Il DataLoader di PyTorch carica i dati in modo lazy (un batch alla volta), quindi l'utilizzo RAM non dipende dalla dimensione del dataset su disco — `t3.small` è sufficiente anche con `--sf 1.0`
-- Con batch size > 64 o modelli più grandi, preferire `t3.medium` (2 vCPU, 4 GB RAM) per maggiore margine
-- Entrambi rientrano nei tipi supportati e nel budget
+Per i worker è stato scelto `t3.small` (2 vCPU, 2 GB RAM). Il collo di bottiglia di RAM è il dataset: `FEMNISTDataset.__init__` converte l'intero split di training in tensori PyTorch in memoria all'avvio (non caricamento lazy). La stima per worker è circa:
 
-Per il registry `t3.micro` (2 vCPU, 1 GB RAM) è più che sufficiente: il Discovery Server è un server Flask in-memory con traffico minimo.
+| `num_workers` | Immagini/worker | Tensori train (float32) | PyTorch overhead | Totale |
+|:---:|:---:|:---:|:---:|:---:|
+| 3 | ~267k | ~830 MB | ~300 MB | ~1.1 GB |
+| 5 | ~160k | ~500 MB | ~300 MB | ~800 MB |
+| 8 | ~100k | ~310 MB | ~300 MB | ~610 MB |
 
-**Stima dei costi con budget $50**
+I pesi del modello sono trascurabili (~7 MB). `t3.small` (2 GB) è sufficiente per tutti i valori di `num_workers` con il dataset completo, con margine. Per batch size > 64 o modelli più grandi, `t3.medium` (4 GB) offre maggiore sicurezza.
 
-| Config | Costo/ora | 4h di training | Budget residuo su $50 |
-|---|---|---|---|
-| 5 worker t3.small + 1 t3.micro | ~$0.11 | ~$0.46 | >$49 |
-| 8 worker t3.small + 1 t3.micro | ~$0.18 | ~$0.71 | >$49 |
-| 5 worker t3.medium + 1 t3.micro | ~$0.21 | ~$0.86 | >$49 |
-| 8 worker t3.medium + 1 t3.micro | ~$0.34 | ~$1.37 | >$48 |
+Per il registry `t3.micro` (1 GB RAM) è più che sufficiente: il Discovery Server è un server Flask in-memory con traffico minimo.
 
-Il budget è generoso: anche con 20 run sperimentali da 4 ore con 8× t3.small, il costo totale è ~$14.
+**Voci di costo AWS**
+
+AWS addebita quattro voci distinte; tutte sono rilevanti per questo progetto:
+
+| Voce | Tariffa | Note |
+|---|---|---|
+| EC2 compute | $0.021/hr per t3.small, $0.042 per t3.medium | Solo istanze *running*; istanze *stopped* non addebitano compute |
+| **IPv4 pubblici** | **$0.005/hr per IP** (dal feb 2024) | Si applica a ogni istanza running; spesso dimenticato — aggiunge ~25% al compute su 9 istanze |
+| EBS (disco) | $0.08/GB/mese (gp3) | Addebitato anche su istanze *stopped*; 20 GB ≈ $0.002/hr; rischio se si dimentica `destroy` |
+| Trasferimento dati | $0.01/GB tra AZ diverse (IP privati) | Gratis nella stessa AZ; il deployment pinna tutte le istanze alla stessa AZ per azzerare questo costo |
+
+I worker comunicano via IP privati VPC (non Internet), quindi non si applicano tariffe egress Internet ($0.09/GB). L'orchestratore locale scarica solo i CSV di metriche (KB totali).
+
+**Stima costo totale per configurazione (run da 30 minuti)**
+
+| Config | Compute | IPv4 | EBS | Totale/run | 25 run |
+|---|---|---|---|---|---|
+| 3 worker t3.small + 1 t3.micro | $0.018 | $0.010 | $0.001 | ~$0.029 | ~$0.73 |
+| 5 worker t3.small + 1 t3.micro | $0.028 | $0.015 | $0.002 | ~$0.045 | ~$1.13 |
+| 8 worker t3.small + 1 t3.micro | $0.043 | $0.023 | $0.003 | ~$0.069 | ~$1.73 |
+| 8 worker t3.medium + 1 t3.micro | $0.085 | $0.023 | $0.003 | ~$0.111 | ~$2.78 |
+
+Il budget Learner Lab è di $100: l'intera campagna sperimentale (grid search iperparametri + scalabilità + test set) rimane abbondantemente sotto i $10. Il rischio principale non è il costo per run, ma dimenticare `destroy` e lasciare le istanze accese tra sessioni — l'EBS continua ad accumularsi finché le istanze non vengono terminate.
 
 **Key pair e accesso SSH**
 
@@ -1781,6 +1799,8 @@ python scripts/aws_deploy.py resume   # → terraform apply -refresh-only
 Questo aggiorna lo stato di Terraform con i nuovi IP pubblici senza modificare l'infrastruttura. Gli **IP privati** non cambiano tra stop/start e continuano a funzionare per la comunicazione interna tra worker.
 
 3. **Le istanze ripartono automaticamente alla sessione successiva** e riprendono a consumare budget. Le istanze che erano in esecuzione quando la sessione è terminata vengono riavviate automaticamente all'inizio della sessione successiva — anche se non si intende usarle. **Distruggerle** (`destroy`) è il modo sicuro per evitare spese impreviste.
+
+**Estendere la sessione durante il training.** La sessione dura 4 ore, ma può essere estesa cliccando nuovamente **Start Lab** *prima* che il timer raggiunga 0:00. Se si avvia un training lungo, ricordarsi di rinnovare la sessione a metà run evita del tutto la situazione di sessione scaduta e rende `resume` non necessario.
 
 **Budget monitoring — ritardo di 8-12 ore.** Il pannello del lab mostra il credito residuo aggiornato da AWS Budgets, che si aggiorna tipicamente ogni 8-12 ore. Il saldo visualizzato può quindi non riflettere le spese più recenti. Non fare affidamento esclusivo su quel valore: stimare i costi a priori con la tabella sopra e distruggere le istanze al termine di ogni sessione.
 
@@ -1822,8 +1842,13 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 | `fault_injection` | `grpc_timeout_seconds` | `5.0` | Timeout massimo per ogni chiamata gRPC client |
 | `fault_injection` | `max_staleness` ($\Delta_{\max}$) | `10` | Round massimi di ritardo accettati dallo staleness check |
 | `aws` | `region` | `us-east-1` | Regione AWS; Learner Lab supporta `us-east-1` (default, con vockey) e `us-west-2` |
-| `aws` | `instance_type_worker` | `t3.small` | Tipo istanza EC2 per i worker (t3.small = 2 vCPU, 2 GB) |
-| `aws` | `instance_type_registry` | `t3.micro` | Tipo istanza EC2 per il registry (server Flask leggero) |
+| `aws` | `availability_zone` | `us-east-1a` | AZ di tutte le istanze; stesso AZ = traffico IP privato gratuito; cross-AZ = $0.01/GB |
+| `aws` | `instance_type_worker` | `t3.small` | Tipo istanza EC2 per i worker (multi-instance); t3.small (2 GB) regge tutti i `num_workers` |
+| `aws` | `instance_type_registry` | `t3.micro` | Tipo istanza EC2 per il registry (server Flask, <50 MB RAM) |
+| `aws` | `instance_type_single` | `t3.large` | Tipo istanza single-EC2; t3.large (8 GB) regge fino a 8 worker con dataset completo |
+| `aws` | `volume_size_worker` | `20` | Disco EBS worker in GB (multi-instance); range consigliato: 15–30 GB |
+| `aws` | `volume_size_registry` | `8` | Disco EBS registry in GB; 8 GB sempre sufficiente (range: 8–15 GB) |
+| `aws` | `volume_size_single` | `20` | Disco EBS single-EC2 in GB; range consigliato: 20–30 GB |
 | `aws` | `key_name` | `vockey` | Nome della key pair EC2; in us-east-1 Learner Lab usa la `vockey` predefinita |
 | `aws` | `key_path` | `~/Downloads/labsuser.pem` | Path locale al `.pem` scaricato dal pannello AWS Details |
 | `aws` | `image_source` | `build` | `build` = docker build su EC2; `dockerhub` = docker pull |
@@ -1868,8 +1893,13 @@ fault_injection:
 
 aws:
   region: "us-east-1"                    # us-east-1 (vockey) or us-west-2
-  instance_type_worker: "t3.small"       # 2 vCPU, 2 GB — sufficient (DataLoader is lazy)
-  instance_type_registry: "t3.micro"     # lightweight Flask server
+  availability_zone: "us-east-1a"        # pin all instances to same AZ → free intra-AZ traffic
+  instance_type_worker: "t3.small"       # multi-instance: 2 vCPU, 2 GB — sufficient for all num_workers
+  instance_type_registry: "t3.micro"     # lightweight Flask server, <50 MB RAM
+  instance_type_single: "t3.large"       # single-EC2: 2 vCPU, 8 GB — handles up to 8 workers
+  volume_size_worker: 20                 # EBS per worker EC2 in GB (range: 15–30)
+  volume_size_registry: 8               # EBS for registry EC2 in GB (range: 8–15)
+  volume_size_single: 20                 # EBS for single-EC2 in GB (range: 20–30)
   # IMPORTANT: num_workers + 1 <= 9 (Learner Lab hard limit)
   key_name: "vockey"                     # pre-existing key pair in us-east-1
   key_path: "~/Downloads/labsuser.pem"   # downloaded from AWS Details panel
@@ -2054,33 +2084,89 @@ python scripts/save_experiment.py <nome>
 
 ### 11.3 Modalità Singola EC2
 
-Il workflow è **identico al locale** — stessi script, stessa immagine Docker, stessa rete interna. La differenza è solo dove girano i container.
+Il workflow è **identico al locale** — stessi script, stessa immagine Docker, stessa rete Docker interna. La differenza è solo dove girano i container. Come per la modalità multi-instance, l'istanza è gestita tramite **Terraform** (`terraform/single/`): creazione, installazione di Docker e distruzione avvengono automaticamente senza toccare la console AWS.
+
+**Prerequisiti:**
+- Sessione Learner Lab attiva (indicatore verde nel pannello AWS Academy)
+- Credenziali AWS esportate nella shell locale (pannello AWS Academy → AWS Details → Show):
+  ```bash
+  export AWS_ACCESS_KEY_ID=...
+  export AWS_SECRET_ACCESS_KEY=...
+  export AWS_SESSION_TOKEN=...
+  ```
+- Key pair: `vockey` (us-east-1) o nuova key pair in us-west-2; PEM scaricato da AWS Details → Download PEM
+- Terraform installato sulla macchina locale
+- `config.yaml`: parametri `aws.*` rilevanti per questa modalità:
+
+  | Parametro | Default | Note |
+  |---|:---:|---|
+  | `aws.key_name` | `vockey` | Nome key pair EC2 |
+  | `aws.key_path` | `~/Downloads/labsuser.pem` | Path locale al PEM |
+  | `aws.region` | `us-east-1` | Regione AWS |
+  | `aws.availability_zone` | `us-east-1a` | AZ dell'istanza; non influisce su costi (tutto il traffico è sulla rete Docker interna) |
+  | `aws.instance_type_single` | `t3.large` | Tipo istanza; t3.large (8 GB) regge fino a 8 worker con dataset completo |
+  | `aws.volume_size_single` | `20` | Disco EBS in GB; 20 GB copre tutti i casi; aumentare a 30 GB con 8 worker e dataset completo |
+
+> **Nota:** `aggregate_metrics.py` e `save_experiment.py` girano direttamente **sull'host EC2** (fuori dai container) e richiedono `pip install -r requirements.debug.txt` sull'host.
 
 **Chi esegue cosa e in che ordine:**
 
 | Passo | Chi | Dove | Comando |
 |---|---|---|---|
 | Setup (passi 1–3) | Operatore | **macchina locale** | `download_femnist.py`, `split_dataset.py`, `generate_compose.py` |
+| `provision_single` | `aws_deploy.py` + Terraform | **locale → AWS** | crea 1 istanza EC2 (Ubuntu 22.04, `t3.large`), installa Docker via `user_data`, attende SSH ready |
 | Upload progetto | Operatore | **locale → EC2** | `scp -r . ubuntu@<ip>:~/project` |
+| Dipendenze host | Operatore (via SSH) | **EC2** | `pip install -r requirements.debug.txt` |
 | Avvio | Operatore (via SSH) | **EC2** | `docker compose up --build` |
 | Training | Container (N+1) | **EC2** | automatico, identico al caso locale |
-| Download metriche | Operatore | **EC2 → locale** | `scp -r ubuntu@<ip>:~/project/data/femnist ./data/` |
-| Analisi | Operatore | **macchina locale** | `aggregate_metrics.py`, `save_experiment.py` |
+| Analisi | Operatore (via SSH) | **EC2** | `aggregate_metrics.py`, `save_experiment.py` |
+| `destroy_single` | `aws_deploy.py` + Terraform | **locale → AWS** | termina l'istanza EC2, rimuove il security group |
 
 ```bash
-# Upload dell'intero progetto (inclusa la cartella data/ già partizionata)
-scp -r . ubuntu@<ip>:~/project
+# Esportare le credenziali (ogni sessione Learner Lab)
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...
 
-# SSH nell'istanza e avvio
-ssh ubuntu@<ip>
+# Provisioning: Terraform crea l'istanza EC2 e installa Docker automaticamente
+python scripts/aws_deploy.py provision_single
+
+# Upload del progetto (inclusa la cartella data/ già partizionata) e avvio
+scp -r . ubuntu@<ip>:~/project
+ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
 cd ~/project
+
+# Installa dipendenze host (una sola volta per istanza) — servono per gli script di analisi
+pip install -r requirements.debug.txt
+
+# Avvio training
 docker compose up --build
 
-# A fine training, dall'operatore locale: recupero metriche
-scp -r ubuntu@<ip>:~/project/data/femnist/worker_* ./data/femnist/
+# A fine training: analisi direttamente sull'host EC2
 python scripts/aggregate_metrics.py
 python scripts/save_experiment.py <nome>
+
+# Distruggere l'istanza per fermare la fatturazione
+python scripts/aws_deploy.py destroy_single
 ```
+
+**Sessione scaduta durante il training (`resume_single`):** la sessione dura 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo *prima* che il timer scada — questo è il modo più semplice per evitare interruzioni su run lunghi. Se la sessione scade comunque prima di `destroy_single`, AWS stoppa l'istanza — i dati su disco (dataset, `metrics.csv` parziale) sopravvivono, ma i container Docker si fermano. Alla riapertura della sessione l'istanza riparte con un nuovo IP pubblico:
+
+```bash
+python scripts/aws_deploy.py resume_single   # aggiorna tfstate, stampa nuovo IP
+
+# Caso A — training finito: analizza e distruggi
+ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
+  cd ~/project && python scripts/aggregate_metrics.py && python scripts/save_experiment.py <nome>
+python scripts/aws_deploy.py destroy_single
+
+# Caso B — training era in corso (stato modello perso, nessun checkpoint): riparte dal round 1
+ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
+  cd ~/project && docker compose up
+python scripts/aws_deploy.py destroy_single
+```
+
+**Security group:** solo la porta 22 (SSH) deve essere esposta verso l'esterno. Le comunicazioni gRPC tra worker e registry avvengono sulla rete bridge interna di Docker — non richiedono regole ingress aggiuntive.
 
 ---
 
@@ -2088,11 +2174,30 @@ python scripts/save_experiment.py <nome>
 
 Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra macchine fisicamente separate, rendendo le misure di tempo di convergenza significative.
 
-**Prerequisiti una-tantum:**
-- Credenziali AWS Learner Lab (ogni sessione): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
-- Key pair: in us-east-1 usare la `vockey` predefinita (pannello AWS Details → Download PEM → `~/Downloads/labsuser.pem`); in us-west-2 creare una nuova key pair
-- Terraform installato sulla macchina locale
-- `config.yaml`: `aws.key_name`, `aws.key_path` impostati correttamente
+**Prerequisiti:**
+- **Sessione Learner Lab attiva** (indicatore verde nel pannello AWS Academy → Start Lab)
+- **Credenziali AWS** (da esportare all'inizio di ogni sessione Learner Lab): pannello AWS Academy → AWS Details → Show → copiare `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` ed esportarli nella shell locale:
+  ```bash
+  export AWS_ACCESS_KEY_ID=...
+  export AWS_SECRET_ACCESS_KEY=...
+  export AWS_SESSION_TOKEN=...
+  ```
+- **Key pair**: in us-east-1 usare la `vockey` predefinita (AWS Details → Download PEM → `~/Downloads/labsuser.pem`); in us-west-2 creare una nuova key pair dalla console EC2
+- **Terraform** installato sulla macchina locale
+- `config.yaml`: parametri `aws.*` rilevanti per questa modalità:
+
+  | Parametro | Default | Note |
+  |---|:---:|---|
+  | `aws.key_name` | `vockey` | Nome key pair EC2 |
+  | `aws.key_path` | `~/Downloads/labsuser.pem` | Path locale al PEM |
+  | `aws.region` | `us-east-1` | Regione AWS |
+  | `aws.availability_zone` | `us-east-1a` | AZ di tutte le istanze; intra-AZ è gratuito, cross-AZ costa $0.01/GB |
+  | `aws.instance_type_worker` | `t3.small` | Tipo istanza worker; t3.small (2 GB) è sufficiente per tutti i `num_workers` |
+  | `aws.instance_type_registry` | `t3.micro` | Tipo istanza registry; t3.micro (1 GB) è sempre sufficiente |
+  | `aws.volume_size_worker` | `20` | Disco EBS worker in GB; range consigliato: 15–30 GB |
+  | `aws.volume_size_registry` | `8` | Disco EBS registry in GB; 8 GB è ampiamente sufficiente |
+
+- Le istanze e Docker **non vanno creati manualmente**: `aws_deploy.py provision` invoca Terraform che crea le istanze EC2 e installa Docker automaticamente via `user_data`
 
 **Chi esegue cosa e in che ordine:**
 
@@ -2137,14 +2242,56 @@ python scripts/save_experiment.py <nome>    # es. scalability_aws_N5
 
 # Distruggere le istanze per fermare la fatturazione
 python scripts/aws_deploy.py destroy
-
-# Se la sessione Learner Lab è ripartita (IP pubblici cambiati):
-python scripts/aws_deploy.py resume         # aggiorna stato Terraform senza modificare infrastruttura
 ```
 
 **Dove finiscono le metriche:**
 
 Durante il training ogni worker scrive in `/app/data/femnist/` dentro il suo container → per bind mount in `/home/ubuntu/data/femnist/worker_i/` sull'EC2. Il comando `collect` trasferisce questi file sulla macchina locale in `data/femnist/worker_i/`, esattamente dove se li aspetta `aggregate_metrics.py` — il passo di analisi è quindi identico per tutte e tre le modalità.
+
+**Sessione Learner Lab scaduta durante il training (`resume`):**
+
+La sessione dura circa 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo prima che il timer scada — il modo più semplice per non interrompere un training lungo. Se la sessione scade comunque prima di `destroy`, AWS **stoppa** automaticamente le istanze (non le termina: i dati su disco EBS sopravvivono). Alla riapertura della sessione, le istanze vengono riavviate con **nuovi IP pubblici**. Il file `terraform.tfstate` contiene ancora i vecchi IP, quindi i comandi `collect`, `status` e `logs` si connetterebbero agli indirizzi sbagliati.
+
+`resume` esegue `terraform apply -refresh-only`: interroga AWS, aggiorna il file di stato con i nuovi IP e li stampa. Non modifica l'infrastruttura e non riavvia nessun container.
+
+Esempio concreto:
+
+```
+Lunedì 14:00  provision + deploy → training avviato
+               worker_0: 54.1.2.3 | worker_1: 54.4.5.6 | registry: 54.7.8.9
+               (salvati in terraform.tfstate)
+
+Lunedì 18:00  sessione Learner Lab scade (limite 4h)
+               → AWS stoppa le istanze automaticamente
+               → container Docker fermati; metrics.csv parziale su disco (EBS)
+
+Martedì       nuova sessione → istanze riavviate con NUOVI IP
+               worker_0: 18.9.8.7 | worker_1: 18.2.3.4 | registry: 18.5.6.7
+               (terraform.tfstate dice ancora i vecchi IP)
+
+$ python scripts/aws_deploy.py resume
+  → aggiorna tfstate | stampa: worker_0: 18.9.8.7, worker_1: 18.2.3.4, ...
+```
+
+Da qui si procede in base a cosa è successo durante la sessione scaduta:
+
+```bash
+# Caso A — il training era già finito prima della scadenza
+#          (metrics.csv completo su disco, collect funziona normalmente)
+python scripts/aws_deploy.py collect
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <nome>
+python scripts/aws_deploy.py destroy
+
+# Caso B — il training era ancora in corso (stato del modello in RAM: perso)
+#          Non esiste checkpointing: il training deve ripartire dal round 1.
+python scripts/aws_deploy.py deploy    # re-upload sorgenti, riavvia container
+# ... aspetta fine training ...
+python scripts/aws_deploy.py collect
+python scripts/aws_deploy.py destroy
+```
+
+> Se si esegue sempre `destroy` prima che la sessione scada, `resume` non è mai necessario. È uno strumento di recupero per i casi in cui il training superi il limite di sessione.
 
 ---
 
