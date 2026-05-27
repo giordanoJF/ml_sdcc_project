@@ -757,9 +757,9 @@ I parametri del sistema si dividono in tre categorie con ruoli distinti:
 | Parametro | Candidati | Default | Effetto |
 |---|---|---|---|
 | `gossip_fanout` | 1, 2, 3, N-1 | 3 | Trade-off traffico/qualità aggregazione: fanout alto = più aggregazioni per round = convergenza più rapida ma volume di rete proporzionale |
-| `num_workers` | 3, 5, 10 | 3 | Dimensione delle partizioni locali e numero di peer disponibili per l'aggregazione |
+| `num_workers` | 3, 5, 8 | 3 | Dimensione delle partizioni locali e numero di peer disponibili per l'aggregazione |
 
-`gossip_fanout` è il parametro centrale del progetto: quantifica esattamente il trade-off traffico/convergenza che il sistema intende studiare, ed è il soggetto principale degli esperimenti comparativi. `num_workers` è invece fisso per ogni deployment — lo si varia solo nell'esperimento di scalabilità per misurare come il sistema si comporta al crescere della rete.
+`gossip_fanout` è il parametro centrale del progetto: quantifica esattamente il trade-off traffico/convergenza che il sistema intende studiare, ed è il soggetto principale degli esperimenti comparativi. `num_workers` è fisso per ogni deployment ed è trattato in due fasi distinte: durante la ricerca degli iperparametri (Esp. 3) rimane fisso a un valore medio (es. 3 o 5), per isolare l'effetto degli iperparametri ML; successivamente, nella fase di scalabilità (Esp. 4), la configurazione ottimale trovata viene mantenuta fissa e si varia solo `num_workers` (3 → 5 → 8) per misurare come l'accuracy e il tempo di convergenza cambiano con la dimensione della rete.
 
 **Parametri strutturali** — fissi per design, non si variano negli esperimenti:
 
@@ -788,14 +788,12 @@ La metrica principale per confrontare le configurazioni è la **mean val accurac
 
 #### Flusso di grid search
 
-**Fase 1 — Esplorazione veloce (5% del dataset)**
-
 ```bash
-python scripts/download_femnist.py --sf 0.05
+python scripts/download_femnist.py   # dataset completo (default, --sf 1.0)
 python scripts/split_dataset.py && python scripts/generate_compose.py
 ```
 
-Con il 5% (~170 scrittori) ogni run completa in pochi minuti anche su CPU. Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per ogni configurazione:
+Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per ogni configurazione:
 
 ```bash
 # 1. Modifica il parametro in config.yaml
@@ -817,7 +815,7 @@ Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worke
 **Fase 2 — Conferma sul dataset completo**
 
 ```bash
-python scripts/download_femnist.py --sf 1.0   # dataset completo
+python scripts/download_femnist.py             # dataset completo (default)
 python scripts/split_dataset.py && python scripts/generate_compose.py
 # Imposta la configurazione migliore trovata in Fase 1
 docker compose up --build
@@ -833,7 +831,7 @@ Se si vuole una stima non influenzata dalle decisioni di early stopping:
 
 ```bash
 # Imposta use_test_set: true in config.yaml
-python scripts/download_femnist.py --sf 1.0   # re-download necessario (--tf diverso)
+python scripts/download_femnist.py             # re-download necessario (--tf diverso)
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py
@@ -945,7 +943,7 @@ La metrica di scalabilità principale è: **come cambiano accuracy e tempo di co
 #   4. python scripts/aggregate_metrics.py
 #   5. Copiare/rinominare global_metrics.csv → results/global_metrics_2w.csv
 
-# Ripetere per num_workers = 3, 5, 10 ...
+# Ripetere per num_workers = 3, 5, 8 ...
 ```
 
 Le variabili di interesse per lo studio di scalabilità sono:
@@ -983,7 +981,7 @@ Fase 3 — Ricerca degli Iperparametri
   └── Obiettivo: trovare la configurazione ottimale
 
 Fase 4 — Analisi della Scalabilità
-  └── Esp. 4: variare num_workers (2, 3, 5, 10)
+  └── Esp. 4: variare num_workers (3, 5, 8) con config ottimale da Esp. 3
   └── Obiettivo: misurare come cambiano accuracy e costo al crescere dei nodi
 
 Fase 5 — Robustezza alla Fault Injection
@@ -1000,8 +998,8 @@ Fase 6 — Esperimento Finale (Dataset Completo)
 Prima di qualsiasi esperimento, verificare che il sistema funzioni correttamente su un subset piccolo.
 
 ```bash
-# 1. Scaricare il 5% del dataset (fast subset per tutti gli esperimenti di sviluppo)
-python scripts/download_femnist.py --sf 0.05
+# 1. Scaricare il dataset (completo per default; aggiungere --sf 0.05 solo per test rapidi)
+python scripts/download_femnist.py
 
 # 2. Configurare config.yaml: num_workers: 3, tutti i default
 python scripts/split_dataset.py
@@ -1020,7 +1018,7 @@ python scripts/aggregate_metrics.py
 
 Se tutto funziona correttamente, il sistema è pronto per gli esperimenti.
 
-**Nota:** Per tutti gli esperimenti di sviluppo (Fasi 1–5) usare `--sf 0.05`. Il dataset al 5% contiene circa 170 scrittori per split, sufficienti per osservare convergenza in decine di round invece che centinaia. Il tempo di esecuzione passa da ore a minuti.
+**Nota:** Tutti gli esperimenti usano il dataset completo (`--sf 1.0`, default). L'opzione `--sf 0.05` (5% del dataset, ~170 scrittori per split) è disponibile come scorciatoia per verifiche rapide di installazione o debugging del codice, ma non produce risultati rappresentativi da riportare.
 
 ### 7.3 Esperimento 1 — Baseline No-FL (Training in Isolamento)
 
@@ -1096,7 +1094,7 @@ Se `mean_accuracy` FL > `mean_accuracy` no-FL e `std_accuracy` FL < `std_accurac
 
 **Obiettivo:** trovare la configurazione ottimale degli iperparametri di training. Si varia un parametro alla volta mantenendo gli altri al valore dell'Esp. 2. La metrica di confronto è la `mean_accuracy` finale da `aggregate_metrics.py`.
 
-Tutti gli esperimenti di questa fase usano `--sf 0.05` e `total_rounds: 50` per velocità.
+Tutti gli esperimenti di questa fase usano il dataset completo (`--sf 1.0`, default). Se necessario velocizzare le iterazioni di sviluppo è possibile usare `--sf 0.05`, ma i risultati finali da riportare devono essere ottenuti su dataset completo.
 
 #### 3a — Learning Rate
 
@@ -1133,28 +1131,36 @@ Questo è il parametro che bilancia **qualità dell'aggregazione** vs **costo di
 
 Con M = N−1, ogni worker invia il modello a tutti gli altri ad ogni round. Con M = 1, la diffusione è più lenta ma il traffico è minimo.
 
-**Scelta della configurazione ottimale:** al termine di Esp. 3, selezionare la combinazione `(lr, H, M)` con la `mean_accuracy` più alta su `--sf 0.05`. Questa diventa la **configurazione fissa** per tutti gli esperimenti successivi.
+**Scelta della configurazione ottimale:** al termine di Esp. 3, selezionare la combinazione `(lr, H, M)` con la `mean_accuracy` più alta sul dataset completo. Questa diventa la **configurazione fissa** per tutti gli esperimenti successivi.
 
 ### 7.6 Esperimento 4 — Analisi della Scalabilità
 
-**Obiettivo:** misurare come le prestazioni del sistema cambiano al variare del numero di worker. Questo è il requisito sperimentale esplicito della traccia di progetto ("analisi della scalabilità").
+**Obiettivo:** misurare come le prestazioni del sistema cambiano al variare del numero di worker. Questo è il requisito sperimentale esplicito della traccia di progetto ("analisi della scalabilità"). L'esperimento presuppone che la configurazione ottimale sia già stata trovata in Esp. 3 con un valore di `num_workers` fisso (es. 3 o 5): qui si varia **solo** `num_workers`, tenendo fissi tutti gli altri parametri.
 
-**Configurazione:** usare la configurazione ottimale trovata in Esp. 3. Variare solo `num_workers`.
+> **Nota sul deploy:** per misurare il *tempo* di convergenza in modo significativo, questo esperimento va eseguito in modalità **AWS multi-instance** (`aws_deploy.py`) dove ogni worker gira su un'istanza EC2 separata con latenza di rete reale. In locale i worker comunicano via loopback e i tempi non sono confrontabili tra configurazioni diverse di N. La valutazione dell'accuracy è invece identica nei due ambienti.
 
 **Procedura per ogni valore di N:**
 ```bash
-# 1. Modificare num_workers in config.yaml
+# 1. Modificare num_workers in config.yaml (es. 3, poi 5, poi 8)
 # 2. Ripartizionare il dataset (obbligatorio ad ogni cambio di num_workers)
 python scripts/split_dataset.py
 python scripts/generate_compose.py
-# 3. Avviare e raccogliere risultati
+
+# Modalità locale (accuracy, non tempi reali):
 docker compose up --build
 python scripts/aggregate_metrics.py
-cp data/femnist/global_metrics.csv results/exp4_scalability_Nw.csv
-rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
+python scripts/save_experiment.py scalability_N3   # o N5, N8
+
+# Modalità AWS multi-instance (accuracy + tempi reali):
+python scripts/aws_deploy.py provision   # re-provisionare: il numero di istanze cambia
+python scripts/aws_deploy.py deploy
+python scripts/aws_deploy.py collect
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py scalability_aws_N3
+python scripts/aws_deploy.py destroy     # IMPORTANTE: distruggere prima di cambiare N
 ```
 
-**Valori di N da testare:** 2, 3, 5, 10 (e oltre se le risorse lo permettono su AWS).
+**Valori di N da testare:** 3, 5, 8 (massimo per AWS Learner Lab: 9 istanze totali, 1 usata dal registry).
 
 **Metriche di scalabilità da raccogliere e riportare:**
 
@@ -1194,7 +1200,7 @@ Con `crash_probability: 0.2` ogni worker ha una probabilità del 20% di crashare
 
 ```bash
 # 1. Scaricare il dataset completo (solo se non già presente)
-python scripts/download_femnist.py --sf 1.0
+python scripts/download_femnist.py
 
 # 2. Configurare la configurazione ottimale (da Esp. 3) + num_workers ottimale (da Esp. 4)
 #    + fault injection ai valori di default
@@ -1517,12 +1523,11 @@ ml_sdcc_project/
 ├── requirements.worker.txt   # Worker dependencies (PyTorch, gRPC, ...)
 ├── Dockerfile.registry       # Minimal image: no PyTorch, no grpcio
 ├── Dockerfile.worker         # Full image: PyTorch + gRPC + proto compilation
-├── docker-compose.yml        # [GENERATED] Local deployment — do not edit manually
-├── docker-compose.aws.yml    # [GENERATED] AWS EC2 deployment — do not edit manually
+├── docker-compose.yml        # [GENERATED] Local + Single EC2 deployment — do not edit manually
 ├── scripts/
 │   ├── download_femnist.py      # LEAF dataset download and preprocessing
 │   ├── split_dataset.py         # Splits dataset into per-worker partitions
-│   ├── generate_compose.py      # Generates compose files from config.yaml
+│   ├── generate_compose.py      # Generates docker-compose.yml from config.yaml
 │   └── aggregate_metrics.py     # Aggregates per-worker CSVs into global stats
 ├── core/
 │   ├── dataset.py               # LEAF data loading (no splitting logic)
@@ -1609,40 +1614,181 @@ Il meccanismo di retry in `register_worker()` — con `max_retries=10` tentativi
 
 ### 9.3 Gestione Dinamica del Numero di Worker
 
-Il numero di worker non è hardcoded nei compose file ma letto da `config.yaml`. Due script cooperano per mantenere il sistema coerente: `split_dataset.py` prepara i dati su host, `generate_compose.py` configura i container. I compose file sono **artefatti generati** e non vanno editati manualmente.
+Il numero di worker non è hardcoded nel compose file ma letto da `config.yaml`. Due script cooperano per mantenere il sistema coerente: `split_dataset.py` prepara i dati su host, `generate_compose.py` configura i container. Il compose file è un **artefatto generato** e non va editato manualmente.
 
 ```bash
 # Workflow per modificare il numero di worker:
 # 1. Modificare network.num_workers in config.yaml
 # 2. Rieseguire il partizionamento (sovrascrive le slice precedenti)
 python scripts/split_dataset.py
-# 3. Rigenerare i compose file
+# 3. Rigenerare il compose file
 python scripts/generate_compose.py
 # 4. Riavviare il sistema
 docker compose up --build
 ```
 
-`generate_compose.py` produce `docker-compose.yml` e `docker-compose.aws.yml` con il numero corretto di servizi. Il registry riceve `REGISTRY_PORT` come variabile d'ambiente, in modo che la porta su cui ascolta sia sempre coerente con quella configurata in `config.yaml`. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers` come variabili d'ambiente, e monta esclusivamente la propria partizione tramite **bind mount** Docker (`type: bind`, sintassi lunga esplicita) — isolamento dei dati garantito a livello di filesystem.
-
-In AWS, ogni worker ottiene anche una porta host distinta (`grpc_port + i`) per evitare conflitti nel caso di deployment su istanza singola (Opzione A).
+`generate_compose.py` produce `docker-compose.yml` con il numero corretto di servizi. Il registry riceve `REGISTRY_PORT` come variabile d'ambiente, in modo che la porta su cui ascolta sia sempre coerente con quella configurata in `config.yaml`. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers` come variabili d'ambiente, e monta esclusivamente la propria partizione tramite **bind mount** Docker (`type: bind`, sintassi lunga esplicita) — isolamento dei dati garantito a livello di filesystem.
 
 ### 9.4 Deploy su AWS EC2
 
-Il file `docker-compose.aws.yml` gestisce due modalità di deployment:
+Il sistema supporta tre modalità di deployment, tutte governate dal medesimo `config.yaml`:
 
-**Opzione A — Istanza singola**: tutti i container girano sullo stesso EC2. I worker si trovano tramite nomi Docker interni (`worker_0`, `worker_1`, ecc.) ma registrano il loro IP pubblico nel Discovery Server per compatibilità con l'Opzione B.
+| Modalità | Comando | Quando usarla |
+|---|---|---|
+| **Locale** | `docker compose up --build` | Sviluppo, debug, grid search degli iperparametri |
+| **AWS singola istanza** | `docker compose up --build` (su EC2 via SSH) | Test su cloud, stesso flusso del locale |
+| **AWS multi-istanza** | `python scripts/aws_deploy.py deploy` | Esperimenti di convergenza con latenza di rete reale |
 
-**Opzione B — Istanza per worker**: ogni worker gira su un EC2 separato. Ogni nodo ha un IP pubblico distinto, configurato tramite la variabile d'ambiente `EC2_PUBLIC_IP` (usata come `MY_HOST` per la registrazione). Il registry è raggiungibile tramite `REGISTRY_EC2_IP`.
+#### Perché multi-istanza per misurare la convergenza
 
-La sovrascrittura dell'URL del registry via variabile d'ambiente evita di dover modificare `config.yaml` tra deploy locale e cloud:
+In modalità locale (tutti i container sullo stesso host), la comunicazione gRPC avviene via loopback (`127.0.0.1`) con latenza < 0.1 ms e banda limitata solo dalla CPU locale. In produzione reale — e nei termini della specifica del progetto — ogni nodo è una macchina separata. Con Docker su singolo host si misura il comportamento algoritmico del gossip (convergenza in termini di round), ma non il tempo di convergenza reale, che dipende dalla latenza di rete tra i nodi.
 
-```python
-registry_url = os.environ.get("REGISTRY_URL", cfg["network"]["registry_url"])
+Deployando ogni worker su un'istanza EC2 separata, i messaggi gRPC viaggiano su TCP/IP tra macchine fisicamente distinte (latenza tipica inter-EC2 stesso availability zone: 0.2–1 ms), rendendo le misure di convergenza temporale significative e confrontabili tra configurazioni diverse di `gossip_fanout` e `num_workers`.
+
+#### Architettura AWS multi-istanza
+
+```
+Macchina locale (orchestratore)
+    │
+    ├─ terraform apply  →  VPC / Security Group / EC2 registry / N EC2 worker
+    ├─ aws_deploy.py    →  build immagini + upload dataset + start container
+    └─ aws_deploy.py    →  collect metrics → aggregate_metrics.py
+                                │
+                    ┌───────────┼───────────────────────┐
+                    │           │                       │
+              EC2 registry  EC2 worker_0  ...  EC2 worker_N-1
+              :5000 HTTP    :50051 gRPC        :50051 gRPC
+                    │           │    \  gossip  /   │
+                    └───────────┴─────────────────┘
+                        tutti nella stessa VPC
+                        comunicazione via IP privati
 ```
 
-I Security Group AWS devono consentire:
-- Porta **5000** (TCP) — registry HTTP, accessibile da tutti i worker;
-- Porte **`grpc_port` … `grpc_port + num_workers − 1`** — gRPC workers, accessibili tra le istanze.
+Ogni worker registra il proprio **IP privato** come indirizzo gRPC (variabile `MY_HOST`). Le connessioni inter-worker rimangono all'interno della VPC, senza uscire su Internet: latenza più bassa, nessun costo di trasferimento dati. L'orchestratore (macchina locale) accede alle istanze via SSH tramite i loro IP pubblici solo per deploy, monitoring e raccolta metriche.
+
+#### Provisioning con Terraform
+
+La directory `terraform/` definisce l'intera infrastruttura come codice:
+
+```
+terraform/
+    main.tf        — provider AWS, security group, istanze EC2 con user_data
+    variables.tf   — dichiarazioni delle variabili
+    outputs.tf     — IP pubblici e privati di tutte le istanze
+    terraform.tfvars  (generato da aws_deploy.py, non versionato)
+```
+
+`terraform/terraform.tfvars` viene generato automaticamente da `scripts/aws_deploy.py provision` leggendo `config.yaml`: il numero di worker, i tipi di istanza, la regione e le porte sono sempre sincronizzati con il file di configurazione senza intervento manuale.
+
+Il `user_data` di ogni istanza installa Docker all'avvio:
+
+```bash
+#!/bin/bash
+apt-get update -y && apt-get install -y docker.io
+systemctl enable docker && systemctl start docker
+usermod -aG docker ubuntu
+```
+
+Questo avviene in parallelo per tutte le istanze durante `terraform apply`. Lo script `aws_deploy.py` aspetta che Docker sia operativo prima di procedere con la build.
+
+Il Security Group apre esattamente tre porte verso l'esterno:
+
+| Porta | Protocollo | Scopo |
+|---|---|---|
+| 22 | TCP | SSH dall'orchestratore locale |
+| 5000 | TCP | Registry HTTP (health check e peer discovery) |
+| 50051 | TCP | gRPC worker (una sola porta: un worker per istanza) |
+
+Tutto il traffico tra istanze dello stesso security group è permesso senza restrizioni (`self = true`), rendendo possibile la comunicazione gRPC su IP privati.
+
+#### Flusso di deploy (`aws_deploy.py`)
+
+Lo script `scripts/aws_deploy.py` è l'unico punto di controllo per l'intero ciclo di vita del cluster AWS. Espone sei sottocomandi:
+
+```
+provision  →  genera tfvars + terraform apply
+deploy     →  [1] attende SSH+Docker su tutte le istanze
+              [2] build immagini Docker in parallelo (SCP sorgente + docker build)
+              [3] SCP partizioni dataset ai worker in parallelo
+              [4] avvia registry container + attende healthcheck
+              [5] avvia worker container in parallelo
+collect    →  SCP metrics.csv, test_result.json, model_final.pt da ogni worker
+status     →  mostra docker ps su ogni istanza
+logs <id>  →  docker logs -f worker_<id> o registry (via SSH interattivo)
+destroy    →  terraform destroy (elimina tutte le istanze)
+```
+
+La fase `[2]` costruisce l'immagine `fl-worker` sui nodi worker e `fl-registry` sul nodo registry. Il codice sorgente e `config.yaml` vengono compressi in un archivio `.tar.gz` e copiati via SCP; `docker build` gira in parallelo su tutte le istanze, sfruttando la CPU di ogni EC2. Con `t3.small`, una build da zero richiede circa 5–8 minuti (dominata dall'installazione di PyTorch); le build successive sono veloci grazie al layer caching di Docker. Il comando `python scripts/aws_deploy.py destroy` va eseguito al termine di ogni sessione per fermare la fatturazione.
+
+#### AWS Learner Lab — vincoli e note operative
+
+Il Learner Lab impone limiti precisi che determinano le scelte architetturali e di configurazione del sistema.
+
+**Limiti sulle istanze EC2**
+
+| Vincolo | Valore | Impatto sul progetto |
+|---|---|---|
+| Istanze concorrenti per regione | **max 9** | Con 1 registry → max **8 worker** |
+| vCPU concorrenti per regione | max 32 | t3.small usa 2 vCPU → 9 × 2 = 18 vCPU, entro il limite |
+| Tipi di istanza supportati | nano, micro, small, medium, large | **xlarge e superiori non sono supportati** |
+| Istanze on-demand | sì | Spot instances non disponibili |
+| Superare i limiti | istanze eccedenti terminate | 20+ istanze → disattivazione immediata account |
+
+`aws_deploy.py provision` verifica che `num_workers + 1 ≤ 9` prima di lanciare Terraform e interrompe con un errore esplicito se il vincolo è violato.
+
+**Scelta delle istanze**
+
+Per i worker è stato scelto `t3.small` (2 vCPU, 2 GB RAM):
+- Il DataLoader di PyTorch carica i dati in modo lazy (un batch alla volta), quindi l'utilizzo RAM non dipende dalla dimensione del dataset su disco — `t3.small` è sufficiente anche con `--sf 1.0`
+- Con batch size > 64 o modelli più grandi, preferire `t3.medium` (2 vCPU, 4 GB RAM) per maggiore margine
+- Entrambi rientrano nei tipi supportati e nel budget
+
+Per il registry `t3.micro` (2 vCPU, 1 GB RAM) è più che sufficiente: il Discovery Server è un server Flask in-memory con traffico minimo.
+
+**Stima dei costi con budget $50**
+
+| Config | Costo/ora | 4h di training | Budget residuo su $50 |
+|---|---|---|---|
+| 5 worker t3.small + 1 t3.micro | ~$0.11 | ~$0.46 | >$49 |
+| 8 worker t3.small + 1 t3.micro | ~$0.18 | ~$0.71 | >$49 |
+| 5 worker t3.medium + 1 t3.micro | ~$0.21 | ~$0.86 | >$49 |
+| 8 worker t3.medium + 1 t3.micro | ~$0.34 | ~$1.37 | >$48 |
+
+Il budget è generoso: anche con 20 run sperimentali da 4 ore con 8× t3.small, il costo totale è ~$14.
+
+**Key pair e accesso SSH**
+
+In us-east-1, il Learner Lab mette a disposizione una key pair predefinita chiamata `vockey`. Non è necessario creare una nuova key pair:
+1. Nel pannello del lab cliccare **AWS Details**
+2. Cliccare **Download PEM** → salva `labsuser.pem`
+3. Impostare in `config.yaml`: `key_name: "vockey"`, `key_path: "~/Downloads/labsuser.pem"`
+
+In us-west-2, invece, la vockey non è disponibile: occorre creare una nuova key pair dall'EC2 Console e aggiornarla in `config.yaml`.
+
+**Regioni disponibili**: us-east-1 (default, con vockey) e us-west-2.
+
+**Comportamento tra sessioni e IP pubblici**
+
+Quando la sessione del lab scade, le istanze EC2 vengono **stoppate** (non terminate) e riavviate automaticamente all'inizio della sessione successiva. Questo comporta tre conseguenze:
+
+1. **Le credenziali scadono** ma le istanze rimangono. Occorre esportare nuove credenziali all'inizio di ogni sessione.
+2. **Gli IP pubblici cambiano** a ogni riavvio: le istanze ottengono un nuovo IPv4 pubblico, rendendo stale lo stato di Terraform. Dopo aver riavviato una sessione lab con istanze già in esecuzione, eseguire:
+
+```bash
+python scripts/aws_deploy.py resume   # → terraform apply -refresh-only
+```
+
+Questo aggiorna lo stato di Terraform con i nuovi IP pubblici senza modificare l'infrastruttura. Gli **IP privati** non cambiano tra stop/start e continuano a funzionare per la comunicazione interna tra worker.
+
+3. **Le istanze ripartono automaticamente alla sessione successiva** e riprendono a consumare budget. Le istanze che erano in esecuzione quando la sessione è terminata vengono riavviate automaticamente all'inizio della sessione successiva — anche se non si intende usarle. **Distruggerle** (`destroy`) è il modo sicuro per evitare spese impreviste.
+
+**Budget monitoring — ritardo di 8-12 ore.** Il pannello del lab mostra il credito residuo aggiornato da AWS Budgets, che si aggiorna tipicamente ogni 8-12 ore. Il saldo visualizzato può quindi non riflettere le spese più recenti. Non fare affidamento esclusivo su quel valore: stimare i costi a priori con la tabella sopra e distruggere le istanze al termine di ogni sessione.
+
+**IMPORTANTE**: eseguire sempre `python scripts/aws_deploy.py destroy` al termine di ogni sessione di lavoro.
+
+**SSH user.** Le istruzioni del Learner Lab mostrano il comando `ssh -i labsuser.pem ec2-user@<ip>`, dove `ec2-user` è l'utente predefinito per le AMI Amazon Linux. Le nostre istanze usano Ubuntu 22.04 (AMI Canonical), dove l'utente SSH è `ubuntu`. `aws_deploy.py` usa già correttamente `ubuntu@<ip>` in tutte le sue connessioni SSH/SCP.
+
+**Elastic IP (opzionale).** Il Learner Lab supporta Elastic IP per mantenere un IP pubblico fisso tra stop/start. Per i nostri esperimenti di convergenza non è necessario (il `resume` command gestisce il cambio di IP), ma può essere utile per ambienti long-running dove si vogliono evitare aggiornamenti manuali delle credenziali SSH.
 
 ---
 
@@ -1675,6 +1821,13 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 | `fault_injection` | `crash_probability` | `0.05` | Probabilità di crash simulato (`sys.exit(1)`) per round |
 | `fault_injection` | `grpc_timeout_seconds` | `5.0` | Timeout massimo per ogni chiamata gRPC client |
 | `fault_injection` | `max_staleness` ($\Delta_{\max}$) | `10` | Round massimi di ritardo accettati dallo staleness check |
+| `aws` | `region` | `us-east-1` | Regione AWS; Learner Lab supporta `us-east-1` (default, con vockey) e `us-west-2` |
+| `aws` | `instance_type_worker` | `t3.small` | Tipo istanza EC2 per i worker (t3.small = 2 vCPU, 2 GB) |
+| `aws` | `instance_type_registry` | `t3.micro` | Tipo istanza EC2 per il registry (server Flask leggero) |
+| `aws` | `key_name` | `vockey` | Nome della key pair EC2; in us-east-1 Learner Lab usa la `vockey` predefinita |
+| `aws` | `key_path` | `~/Downloads/labsuser.pem` | Path locale al `.pem` scaricato dal pannello AWS Details |
+| `aws` | `image_source` | `build` | `build` = docker build su EC2; `dockerhub` = docker pull |
+| `aws` | `dockerhub_image` | `""` | Immagine DockerHub (solo se `image_source: dockerhub`) |
 
 ### 10.2 File di Configurazione Completo
 
@@ -1712,59 +1865,309 @@ fault_injection:
   crash_probability: 0.05     # Probability of simulated crash per round
   grpc_timeout_seconds: 5.0   # Timeout for each gRPC call
   max_staleness: 10           # Discard updates older than N rounds
+
+aws:
+  region: "us-east-1"                    # us-east-1 (vockey) or us-west-2
+  instance_type_worker: "t3.small"       # 2 vCPU, 2 GB — sufficient (DataLoader is lazy)
+  instance_type_registry: "t3.micro"     # lightweight Flask server
+  # IMPORTANT: num_workers + 1 <= 9 (Learner Lab hard limit)
+  key_name: "vockey"                     # pre-existing key pair in us-east-1
+  key_path: "~/Downloads/labsuser.pem"   # downloaded from AWS Details panel
+  image_source: "build"                  # "build" = docker build on EC2 (recommended)
+  dockerhub_image: ""                    # only used when image_source: "dockerhub"
 ```
 
 ---
 
 ## 11. Istruzioni di Esecuzione
 
-Il workflow segue quattro passi in sequenza. I passi 1 e 2 sono una-tantum; i passi 3 e 4 vanno ripetuti ogni volta che si cambia `num_workers` o `use_test_set`.
+Le tre modalità di deploy condividono gli stessi passi di setup iniziale (download e partizionamento del dataset), che vengono eseguiti sempre sulla **macchina locale** dell'operatore. Differiscono nel passo di avvio e nella raccolta delle metriche.
+
+| Modalità | Istanze EC2 | Container | Comunicazione |
+|---|:---:|:---:|---|
+| Locale | 0 | `num_workers` + 1 | rete Docker interna (loopback) |
+| Singola EC2 | 1 | `num_workers` + 1 | rete Docker interna (loopback) |
+| Multi-instance EC2 | `num_workers` + 1 | 1 per istanza | TCP/IP reale tra istanze VPC |
 
 > **Nota di compatibilità — Pillow ≥ 10.0.**
-> Lo script di preprocessing di LEAF (`leaf/data/femnist/preprocess/data_to_json.py`) usa `Image.ANTIALIAS`, rimosso in Pillow 10.0 (2023) in favore di `Image.LANCZOS`. I due identificano lo stesso filtro di ricampionamento (sinc di Lanczos): la sostituzione è puramente nominale e **non altera in alcun modo il dataset prodotto**. `download_femnist.py` applica automaticamente questa patch subito dopo il clone di LEAF, prima di avviare il preprocessing — non è richiesto alcun intervento manuale.
+> `download_femnist.py` applica automaticamente la patch `Image.ANTIALIAS → Image.LANCZOS` subito dopo il clone di LEAF — non è richiesto alcun intervento manuale.
+
+---
+
+### 11.1 Setup Iniziale (tutte le modalità — gira sulla macchina locale)
+
+Questi passi vanno ripetuti ogni volta che cambia `num_workers` o `use_test_set`.
+
+**Passo 1 — Configurazione**
+
+Editare `config.yaml`:
+- `num_workers`: numero di worker (es. 3 per la ricerca iperparametri, poi 5 e 8 per la scalabilità)
+- `use_test_set`: `false` = split 90/10 train/val; `true` = split 80/10/10 train/val/test
+- tutti gli altri iperparametri (learning rate, fanout, ecc.)
+
+**Passo 2 — Download dataset** *(una-tantum, o quando cambia `use_test_set`)*
 
 ```bash
-# Passo 1 — Imposta use_test_set in config.yaml (prima di scaricare il dataset)
-#   use_test_set: false  →  90/10 train/val  (default, nessun test set separato)
-#   use_test_set: true   →  80/10/10 train/val/test  (test set indipendente)
-#   IMPORTANTE: cambiare use_test_set richiede di ripetere i passi 2 e 3.
+# Eseguito sulla macchina locale — scarica FEMNIST da LEAF (~900 MB immagini)
+# e produce data/femnist/data/train/*.json e data/femnist/data/test/*.json
+python scripts/download_femnist.py
+# Con --sf 0.05 per verifiche rapide di installazione (non per risultati da riportare)
+```
 
-# Passo 2 — Scarica e preprocessa il dataset FEMNIST
-python scripts/download_femnist.py --sf 1.0
-# --sf 0.05 per un subset veloce (5%); 1.0 per il dataset completo (~2-4 GB).
-# Il flag --tf passato a LEAF (0.9 o 0.8) è letto automaticamente da config.yaml.
+`download_femnist.py` clona LEAF, patcha il codice per Pillow ≥ 10, lancia `preprocess.sh` con i parametri letti da `config.yaml` (`--tf 0.9` o `0.8` in base a `use_test_set`), copia i JSON in `data/femnist/data/`, e rimuove LEAF.
 
-# Passo 3 — Partiziona il dataset e rigenera i compose file
-python scripts/split_dataset.py      # crea data/femnist/worker_{i}/{train,val[,test]}/
-python scripts/generate_compose.py   # rigenera docker-compose.yml e docker-compose.aws.yml
+**Passo 3 — Partizionamento e generazione compose** *(ripetere se `num_workers` o `use_test_set` cambia)*
 
-# Passo 4a — Avvia il sistema in locale
+```bash
+# split_dataset.py legge data/femnist/data/ e produce una directory per worker:
+#   data/femnist/worker_0/train/data.json
+#   data/femnist/worker_0/val/data.json   (e test/ se use_test_set: true)
+#   data/femnist/worker_1/...
+python scripts/split_dataset.py
+
+# generate_compose.py legge config.yaml e genera docker-compose.yml
+# con N servizi worker + 1 servizio registry, bind mount corretti, healthcheck
+python scripts/generate_compose.py
+```
+
+I dati vengono divisi tra i worker per scrittore (non-i.i.d.): ogni worker possiede un sottoinsieme di writer con il loro stile di scrittura, senza sovrapposizioni.
+
+---
+
+### 11.1.1 Ciclo degli Esperimenti
+
+La campagna sperimentale si articola in **tre fasi annidate**. La tabella seguente indica quali passi del setup vanno ri-eseguiti in funzione di cosa cambia in `config.yaml` — tutto il resto viene riutilizzato dal run precedente:
+
+| Cosa cambia in `config.yaml` | `download_femnist.py` | `split_dataset.py` | `generate_compose.py` |
+|---|:---:|:---:|:---:|
+| Solo parametri ML (`lr`, `H`, `fanout`, `batch_size`, ecc.) | no | no | no |
+| `num_workers` | no | **sì** | **sì** |
+| `use_test_set` | **sì** | **sì** | **sì** |
+
+> **Multi-instance EC2**: ogni variazione di `num_workers` richiede anche `aws_deploy.py destroy` → `provision` per ricreare le istanze nel numero corretto prima di `deploy`.
+
+---
+
+**Fase 1 — Ricerca iperparametri** (`num_workers` fisso, es. 3; `use_test_set: false`)
+
+Ripetere per ogni combinazione di iperparametri (griglia su `lr`, `gossip_fanout`, `inner_steps_H`, ecc.):
+
+| Passo | Chi | Dove | Locale / Singola EC2 | Multi-instance EC2 |
+|---|---|---|---|---|
+| 1. Configura | Operatore | locale | Editare `config.yaml` — variare solo parametri ML | identico |
+| 2. [Setup] | — | — | Nessun re-setup: dati e compose già validi | identico |
+| 3. Avvia training | Operatore | locale | `docker compose up --build` | `python scripts/aws_deploy.py deploy` |
+| 4. Training | Container × N | locale / N EC2 | automatico (round: A → B → C) | identico |
+| 5. Fine training | Container × N | locale / N EC2 | automatico: checkpoint + deregistra | identico |
+| 6. Collect | — | — | — *(metriche già in `data/femnist/worker_*/`)* | `python scripts/aws_deploy.py collect` |
+| 7. Aggrega | Operatore | locale | `python scripts/aggregate_metrics.py` | identico |
+| 8. Archivia | Operatore | locale | `python scripts/save_experiment.py <nome>` *(es. `lr_1e-3_fanout3`)* | identico |
+| 9. Ripeti | Operatore | — | tornare al passo 1 con la prossima combinazione | identico |
+
+`save_experiment.py` archivia `config.yaml` + metriche in `results/<timestamp>_<nome>/` e rimuove i CSV dalla directory di lavoro, così il prossimo run parte da zero.
+
+---
+
+**Fase 2 — Studio di scalabilità** (config ottimale; `num_workers` varia 3 → 5 → 8; `use_test_set: false`)
+
+Una volta individuata la configurazione migliore dalla Fase 1, ripetere per ciascun valore di `num_workers`:
+
+| Passo | Chi | Dove | Locale / Singola EC2 | Multi-instance EC2 |
+|---|---|---|---|---|
+| 1. Configura | Operatore | locale | `config.yaml`: `num_workers: <N>` | identico |
+| 2. Re-partiziona | Operatore | locale | `python scripts/split_dataset.py` | identico |
+| 3. Rigenera compose | Operatore | locale | `python scripts/generate_compose.py` | identico |
+| 4. Infrastruttura | — | — | — | `aws_deploy.py destroy` → `provision` |
+| 5. Avvia training | Operatore | locale | `docker compose up --build` | `python scripts/aws_deploy.py deploy` |
+| 6. Training | Container × N | locale / N EC2 | automatico | identico |
+| 7. Collect | — | — | — | `python scripts/aws_deploy.py collect` |
+| 8. Aggrega | Operatore | locale | `python scripts/aggregate_metrics.py` | identico |
+| 9. Archivia | Operatore | locale | `python scripts/save_experiment.py scalability_N<N>` | identico |
+| 10. Ripeti | Operatore | — | tornare al passo 1 con il prossimo N | identico |
+
+---
+
+**Fase 3 — Valutazione finale con test set** (config e `num_workers` ottimali; una sola volta a campagna conclusa)
+
+Il test set è tenuto fuori da ogni decisione di training e hyperparameter selection. Va eseguito **una sola volta** dopo aver completato le Fasi 1 e 2:
+
+| Passo | Chi | Dove | Locale / Singola EC2 | Multi-instance EC2 |
+|---|---|---|---|---|
+| 1. Abilita test set | Operatore | locale | `config.yaml`: `use_test_set: true` | identico |
+| 2. Re-download | Operatore | locale | `python scripts/download_femnist.py` *(cambia `--tf` LEAF: 0.9 → 0.8)* | identico |
+| 3. Re-partiziona | Operatore | locale | `python scripts/split_dataset.py` | identico |
+| 4. Rigenera compose | Operatore | locale | `python scripts/generate_compose.py` | identico |
+| 5. Avvia training | Operatore | locale | `docker compose up --build` | `python scripts/aws_deploy.py deploy` |
+| 6. Training | Container × N | locale / N EC2 | automatico — al termine: `test_result.json` | identico |
+| 7. Collect | — | — | — | `python scripts/aws_deploy.py collect` |
+| 8. Aggrega | Operatore | locale | `python scripts/aggregate_metrics.py` *(stampa val + test accuracy)* | identico |
+| 9. Archivia | Operatore | locale | `python scripts/save_experiment.py final_with_test` | identico |
+
+`test_result.json` (scritto da ogni worker alla fine del training) e `test_accuracy` nell'output di `aggregate_metrics.py` sono la metrica definitiva da riportare — non influenzata da nessuna decisione di training o selezione degli iperparametri.
+
+---
+
+### 11.2 Modalità Locale
+
+**Chi esegue cosa e in che ordine:**
+
+| Passo | Chi | Comando | Risultato |
+|---|---|---|---|
+| Setup | Operatore (locale) | passi 1–3 sopra | dataset partizionato, compose generato |
+| Avvio | Docker Engine (locale) | `docker compose up --build` | build immagine `fl-worker` (una sola), avvio N+1 container |
+| Training | Container worker (N) | automatico | ogni worker allena, fa gossip gRPC con gli altri via rete Docker |
+| Discovery | Container registry (1) | automatico | Flask server, gestisce register/deregister/peers |
+| Fine | Container worker (N) | automatico | ogni worker scrive checkpoint e si deregistra |
+| Analisi | Operatore (locale) | `aggregate_metrics.py` | legge le metriche, produce statistiche globali |
+
+**Avvio:**
+```bash
+docker compose up --build
+```
+
+Docker costruisce l'immagine `fl-worker` una sola volta (condivisa da tutti i worker) e avvia i container. Il registry parte per primo; i worker aspettano il suo healthcheck prima di registrarsi.
+
+**Dove finiscono le metriche:**
+
+Ogni worker scrive `metrics.csv` in `/app/data/femnist/` dentro il container. Grazie al bind mount (`./data/femnist/worker_i → /app/data/femnist`), il file appare immediatamente sull'host in:
+```
+data/femnist/worker_0/metrics.csv
+data/femnist/worker_1/metrics.csv
+...
+data/femnist/worker_0/model_final.pt   ← checkpoint finale
+data/femnist/worker_0/test_result.json ← solo se use_test_set: true
+```
+
+**Raccolta e analisi metriche:**
+```bash
+python scripts/aggregate_metrics.py
+# Legge tutti i data/femnist/worker_*/metrics.csv
+# Produce: data/femnist/global_metrics.csv  (per-round mean/std/min/max accuracy)
+#          data/femnist/summary.txt          (riassunto per worker)
+
+python scripts/save_experiment.py <nome>
+# Archivia config.yaml + tutte le metriche in results/<timestamp>_<nome>/
+# Pulisce i metrics.csv per il prossimo esperimento
+```
+
+---
+
+### 11.3 Modalità Singola EC2
+
+Il workflow è **identico al locale** — stessi script, stessa immagine Docker, stessa rete interna. La differenza è solo dove girano i container.
+
+**Chi esegue cosa e in che ordine:**
+
+| Passo | Chi | Dove | Comando |
+|---|---|---|---|
+| Setup (passi 1–3) | Operatore | **macchina locale** | `download_femnist.py`, `split_dataset.py`, `generate_compose.py` |
+| Upload progetto | Operatore | **locale → EC2** | `scp -r . ubuntu@<ip>:~/project` |
+| Avvio | Operatore (via SSH) | **EC2** | `docker compose up --build` |
+| Training | Container (N+1) | **EC2** | automatico, identico al caso locale |
+| Download metriche | Operatore | **EC2 → locale** | `scp -r ubuntu@<ip>:~/project/data/femnist ./data/` |
+| Analisi | Operatore | **macchina locale** | `aggregate_metrics.py`, `save_experiment.py` |
+
+```bash
+# Upload dell'intero progetto (inclusa la cartella data/ già partizionata)
+scp -r . ubuntu@<ip>:~/project
+
+# SSH nell'istanza e avvio
+ssh ubuntu@<ip>
+cd ~/project
 docker compose up --build
 
-# Passo 4b — Deploy su singola istanza EC2
-EC2_PUBLIC_IP=<ip-pubblico-ec2> \
-docker compose -f docker-compose.aws.yml up --build -d
-
-# Passo 4c — Deploy multi-istanza EC2 (un worker per istanza)
-# Sul nodo registry:
-docker compose -f docker-compose.aws.yml up registry
-# Su ogni nodo worker (esempio per worker_0):
-REGISTRY_EC2_IP=<ip-registry> EC2_PUBLIC_IP=<ip-questo-nodo> \
-docker compose -f docker-compose.aws.yml up worker_0
-
-# Passo 5 — Analisi delle metriche (al termine dell'esperimento o in corso)
-# Ogni worker ha scritto data/femnist/worker_{i}/metrics.csv durante il training.
+# A fine training, dall'operatore locale: recupero metriche
+scp -r ubuntu@<ip>:~/project/data/femnist/worker_* ./data/femnist/
 python scripts/aggregate_metrics.py
-# Output: tabella per round (mean/std/min/max accuracy), riassunto per worker,
-#         data/femnist/global_metrics.csv, data/femnist/summary.txt
-# Con use_test_set: true, stampa anche la test accuracy finale per ogni worker.
-
-# Per confrontare due configurazioni diverse:
-#   - Prima di ogni esperimento, eliminare i vecchi metrics.csv:
-#     rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/test_result.json
-#   - Dopo ogni esperimento, salvare i risultati:
-#     cp data/femnist/global_metrics.csv results/global_metrics_<config>.csv
+python scripts/save_experiment.py <nome>
 ```
+
+---
+
+### 11.4 Modalità Multi-Instance EC2
+
+Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra macchine fisicamente separate, rendendo le misure di tempo di convergenza significative.
+
+**Prerequisiti una-tantum:**
+- Credenziali AWS Learner Lab (ogni sessione): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+- Key pair: in us-east-1 usare la `vockey` predefinita (pannello AWS Details → Download PEM → `~/Downloads/labsuser.pem`); in us-west-2 creare una nuova key pair
+- Terraform installato sulla macchina locale
+- `config.yaml`: `aws.key_name`, `aws.key_path` impostati correttamente
+
+**Chi esegue cosa e in che ordine:**
+
+| Passo | Chi | Dove | Cosa succede |
+|---|---|---|---|
+| Setup (passi 1–3) | Operatore | **locale** | dataset scaricato e partizionato come sempre |
+| `provision` | `aws_deploy.py` + Terraform | **locale → AWS** | crea `num_workers + 1` istanze EC2, security group, installa Docker via `user_data` |
+| `deploy` [1/5] | `aws_deploy.py` | **locale → EC2** | aspetta SSH + Docker ready su tutte le istanze |
+| `deploy` [2/5] | `aws_deploy.py` | **locale → EC2** | SCP del codice sorgente, `docker build` in parallelo su tutte le istanze (~5-8 min prima volta) |
+| `deploy` [3/5] | `aws_deploy.py` | **locale → EC2 worker** | SCP della partizione `worker_i/` sull'EC2 corrispondente |
+| `deploy` [4/5] | `aws_deploy.py` | **EC2 registry** | avvia container registry, attende healthcheck `/peers` |
+| `deploy` [5/5] | `aws_deploy.py` | **EC2 worker × N** | avvia container worker su ogni EC2, con mount della propria partizione e IP privato come `MY_HOST` |
+| Training | Container worker (N) | **N EC2 distinte** | allena localmente, fa gossip gRPC tra EC2 via IP privati VPC |
+| Discovery | Container registry (1) | **EC2 registry** | gestisce peer list durante il training |
+| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv`, `model_final.pt`, `test_result.json` da ogni EC2 worker |
+| Analisi | Operatore | **locale** | `aggregate_metrics.py`, `save_experiment.py` |
+| `destroy` | `aws_deploy.py` + Terraform | **locale → AWS** | termina tutte le istanze EC2, rimuove security group |
+
+```bash
+# Esportare le credenziali (ogni sessione Learner Lab)
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...
+
+# Provisioning: Terraform crea num_workers+1 istanze EC2 e installa Docker
+python scripts/aws_deploy.py provision
+
+# Deploy: build immagini + upload dati + avvio container (tutto automatico)
+python scripts/aws_deploy.py deploy
+
+# Monitoring durante il training (opzionale)
+python scripts/aws_deploy.py status         # docker ps su ogni istanza
+python scripts/aws_deploy.py logs 0         # tail log worker_0 (Ctrl+C per uscire)
+python scripts/aws_deploy.py logs registry  # tail log registry
+
+# Raccolta metriche a fine training
+python scripts/aws_deploy.py collect        # SCP metrics.csv da ogni EC2 → locale
+
+# Analisi (identica alle altre modalità — le metriche sono ora in locale)
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <nome>    # es. scalability_aws_N5
+
+# Distruggere le istanze per fermare la fatturazione
+python scripts/aws_deploy.py destroy
+
+# Se la sessione Learner Lab è ripartita (IP pubblici cambiati):
+python scripts/aws_deploy.py resume         # aggiorna stato Terraform senza modificare infrastruttura
+```
+
+**Dove finiscono le metriche:**
+
+Durante il training ogni worker scrive in `/app/data/femnist/` dentro il suo container → per bind mount in `/home/ubuntu/data/femnist/worker_i/` sull'EC2. Il comando `collect` trasferisce questi file sulla macchina locale in `data/femnist/worker_i/`, esattamente dove se li aspetta `aggregate_metrics.py` — il passo di analisi è quindi identico per tutte e tre le modalità.
+
+---
+
+### 11.5 Analisi delle Metriche (comune a tutte le modalità)
+
+```bash
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <nome>
+```
+
+`aggregate_metrics.py` produce in output (su stdout e in `summary.txt`):
+
+| Sezione | Cosa mostra |
+|---|---|
+| **Per-round table** | `round` \| `mean_acc` \| `std_acc` \| `min_acc` \| `max_acc` \| `PhaseA(s)` \| `PhaseB(s)` \| `PhaseC(s)` |
+| **Per-worker summary** | accuracy finale e migliore, total training time (somma `round_duration_s`), breakdown medio per fase, latenza gRPC media |
+| **System convergence** | per ogni worker: *converged at round X* oppure *hit round limit* + wall-clock reale dal timestamp; poi: verdetto del sistema (*YES — all workers converged* o *PARTIAL*) e wall-clock totale del sistema (dal primo worker start all'ultimo worker end) |
+| **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker (se i `model_final.pt` sono presenti) |
+| **Test set results** | `test_accuracy` per worker, solo se `use_test_set: true` |
+
+`global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
+
+`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/test_result.json` — poi pulisce la directory di lavoro per il prossimo run.
 
 ### Confronto tra approccio 90/10 e 80/10/10
 
@@ -1773,14 +2176,14 @@ Per quantificare il bias ottimistico introdotto dall'assenza di un test set sepa
 ```bash
 # Run A — solo val (approccio di default)
 # config.yaml: use_test_set: false
-python scripts/download_femnist.py --sf 0.05
+python scripts/download_femnist.py   # dataset completo
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy
 
 # Run B — con test set indipendente
 # config.yaml: use_test_set: true
-python scripts/download_femnist.py --sf 0.05  # re-download necessario (--tf diverso)
+python scripts/download_femnist.py   # re-download necessario (--tf diverso)
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
