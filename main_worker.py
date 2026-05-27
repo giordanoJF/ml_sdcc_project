@@ -206,8 +206,10 @@ def main():
             logger.info(f"=== Round {round_num}/{total_rounds} ===")
 
             # -----------------------------------------------------------
-            # Phase A: Weighted FedAvg aggregation (skipped in baseline mode)
+            # Phase A: Weighted FedAvg aggregation + validation
+            # (skipped in baseline mode — phase_a_s = 0 in that case)
             # -----------------------------------------------------------
+            t_phase_a = time.time()
             neighbors_aggregated = 0
             if gossip_enabled:
                 with buffer.lock:
@@ -248,6 +250,7 @@ def main():
             # Validate after aggregation to track convergence for early stopping
             val_loss, val_acc = validate(model, val_loader, device)
             logger.info(f"Validation — loss={val_loss:.4f}, accuracy={val_acc:.2%}")
+            phase_a_s = time.time() - t_phase_a
 
             if val_loss < best_val_loss - 1e-4:
                 best_val_loss = val_loss
@@ -268,6 +271,7 @@ def main():
             # Phase B: Local training for exactly H inner steps
             # (no network interaction during this phase)
             # -----------------------------------------------------------
+            t_phase_b = time.time()
             total_loss = 0.0
             for _ in range(inner_steps):
                 batch = next(train_iter)
@@ -277,6 +281,7 @@ def main():
                     label_smoothing=label_smoothing,
                 )
             train_loss_avg = total_loss / inner_steps
+            phase_b_s = time.time() - t_phase_b
             logger.info(
                 f"Local training — avg_loss={train_loss_avg:.4f} "
                 f"over {inner_steps} steps"
@@ -296,7 +301,10 @@ def main():
             # Phase C: Gossip Push (skipped in baseline mode)
             # -----------------------------------------------------------
             sent_count = 0
+            phase_c_s = 0.0
+            grpc_latencies: list[float] = []
             if gossip_enabled:
+                t_phase_c = time.time()
                 # Update current_round before sending so the receiver's staleness
                 # check sees the correct value.
                 shared_state["current_round"] = round_num
@@ -320,9 +328,11 @@ def main():
                         dropped_count += 1
                         logger.debug(f"Dropped message to {target}")
                         continue
+                    t_call = time.time()
                     success = send_model(
                         target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
                     )
+                    grpc_latencies.append(time.time() - t_call)
                     if success:
                         sent_count += 1
                     else:
@@ -342,17 +352,22 @@ def main():
                         if random.random() < drop_prob:
                             dropped_count += 1
                             continue
+                        t_call = time.time()
                         success = send_model(
                             replacement, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
                         )
+                        grpc_latencies.append(time.time() - t_call)
                         if success:
                             sent_count += 1
                         retried += 1
 
+                phase_c_s = time.time() - t_phase_c
                 logger.info(
                     f"Gossip push — sent={sent_count}, dropped={dropped_count}, "
                     f"failed={len(failed_targets)}, retried={retried}"
                 )
+
+            grpc_mean_latency_s = (sum(grpc_latencies) / len(grpc_latencies)) if grpc_latencies else 0.0
 
             # -----------------------------------------------------------
             # Log round metrics
@@ -365,6 +380,10 @@ def main():
                     val_loss=val_loss,
                     val_accuracy=val_acc,
                     round_duration_s=round_duration,
+                    phase_a_s=phase_a_s,
+                    phase_b_s=phase_b_s,
+                    phase_c_s=phase_c_s,
+                    grpc_mean_latency_s=grpc_mean_latency_s,
                     neighbors_aggregated=neighbors_aggregated,
                     peers_contacted=sent_count,
                 )

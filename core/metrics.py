@@ -21,6 +21,10 @@ FIELDS = [
     "val_loss",
     "val_accuracy",
     "round_duration_s",
+    "phase_a_s",             # FedAvg aggregation + validation (Phase A)
+    "phase_b_s",             # local training for H steps (Phase B)
+    "phase_c_s",             # gossip push to k peers (Phase C)
+    "grpc_mean_latency_s",   # mean latency per actual gRPC send_model call (0 if none)
     "neighbors_aggregated",  # distinct models incorporated in Phase A
     "peers_contacted",       # successful gossip pushes in Phase C
 ]
@@ -44,6 +48,10 @@ class MetricsWriter:
         val_loss: float,
         val_accuracy: float,
         round_duration_s: float,
+        phase_a_s: float,
+        phase_b_s: float,
+        phase_c_s: float,
+        grpc_mean_latency_s: float,
         neighbors_aggregated: int,
         peers_contacted: int,
     ) -> None:
@@ -55,6 +63,10 @@ class MetricsWriter:
             "val_loss": round(val_loss, 6),
             "val_accuracy": round(val_accuracy, 6),
             "round_duration_s": round(round_duration_s, 3),
+            "phase_a_s": round(phase_a_s, 4),
+            "phase_b_s": round(phase_b_s, 4),
+            "phase_c_s": round(phase_c_s, 4),
+            "grpc_mean_latency_s": round(grpc_mean_latency_s, 6),
             "neighbors_aggregated": neighbors_aggregated,
             "peers_contacted": peers_contacted,
         }

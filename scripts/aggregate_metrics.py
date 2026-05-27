@@ -15,13 +15,16 @@ Input:
     data/femnist/worker_*/model_final.pt   (final checkpoints, optional)
 
 Output (printed to stdout):
-    Per-round table: round | mean_acc | std_acc | min_acc | max_acc | workers_reporting
-    Per-worker summary: final accuracy, convergence round, avg peers contacted
+    Per-round table  : round | mean_acc | std_acc | min_acc | max_acc [| phase timings]
+    Per-worker table : final/best accuracy, total training time, avg peers, phase breakdown
+    Convergence      : per-worker status (converged vs hit round limit), wall-clock time,
+                       system-level convergence (time from first worker start to last end)
     Weight divergence: pairwise L2 distance between final model weights (if checkpoints found)
+    Test results     : per-worker test_accuracy (only when use_test_set: true)
 
 Output (saved to disk):
-    data/femnist/global_metrics.csv  — per-round aggregated stats
-    data/femnist/summary.txt         — human-readable summary
+    data/femnist/global_metrics.csv  — per-round aggregated stats (+ phase timings if present)
+    data/femnist/summary.txt         — human-readable summary including convergence verdict
 """
 import argparse
 import csv
@@ -85,12 +88,21 @@ def main():
         r = int(row["round"])
         rounds.setdefault(r, []).append(row)
 
+    # Detect whether timing columns are present (absent in CSV files from older runs)
+    has_timing = "phase_a_s" in (all_rows[0] if all_rows else {})
+
     # ---------------------------------------------------------------------------
     # Per-round global statistics
     # ---------------------------------------------------------------------------
-    print("=" * 75)
-    print(f"{'Round':>6}  {'Mean Acc':>9}  {'Std Acc':>8}  {'Min Acc':>8}  {'Max Acc':>8}  {'Workers':>7}")
-    print("=" * 75)
+    if has_timing:
+        print("=" * 100)
+        print(f"{'Round':>6}  {'Mean Acc':>9}  {'Std Acc':>8}  {'Min Acc':>8}  {'Max Acc':>8}  "
+              f"{'PhaseA(s)':>10}  {'PhaseB(s)':>10}  {'PhaseC(s)':>10}  {'Workers':>7}")
+        print("=" * 100)
+    else:
+        print("=" * 75)
+        print(f"{'Round':>6}  {'Mean Acc':>9}  {'Std Acc':>8}  {'Min Acc':>8}  {'Max Acc':>8}  {'Workers':>7}")
+        print("=" * 75)
 
     global_rows = []
     for round_num in sorted(rounds.keys()):
@@ -104,11 +116,7 @@ def main():
         mean_loss = statistics.mean(losses)
         n_workers = len(entries)
 
-        print(
-            f"{round_num:>6}  {mean_acc:>9.4f}  {std_acc:>8.4f}  "
-            f"{min_acc:>8.4f}  {max_acc:>8.4f}  {n_workers:>7}"
-        )
-        global_rows.append({
+        row_data = {
             "round": round_num,
             "mean_accuracy": round(mean_acc, 6),
             "std_accuracy": round(std_acc, 6),
@@ -116,8 +124,32 @@ def main():
             "max_accuracy": round(max_acc, 6),
             "mean_val_loss": round(mean_loss, 6),
             "workers_reporting": n_workers,
-        })
-    print("=" * 75)
+        }
+
+        if has_timing:
+            mean_pa = statistics.mean(float(e.get("phase_a_s", 0)) for e in entries)
+            mean_pb = statistics.mean(float(e.get("phase_b_s", 0)) for e in entries)
+            mean_pc = statistics.mean(float(e.get("phase_c_s", 0)) for e in entries)
+            row_data.update({
+                "mean_phase_a_s": round(mean_pa, 4),
+                "mean_phase_b_s": round(mean_pb, 4),
+                "mean_phase_c_s": round(mean_pc, 4),
+            })
+            print(
+                f"{round_num:>6}  {mean_acc:>9.4f}  {std_acc:>8.4f}  "
+                f"{min_acc:>8.4f}  {max_acc:>8.4f}  "
+                f"{mean_pa:>10.4f}  {mean_pb:>10.4f}  {mean_pc:>10.4f}  {n_workers:>7}"
+            )
+        else:
+            print(
+                f"{round_num:>6}  {mean_acc:>9.4f}  {std_acc:>8.4f}  "
+                f"{min_acc:>8.4f}  {max_acc:>8.4f}  {n_workers:>7}"
+            )
+
+        global_rows.append(row_data)
+
+    sep = "=" * (100 if has_timing else 75)
+    print(sep)
     print()
 
     # ---------------------------------------------------------------------------
@@ -129,7 +161,7 @@ def main():
 
     print("Per-worker summary:")
     print("-" * 75)
-    print(f"{'Worker':>8}  {'Rounds':>7}  {'Final Acc':>10}  {'Best Acc':>9}  {'Avg Peers':>10}  {'Avg Nbrs':>9}")
+    print(f"{'Worker':>8}  {'Rounds':>7}  {'Final Acc':>10}  {'Best Acc':>9}  {'Total(s)':>9}  {'Avg Peers':>10}")
     print("-" * 75)
 
     summary_lines = []
@@ -140,14 +172,34 @@ def main():
         avg_peers = statistics.mean(float(r["peers_contacted"]) for r in rows_sorted)
         avg_nbrs = statistics.mean(float(r["neighbors_aggregated"]) for r in rows_sorted)
         n_rounds = len(rows_sorted)
+        total_s = sum(float(r["round_duration_s"]) for r in rows_sorted)
 
         line = (
             f"  Worker {wid:>2}: {n_rounds} rounds | "
             f"final_acc={final_acc:.4f} | best_acc={best_acc:.4f} | "
+            f"total_training_s={total_s:.1f} | "
             f"avg_peers_contacted={avg_peers:.2f} | avg_neighbors_aggregated={avg_nbrs:.2f}"
         )
         summary_lines.append(line)
-        print(f"{wid:>8}  {n_rounds:>7}  {final_acc:>10.4f}  {best_acc:>9.4f}  {avg_peers:>10.2f}  {avg_nbrs:>9.2f}")
+        print(f"{wid:>8}  {n_rounds:>7}  {final_acc:>10.4f}  {best_acc:>9.4f}  "
+              f"{total_s:>9.1f}  {avg_peers:>10.2f}")
+
+        if has_timing:
+            avg_pa = statistics.mean(float(r.get("phase_a_s", 0)) for r in rows_sorted)
+            avg_pb = statistics.mean(float(r.get("phase_b_s", 0)) for r in rows_sorted)
+            avg_pc = statistics.mean(float(r.get("phase_c_s", 0)) for r in rows_sorted)
+            grpc_vals = [float(r.get("grpc_mean_latency_s", 0)) for r in rows_sorted
+                         if float(r.get("grpc_mean_latency_s", 0)) > 0]
+            avg_grpc = statistics.mean(grpc_vals) if grpc_vals else 0.0
+            timing_line = (
+                f"           phase_a={avg_pa*1000:.1f}ms  "
+                f"phase_b={avg_pb:.2f}s  "
+                f"phase_c={avg_pc*1000:.1f}ms  "
+                f"grpc_latency={avg_grpc*1000:.2f}ms/call"
+            )
+            print(timing_line)
+            summary_lines.append(timing_line)
+
     print("-" * 75)
     print()
 
@@ -158,13 +210,98 @@ def main():
     print()
 
     # ---------------------------------------------------------------------------
+    # System convergence analysis
+    # ---------------------------------------------------------------------------
+    # Load total_rounds from config.yaml to distinguish "converged" from "hit limit".
+    # Gracefully skipped if config is absent or has changed since the experiment.
+    total_rounds_cfg = None
+    try:
+        import yaml
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
+        )
+        with open(config_path) as f:
+            total_rounds_cfg = yaml.safe_load(f)["federated_learning"]["total_rounds"]
+    except Exception:
+        pass
+
+    print("System convergence analysis:")
+    print("-" * 65)
+
+    worker_start_times: list[float] = []
+    worker_end_times:   list[float] = []
+    worker_converged:   list[bool]  = []
+
+    for wid, rows in sorted(worker_rows.items()):
+        rows_sorted = sorted(rows, key=lambda r: int(r["round"]))
+        last_round  = int(rows_sorted[-1]["round"])
+        n_rounds    = len(rows_sorted)
+
+        # Wall-clock times derived from per-round timestamps.
+        # timestamp is written at the END of each round, so:
+        #   worker_start ≈ timestamp[round=1] - round_duration_s[round=1]
+        #   worker_end   = timestamp[last_round]
+        t_first_end = float(rows_sorted[0]["timestamp"])
+        t_first_dur = float(rows_sorted[0]["round_duration_s"])
+        t_last_end  = float(rows_sorted[-1]["timestamp"])
+        worker_start = t_first_end - t_first_dur
+        worker_wall  = t_last_end - worker_start
+
+        worker_start_times.append(worker_start)
+        worker_end_times.append(t_last_end)
+
+        if total_rounds_cfg is not None:
+            converged = last_round < total_rounds_cfg
+            status = (f"converged at round {last_round:>4}" if converged
+                      else f"hit round limit ({total_rounds_cfg})")
+        else:
+            converged = True   # can't tell; assume converged
+            status = f"stopped at round {last_round:>4}"
+
+        worker_converged.append(converged)
+        line = f"  Worker {wid:>2}: {status:<35}  wall-clock = {worker_wall:7.1f}s"
+        print(line)
+        summary_lines.append(line)
+
+    # System-level: from the earliest worker start to the latest worker end.
+    # Workers run in parallel, so system convergence time ≠ sum of individual times.
+    system_start = min(worker_start_times)
+    system_end   = max(worker_end_times)
+    system_wall  = system_end - system_start
+    n_conv       = sum(worker_converged)
+    n_total      = len(worker_converged)
+    all_converged = n_conv == n_total
+
+    verdict = ("YES — all workers converged" if all_converged
+               else f"PARTIAL — {n_conv}/{n_total} workers converged before round limit")
+
+    print()
+    print(f"  System converged  :  {verdict}")
+    print(f"  System wall-clock :  {system_wall:.1f}s  "
+          f"(first worker start → last worker end)")
+    if n_total > 1:
+        worker_walls = [worker_end_times[i] - worker_start_times[i] for i in range(n_total)]
+        print(f"  Per-worker range  :  {min(worker_walls):.1f}s – {max(worker_walls):.1f}s  "
+              f"(fastest – slowest)")
+
+    conv_summary = (
+        f"\nSystem convergence: {verdict}\n"
+        f"System wall-clock total: {system_wall:.1f}s"
+    )
+    summary_lines.append(conv_summary)
+    print("-" * 65)
+    print()
+
+    # ---------------------------------------------------------------------------
     # Save outputs
     # ---------------------------------------------------------------------------
     global_csv_path = os.path.join(args.data_root, "global_metrics.csv")
     global_fields = ["round", "mean_accuracy", "std_accuracy", "min_accuracy",
                      "max_accuracy", "mean_val_loss", "workers_reporting"]
+    if has_timing:
+        global_fields += ["mean_phase_a_s", "mean_phase_b_s", "mean_phase_c_s"]
     with open(global_csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=global_fields)
+        w = csv.DictWriter(f, fieldnames=global_fields, extrasaction="ignore")
         w.writeheader()
         w.writerows(global_rows)
     print(f"Global metrics saved to: {global_csv_path}")
