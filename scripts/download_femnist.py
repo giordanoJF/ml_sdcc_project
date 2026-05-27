@@ -4,9 +4,10 @@ Download and preprocess the FEMNIST dataset from the LEAF repository.
 Run this script ONCE before starting the system with docker compose.
 
 Usage:
-    python scripts/download_femnist.py [--sf 0.05]
+    python scripts/download_femnist.py          # full dataset (default, --sf 1.0)
+    python scripts/download_femnist.py --sf 0.05  # 5% subset for fast development
 
-    --sf: sampling fraction (default 0.05 = 5% of data; use 1.0 for the full dataset)
+    --sf: sampling fraction (default 1.0 = full dataset; 0.05 for quick runs)
 
 Output:
     data/femnist/data/train/*.json

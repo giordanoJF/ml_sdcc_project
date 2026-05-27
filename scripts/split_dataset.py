@@ -12,11 +12,16 @@ Input:
     data/femnist/data/train/*.json
     data/femnist/data/test/*.json
 
-Output:
+Output (use_test_set: false — default):
     data/femnist/worker_0/train/data.json
+    data/femnist/worker_0/val/data.json
+    data/femnist/worker_1/...
+
+Output (use_test_set: true):
+    data/femnist/worker_0/train/data.json
+    data/femnist/worker_0/val/data.json
     data/femnist/worker_0/test/data.json
-    data/femnist/worker_1/train/data.json
-    ...
+    data/femnist/worker_1/...
 
 Memory strategy: two-pass streaming with immediate disk writes.
   Pass 1 — read only writer IDs (no pixel data) to build the global

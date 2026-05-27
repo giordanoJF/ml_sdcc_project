@@ -10,8 +10,8 @@ network:
   registry_port: 5000
 
   # Port each worker's gRPC server listens on for incoming model pushes (Phase C).
-  # All workers use the same internal port; in docker-compose.aws.yml each worker
-  # is mapped to a distinct host port (grpc_port + worker_id) to avoid collisions.
+  # All workers use the same internal port. In multi-instance EC2 (aws_deploy.py),
+  # each worker runs on its own EC2 instance so port collisions are not possible.
   grpc_port: 50051
 
   # Number of randomly selected peers each worker pushes its weights to at the
@@ -24,11 +24,11 @@ network:
   gossip_fanout: 3
 
   # Total number of worker containers. After changing this value, regenerate
-  # the compose files and re-partition the dataset:
+  # the compose file and re-partition the dataset:
   #   python scripts/split_dataset.py && python scripts/generate_compose.py
   # SYSTEM PARAMETER — fixed per deployment. Vary only in scalability experiments
   # to study how accuracy and convergence change with network size.
-  # Scalability experiment candidates: 3 (default), 5, 10
+  # Scalability experiment candidates: 3 (default), 5, 8 (AWS max: 9 EC2 limit → max 8 workers)
   num_workers: 3
 
 federated_learning:
@@ -70,7 +70,7 @@ machine_learning:
 
   # Path to the worker's data partition INSIDE the container.
   # Mapped from the host via bind mount: ./data/femnist/worker_<id> -> /app/data/femnist
-  # Do not change unless you also update the bind mount in the compose files.
+  # Do not change unless you also update the bind mount in docker-compose.yml.
   data_dir: "/app/data/femnist"
 
   # When false (default): 90/10 train/val split. Val is used for both early stopping
@@ -124,6 +124,44 @@ metrics:
   # Visible on the host immediately via the bind mount — no data transfer needed.
   # After the experiment, run: python scripts/aggregate_metrics.py
   output_file: "metrics.csv"
+
+aws:
+  # AWS region. Learner Lab supports us-east-1 (default) and us-west-2.
+  # The pre-built vockey key pair is only in us-east-1; keep this value unless
+  # you create a custom key pair in us-west-2.
+  region: "us-east-1"
+
+  # EC2 instance type for worker nodes.
+  # Learner Lab supports: nano, micro, small, medium, large — NOT xlarge or larger.
+  # t3.small (2 vCPU, 2 GB RAM) is sufficient for a single PyTorch worker with --sf 0.05.
+  # t3.medium (2 vCPU, 4 GB RAM) is safer for larger batch sizes or --sf 1.0.
+  instance_type_worker: "t3.small"
+
+  # EC2 instance type for the registry (lightweight Flask server, <100 MB RAM).
+  instance_type_registry: "t3.micro"
+
+  # IMPORTANT — Learner Lab hard limits:
+  #   - Maximum 9 concurrently running EC2 instances in a region.
+  #   - This deployment uses num_workers + 1 instances (workers + registry).
+  #   - Therefore num_workers must be <= 8 for AWS deploy.
+  #   - 20+ concurrent instances → immediate account deactivation.
+
+  # Name of the EC2 key pair.
+  # In Learner Lab us-east-1, use the pre-existing "vockey" key pair.
+  # Download labsuser.pem from the AWS Details panel (top of the lab interface).
+  key_name: "vockey"
+
+  # Path to the .pem private key downloaded from the Learner Lab AWS Details panel.
+  key_path: "~/Downloads/labsuser.pem"
+
+  # How to get the Docker image onto EC2 instances.
+  # "build": scp source + docker build on each instance in parallel (recommended,
+  #          no external registry needed, picks up latest code and config.yaml).
+  # "dockerhub": docker pull <dockerhub_image> (requires a prior docker push).
+  image_source: "build"
+
+  # DockerHub image tag. Only used when image_source is "dockerhub".
+  dockerhub_image: ""
 
 fault_injection:
   # Probability [0, 1] that a gossip push to a specific peer is silently dropped

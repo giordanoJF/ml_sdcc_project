@@ -76,6 +76,26 @@ def main():
     for f in copied:
         print(f"  {f}")
 
+    # Clean working directory so the next run starts from a blank slate.
+    # model_final.pt is kept (not archived here, may still be useful for analysis).
+    cleaned = []
+    for fname in ("global_metrics.csv", "summary.txt"):
+        p = os.path.join(DATA_ROOT, fname)
+        if os.path.exists(p):
+            os.remove(p)
+            cleaned.append(fname)
+    for worker_dir in sorted(glob.glob(os.path.join(DATA_ROOT, "worker_*"))):
+        for fname in ("metrics.csv", "test_result.json"):
+            p = os.path.join(worker_dir, fname)
+            if os.path.exists(p):
+                os.remove(p)
+                cleaned.append(os.path.join(os.path.basename(worker_dir), fname))
+
+    if cleaned:
+        print(f"\nCleaned {len(cleaned)} file(s) from working directory (ready for next run):")
+        for f in cleaned:
+            print(f"  {f}")
+
 
 if __name__ == "__main__":
     main()
