@@ -13,7 +13,7 @@ gossip_pb2_grpc.py
 
 # Scripts, docs, PDFs, and config not needed inside the container
 scripts/
-pdf/
+docs/
 *.md
 *.log
 .env
@@ -24,5 +24,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 
-# Compose files (not needed inside the container)
+# Compose files, Terraform, and experiment results (not needed inside the container)
 docker-compose*.yml
+terraform/
+/results/

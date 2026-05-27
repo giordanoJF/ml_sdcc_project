@@ -18,7 +18,15 @@ leaf/
 # Log e variabili d'ambiente
 *.log
 .env
-/pdf/
-/docker-compose.yml
-/docker-compose.aws.yml
 /.venwsl/
+
+# Compose file generato da scripts/generate_compose.py — non versionare
+/docker-compose.yml
+
+# Terraform — generated files (contain IPs and sensitive state)
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/.terraform.lock.hcl
+/results/
