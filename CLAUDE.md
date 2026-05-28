@@ -2,7 +2,7 @@
 
 ## Comportamento
 
-- **Mai** eseguire `git commit` o `git push` senza esplicita richiesta nell'stesso turno. Dopo modifiche al codice, presentare un sommario e chiedere conferma prima di toccare git.
+- **Mai** eseguire `git commit` o `git push` senza esplicita richiesta esplicita nel turno corrente. Non proporre mai di fare commit — aspettare che sia l'utente a dirlo. Dopo modifiche al codice, presentare solo un sommario e fermarsi.
 - Non aggiungere firma, menzione di Claude, o co-author nei messaggi di commit.
 - Fare commit per feature o refactoring separati, non tutto insieme.
 
