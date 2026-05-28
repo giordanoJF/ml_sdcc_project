@@ -139,7 +139,10 @@ aws:
   #   5 workers → ~160k images/worker → ~500 MB tensors + ~300 MB PyTorch = ~800 MB
   #   8 workers → ~100k images/worker → ~310 MB tensors + ~300 MB PyTorch = ~610 MB
   # Model weights are negligible (~7 MB for this CNN).
-  # Learner Lab supports: t3.micro (1 GB), t3.small (2 GB), t3.medium (4 GB), t3.large (8 GB).
+  # Learner Lab supported instance sizes: nano, micro, small, medium, large only.
+  # Attempting to use xlarge or larger will result in the instance being terminated immediately.
+  # All t3 instances use 2 vCPU each (see 32-vCPU hard limit in IMPORTANT block below).
+  # t3.micro (1 GB), t3.small (2 GB), t3.medium (4 GB), t3.large (8 GB):
   #   t3.micro  — NOT sufficient (1 GB OOM with 3–5 workers on full dataset)
   #   t3.small  — sufficient for all worker counts with full dataset (2 GB > 1.1 GB worst case)
   #   t3.medium — comfortable headroom; useful if you add larger batches or data augmentation
@@ -147,7 +150,8 @@ aws:
   instance_type_worker: "t3.small"
 
   # EC2 instance type for the registry (Flask service-discovery server, <50 MB RAM).
-  # t3.micro (1 GB) is more than sufficient; no reason to use anything larger.
+  # Learner Lab supported instance sizes: nano, micro, small, medium, large only (xlarge+ terminated).
+  # t3.micro (1 GB, 2 vCPU) is more than sufficient; no reason to use anything larger.
   instance_type_registry: "t3.micro"
 
   # EC2 instance type for single-EC2 mode (ALL worker containers run on one machine).
@@ -156,7 +160,8 @@ aws:
   #   3 workers → ~3.3 GB total → t3.medium (4 GB) is borderline; t3.large (8 GB) is safe
   #   5 workers → ~4.0 GB total → t3.large (8 GB) required
   #   8 workers → ~4.9 GB total → t3.large (8 GB) sufficient
-  # Learner Lab does NOT support t3.xlarge or larger in most sandbox accounts.
+  # Learner Lab supports only nano, micro, small, medium, large across all instance families.
+  # t3.xlarge and larger will be terminated immediately — t3.large (2 vCPU, 8 GB) is the max.
   # Cost note: t3.large costs $0.083/hr — a 30-min accuracy run costs ~$0.04, negligible.
   instance_type_single: "t3.large"
 
@@ -169,6 +174,8 @@ aws:
   #   us-east-1 → us-east-1a (default), us-east-1b, us-east-1c, ...
   #   us-west-2 → us-west-2a, us-west-2b, us-west-2c, ...
   # Must be consistent with the region above.
+  # Note: not all instance types are available in all AZs. If launch fails with a capacity
+  # error, try a different AZ (e.g. us-east-1b) — but set ALL instances to the same AZ.
   availability_zone: "us-east-1a"
 
   # EBS root volume (GB) for each worker EC2 instance (multi-instance mode).
@@ -183,12 +190,15 @@ aws:
   # Cost: gp3 = $0.08/GB/month → 20 GB = $0.002/hr; negligible during runs.
   # Risk: if instances are stopped but not destroyed (resume scenario), EBS keeps
   # charging at this rate until destroy is run.
+  # Learner Lab EBS hard limits: max 100 GB per volume. Volume type must be gp2, gp3,
+  # sc1, or standard — PIOPS (io1/io2) not supported.
   volume_size_worker: 20
 
   # EBS root volume (GB) for the registry EC2 instance.
   # The registry runs only a lightweight Flask server (<50 MB); 8 GB is more than enough.
   # Range: 8–15 GB. No reason to exceed 15 GB.
   # Cost: 8 GB × $0.08/month = $0.0009/hr.
+  # Learner Lab EBS hard limits: max 100 GB per volume. PIOPS (io1/io2) not supported.
   volume_size_registry: 8
 
   # EBS root volume (GB) for the single-EC2 instance.
@@ -202,6 +212,7 @@ aws:
   #   Docker build cache          : ~1 GB
   # Recommended range: 20 GB (up to 5 workers, full dataset) – 30 GB (8 workers).
   # Cost: gp3 = $0.08/GB/month → 20 GB ≈ $0.002/hr.
+  # Learner Lab EBS hard limits: max 100 GB per volume. PIOPS (io1/io2) not supported.
   volume_size_single: 20
 
   # IMPORTANT — Learner Lab hard limits:
@@ -209,9 +220,13 @@ aws:
   #   - This deployment uses num_workers + 1 instances (workers + registry).
   #   - Therefore num_workers must be <= 8 for AWS deploy.
   #   - 20+ concurrent instances → immediate account deactivation.
+  #   - Maximum 32 vCPU across all concurrently running instances. t3 instances use 2 vCPU
+  #     each; 9×t3.large = 18 vCPU, well under the limit. Not a bottleneck for t3 deployments.
 
   # Name of the EC2 key pair.
-  # In Learner Lab us-east-1, use the pre-existing "vockey" key pair.
+  # In Learner Lab us-east-1, use the pre-existing "vockey" key pair (always pre-created).
+  # The "vockey" key pair is NOT available in us-west-2 — if using that region, create a new
+  # key pair in the EC2 console and update both key_name and key_path accordingly.
   # Download labsuser.pem from the AWS Details panel (top of the lab interface).
   key_name: "vockey"
 

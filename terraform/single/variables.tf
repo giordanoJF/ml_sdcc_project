@@ -10,7 +10,7 @@ variable "region" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type. Must fit ALL N worker containers + registry + OS/Docker overhead. t3.large (8 GB) handles up to 8 workers with the full dataset; t3.medium (4 GB) is borderline for 3 workers. Learner Lab does NOT support t3.xlarge or larger."
+  description = "EC2 instance type. Must fit ALL N worker containers + registry + OS/Docker overhead. t3.large (8 GB) handles up to 8 workers with the full dataset; t3.medium (4 GB) is borderline for 3 workers. Learner Lab supports only nano/micro/small/medium/large — t3.xlarge and larger will be terminated immediately."
   type        = string
   default     = "t3.large"
 }
