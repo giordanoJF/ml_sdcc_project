@@ -47,7 +47,10 @@ def send_model(
         True if the peer accepted the message, False on error or rejection.
     """
     try:
-        with grpc.insecure_channel(address) as channel:
+        with grpc.insecure_channel(
+            address,
+            options=[("grpc.max_send_message_length", 50 * 1024 * 1024)],
+        ) as channel:
             stub = gossip_pb2_grpc.GossipServiceStub(channel)
             message = gossip_pb2.ModelMessage(
                 weights=serialize_weights(state_dict),

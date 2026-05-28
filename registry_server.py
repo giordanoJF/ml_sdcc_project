@@ -50,6 +50,12 @@ def get_peers():
         return jsonify(list(_registry.values()))
 
 
+@app.get("/health")
+def health():
+    """Liveness probe used by Docker healthcheck — does not appear in worker traffic."""
+    return jsonify({"status": "ok"})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("REGISTRY_PORT", "5000"))
     app.run(host="0.0.0.0", port=port)

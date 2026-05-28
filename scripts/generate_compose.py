@@ -21,7 +21,7 @@ def _load_config() -> dict:
 def _healthcheck(registry_port: int) -> str:
     return (
         f'      test: ["CMD-SHELL", "python -c \\"import urllib.request; '
-        f'urllib.request.urlopen(\'http://localhost:{registry_port}/peers\')\\""]'
+        f'urllib.request.urlopen(\'http://localhost:{registry_port}/health\')\\""]'
     )
 
 

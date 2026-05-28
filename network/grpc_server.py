@@ -125,7 +125,10 @@ def start_grpc_server(
     The caller should invoke server.wait_for_termination() to keep the process
     alive after the training loop exits.
     """
-    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(
+        concurrent.futures.ThreadPoolExecutor(max_workers=10),
+        options=[("grpc.max_receive_message_length", 50 * 1024 * 1024)],
+    )
     gossip_pb2_grpc.add_GossipServiceServicer_to_server(
         GossipServicer(buffer, shared_state, max_staleness), server
     )
