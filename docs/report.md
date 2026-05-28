@@ -35,13 +35,81 @@ dove $w_k$ sono i parametri del modello del nodo $k$, $n_k$ il numero di campion
 
 Nel contesto decentralizzato del presente sistema, la formula viene adattata: ogni worker non aggrega l'intera rete, ma integra il proprio modello con la media pesata degli aggiornamenti ricevuti dai vicini nel round corrente. La derivazione è descritta in dettaglio nella Sezione 4.2.
 
+#### Perché la ponderazione per $n_k$ è l'unica scelta corretta
+
+La ponderazione non è una convenzione arbitraria: deriva direttamente dall'obiettivo di minimizzare la loss globale sul dataset complessivo. La loss globale si scrive come:
+
+$$\mathcal{L}(\theta) = \frac{1}{N} \sum_{i=1}^{N} \ell(f(x_i; \theta), y_i) = \sum_{k=1}^{K} \frac{n_k}{N} \mathcal{L}_k(\theta)$$
+
+dove $N = \sum_k n_k$ è il totale dei campioni e $\mathcal{L}_k$ è la loss locale del worker $k$. La media pesata dei parametri ottimali locali — sotto l'ipotesi semplificativa che ogni worker abbia trovato il proprio ottimo locale $w_k^*$ — è l'approssimazione di primo ordine all'ottimo globale $w^* = \arg\min \mathcal{L}(\theta)$. Una media non pesata equivarrebbe a minimizzare $\frac{1}{K}\sum_k \mathcal{L}_k$ — una loss uniforme per worker che dà lo stesso peso a un worker con 100 campioni e uno con 100.000, producendo un modello sbilanciato verso le distribuzioni rappresentate dai worker con meno dati.
+
+#### Convergenza di FedAvg in presenza di eterogeneità
+
+Li et al. (2020) hanno analizzato la convergenza di FedAvg in setting non-i.i.d. e hanno dimostrato che, sotto ipotesi di *bounded gradient dissimilarity*, l'algoritmo converge a una *neighborhood* dell'ottimo globale, non all'ottimo esatto. La misura di eterogeneità è:
+
+$$G^2 = \frac{1}{K} \sum_{k=1}^{K} \left\| \nabla \mathcal{L}_k(\theta^*) \right\|^2$$
+
+dove $\theta^*$ è il minimizzatore globale. Quando i dati sono i.i.d., $\nabla \mathcal{L}_k(\theta^*)= 0$ per tutti $k$ e $G^2 = 0$: FedAvg converge esattamente all'ottimo. Con dati eterogenei, $G^2 > 0$: il gradiente locale di ogni worker non si annulla all'ottimo globale — ogni worker "vuole" continuare ad allontanarsi dall'ottimo globale nella direzione del proprio ottimo locale. L'errore di convergenza è proporzionale a $G^2 \cdot H$: più eterogeneità e più inner steps, maggiore il divario tra l'output di FedAvg e l'ottimo globale reale. Questo rende rigorous il trade-off H grande/piccolo discusso in Sezione 2.2: $H$ non è solo una leva sul traffico di rete ma anche un moltiplicatore dell'errore indotto dall'eterogeneità.
+
 ### 2.2 DiLoCo e Sparse Communication
 
 DiLoCo [1] propone un paradigma di training distribuito in cui ogni partecipante esegue un numero elevato di step di ottimizzazione locale — denominati *inner steps* — prima di ogni sincronizzazione con gli altri nodi. Questo riduce la frequenza di comunicazione di un fattore $H$ rispetto al training distribuito sincrono standard, dove $H$ è il numero di inner steps configurato. Il principio alla base è che, per modelli con molti parametri, il costo computazionale di un singolo step di ottimizzazione è trascurabile rispetto al costo di trasmissione del modello; conviene quindi ammortizzare il costo di comunicazione su quanti più step locali possibile.
 
 Con $H = 500$, ogni worker trasmette i propri pesi solo al termine di 500 batch di training. Supponendo batch da 32 campioni, ciò equivale a 16.000 esempi elaborati per ogni gossip push. L'impatto sulla qualità del modello aggregato è limitato perché gli inner steps locali producono aggiornamenti nella stessa direzione generale del gradiente globale, convergendo verso una soluzione compatibile con quella degli altri worker.
 
+> **Inner steps vs epoche.** In letteratura FL alcuni paper (in particolare quelli basati su FedAvg) esprimono la computazione locale in *epoche* $E$ — cioè passaggi completi sul dataset locale. DiLoCo e questo progetto usano invece *gradient steps* $H$, che è un'unità più precisa e più controllabile. Con Worker 0 che ha ~209.700 campioni di training e `batch_size=32`, un'epoca corrisponde a circa 6.553 step; $H = 500$ equivale quindi a circa 0.08 epoche per round. La scelta degli step rispetto alle epoche non è arbitraria: con dataset non-i.i.d. le partizioni dei worker hanno dimensioni diverse (nel setup a 3 worker variano da ~210k a ~273k campioni), quindi un'epoca dura un tempo diverso per ogni worker. Esprimere $H$ in step garantisce che tutti i worker facciano esattamente la stessa quantità di computazione per round, indipendentemente dalla dimensione della loro partizione, mantenendo il traffico di rete prevedibile e uniforme.
+
 DiLoCo introduce inoltre la tolleranza esplicita al drop asincrono dei messaggi: un aggiornamento mancante in un round non blocca il training del nodo mittente né quello del ricevente, che proseguono indipendentemente. Questo comportamento è intrinseco all'architettura gossip asincrona adottata: l'accumulatore di aggregazione è semplicemente a zero al termine del round se nessun vicino ha inviato aggiornamenti.
+
+#### DiLoCo vs questo progetto: differenze algoritmiche chiave
+
+La lettura del paper rivela che DiLoCo *non è equivalente a FedAvg con H grande*. La differenza fondamentale risiede nell'**ottimizzatore esterno** (outer optimizer). In DiLoCo, l'aggiornamento del modello condiviso tra worker non è una semplice media dei pesi locali, ma un processo in due fasi distinte:
+
+1. **Outer gradient** — al termine degli $H$ inner steps, ogni worker calcola il proprio *delta* nello spazio dei pesi rispetto al punto di partenza del round: $\Delta_k^{(B)} = \theta^{(B-1)} - \theta_k^{(B)}$. La media di questi delta tra tutti i $K$ worker è l'*outer gradient*: $\Delta^{(B)} = \frac{1}{K}\sum_{k=1}^K \Delta_k^{(B)}$.
+
+2. **Outer optimizer** — il modello condiviso viene aggiornato applicando l'outer gradient attraverso un ottimizzatore esterno: $\theta^{(B)} = \text{OuterOpt}(\theta^{(B-1)}, \Delta^{(B)})$. DiLoCo usa **Nesterov momentum** ($\eta_{\text{outer}} = 0.7$, $\beta_{\text{outer}} = 0.9$) come outer optimizer.
+
+Il paper confronta esplicitamente diversi outer optimizer e conclude:
+
+> *"We found that using as outer optimizer SGD (equivalent to FedAvg) or Adam performed poorly [...] We found Nesterov optimizer to perform the best."*
+
+Usando SGD come outer optimizer con learning rate 1, DiLoCo si riduce esattamente a FedAvg: la media dei delta è equivalente alla media dei pesi finali quando tutti i worker partono dallo stesso punto. È precisamente questa la strategia adottata in questo progetto: **FedAvg con $H = 500$** è equivalente a DiLoCo con outer optimizer SGD ($\eta = 1$).
+
+**Perché non possiamo implementare l'outer optimizer di DiLoCo.** La ragione non è solo una scelta di semplicità: l'outer optimizer di DiLoCo è **architetturalmente incompatibile con il requisito di sistema completamente decentralizzato** richiesto dalla traccia del progetto. L'aggiornamento del modello condiviso (Algorithm 1, linea 14) richiede per costruzione:
+1. Che tutti i worker trasmettano i propri delta a un'entità centrale che calcoli la media globale;
+2. Che quella stessa entità mantenga lo stato del momentum di Nesterov *tra round* — uno stato che deve essere unico e persistente;
+3. Che il modello aggiornato venga redistribuito da quell'entità a tutti i worker per il round successivo.
+
+Nel nostro sistema gossip P2P, nessun nodo vede tutti i contributi in un singolo round. L'aggregazione di ogni worker è parziale e asincrona: si integrano solo i modelli ricevuti casualmente via gossip, non l'intera rete. Non esiste nessun nodo che possa accumulare lo stato del momentum globale né redistribuire il risultato — sono esattamente le responsabilità che la traccia richiede di eliminare per ottenere un sistema P2P privo di aggregatore centrale.
+
+FedAvg (media pesata dei pesi) è la variante di aggregazione che si adatta naturalmente al gossip asincrono: ogni worker può calcolare localmente la propria media con qualsiasi sottoinsieme di modelli ricevuti, senza dipendere da una visione globale del round. È per questo che tutti i sistemi FL P2P esistenti usano FedAvg o varianti equivalenti come aggregazione locale, e non le formulazioni con outer optimizer centralizzato.
+
+**Differenza strutturale: P2P vs centralizzato.** Indipendentemente dall'outer optimizer, DiLoCo ha una struttura *centralizzata*: tutti i worker trasmettono i propri delta a un aggregatore centrale che applica l'outer optimizer e redistribuisce il modello aggiornato. Questo progetto ha invece una struttura **completamente decentralizzata**: ogni worker invia i propri pesi direttamente a un sottoinsieme casuale di peer (gossip k-push), e ogni worker aggrega *localmente* solo i modelli ricevuti via gossip. Non esiste nessun nodo centrale che veda tutti i contributi in un singolo round — la FedAvg di ciascun worker è parziale e asincrona.
+
+**Risultati quantitativi di DiLoCo rilevanti per questo progetto:**
+
+- *Ablation su H*: comunicare ogni H ∈ {50, 100, 250, **500**, 1000, 2000} step mostra che H=500 è il punto di rendimento marginale decrescente — il vantaggio di comunicare più frequentemente (H < 500) è marginale, mentre H=1000 aumenta la perplexity di solo ~2.9% rispetto a H=50. Questo **valida direttamente la scelta H=500** adottata in questo progetto.
+- *Ablation su numero di worker*: più worker migliorano la generalizzazione con rendimento decrescente dopo 8 worker (perplexity: 1 worker → 16.23, 4 → 15.18, 8 → 15.02, 16 → 14.91, 64 → 14.96). L'impatto di aggiungere worker oltre 8 è quasi nullo, confermando il range 3–8 come sufficientemente rappresentativo per la campagna sperimentale di questo progetto.
+- *i.i.d. vs non-i.i.d.*: DiLoCo mostra che il non-i.i.d. non degrada significativamente la performance finale — solo la velocità di convergenza nei round iniziali è più lenta. Questo è consistente con quanto osservato nei nostri run di sviluppo su FEMNIST.
+- *Comunicazione ridotta di 500×*: DiLoCo su 8 worker ottiene prestazioni migliori del baseline sincrono con batch 8× più grande, comunicando 500× meno. Il vantaggio relativo è ancora più marcato nel contesto di questo progetto, dove la comunicazione avviene su rete TCP/IP reale tra EC2 distinte anziché su interconnessioni ad alta banda tra acceleratori.
+
+#### Confronto qualitativo con i risultati di DiLoCo
+
+Un confronto diretto sui numeri è precluso dalla diversità dei task (classificazione CNN su FEMNIST vs language modeling su C4), delle metriche (accuracy vs perplexity) e delle scale (1.7M vs 60–400M parametri). Il confronto significativo è invece *qualitativo*: le tendenze osservate nei nostri esperimenti sono coerenti con le previsioni teoriche di DiLoCo?
+
+**Cosa ci svantaggia rispetto a DiLoCo:**
+
+Il punto di svantaggio più rilevante è l'aggregazione. DiLoCo mostra che FedAvg (= SGD outer, il nostro metodo) "performed poorly" rispetto a Nesterov. Tuttavia questa conclusione è tratta su LLM da centinaia di milioni di parametri con un gradient landscape profondamente non-convesso: il momentum esterno è particolarmente utile quando i delta degli inner steps sono rumorosi e variabili, come accade su sequenze testuali di lunghezza 1024 token con un transformer. Su una CNN da 1.7M parametri su un task di classificazione d'immagini — molto più "regolare" dal punto di vista dell'ottimizzazione — la differenza tra FedAvg e Nesterov esterno è presumibilmente più contenuta. Non è possibile quantificarla senza implementare entrambe le varianti, ma la limitazione è documentata.
+
+Il secondo svantaggio è il punto di partenza: DiLoCo usa sempre un modello pretrainato (24k step) come inizializzazione — tutti i risultati sono di fine-tuning. Il paper mostra che partire da zero degrada la perplexity finale di ~0.1 PPL, un impatto piccolo ma non nullo. Noi alleniamo sempre from scratch, che è il setting più difficile e teoricamente il più lontano da qualsiasi ottimo.
+
+**Cosa ci avvantaggia rispetto a DiLoCo:**
+
+Il contributo architetturale di questo progetto — la decentralizzazione completa via gossip P2P — è qualcosa che DiLoCo non affronta. DiLoCo è *ispirazione* per i meccanismi di sparse communication, ma rimane centralizzato nel suo aggregatore. Il nostro sistema tolera la perdita di worker, opera su rete TCP/IP reale con latenza variabile, e non ha nessun single point of failure per il training. Questi sono requisiti di sistemi distribuiti che DiLoCo non si pone.
+
+**Cosa è veramente comparabile:**
+
+La metrica più utile per il confronto non è l'accuracy assoluta ma il **guadagno relativo del gossip rispetto al training isolato** (Esperimento 1 vs Esperimento 2 del piano sperimentale). DiLoCo mostra che l'architettura sparse communication porta benefici significativi — migliore generalizzazione e meno comunicazione — rispetto al training isolato. Se i nostri esperimenti mostrano un delta positivo significativo tra no-FL e FL gossip, si valida la stessa intuizione su un dominio diverso e con vincoli di sistema più stringenti. Questo delta è la metrica principale da confrontare con le affermazioni qualitative di DiLoCo.
 
 ### 2.3 Dataset LEAF e FEMNIST
 
@@ -186,6 +254,126 @@ Il costo computazionale sarebbe $k \times$ quello attuale — ingiustificato per
 
 ---
 
+### 2.4 Eterogeneità dei Dati: Conseguenze e Mitigazione
+
+Il non-i.i.d. non è una caratteristica innocua del dataset: è la principale fonte di difficoltà sia nell'apprendimento locale di ogni worker sia nella qualità dell'aggregazione federata. Questa sezione tratta sistematicamente le conseguenze dell'eterogeneità dei dati e le strategie — teoriche ed implementate — per mitigarle.
+
+#### 2.4.1 Conseguenze in ML Centralizzato (singolo modello)
+
+In un contesto di ML classico senza federazione, addestrare un modello su dati non-i.i.d. significa addestrarlo su una distribuzione *biased*: i campioni provengono da una distribuzione $P_{\text{local}}$ che differisce dalla distribuzione target $P_{\text{global}}$. Le conseguenze principali sono:
+
+**Covariate shift e domain shift.** Le feature di input hanno distribuzione diversa tra training e test set. Un modello addestrato solo sugli scrittori del Worker 0 apprende rappresentazioni ottimizzate per quegli stili di scrittura specifici. Applicato a scrittori del Worker 1 — con un'altra calligrafia — le sue feature map attivano pattern diversi da quelli attesi, degradando la predizione. Questo è un caso specifico di *covariate shift*: $P(\mathbf{x})$ cambia tra source e target, anche se $P(y|\mathbf{x})$ resta simile (la `a` è sempre `a`, ma visivamente diversa tra scrittori).
+
+**Overfitting sulla distribuzione locale.** Con $H$ inner steps su dati non-i.i.d., il modello si specializza progressivamente sulla propria partizione. Nei dataset FEMNIST per scrittori, questo significa che la loss locale scende regolarmente, ma la capacità di generalizzare su scrittori mai visti peggiora — esattamente il trade-off tra bias (per la distribuzione locale) e varianza (su quella globale).
+
+**Classi squilibrate.** Non tutti i writer producono tutti i caratteri con la stessa frequenza. Un worker i cui scrittori hanno scritto raramente cifre avrà rappresentazioni deboli per le classi 0–9. Senza accesso a dati di altri worker, il modello non può colmare questa lacuna.
+
+#### 2.4.2 Conseguenze Specifiche del Federated Learning
+
+Il FL introduce problemi aggiuntivi che non esistono nel caso centralizzato, perché l'aggregazione unisce modelli addestrati su distribuzioni eterogenee:
+
+**1. Client drift.** È il problema centrale del FL non-i.i.d. Durante gli $H$ inner steps, ogni worker ottimizza nella direzione del gradiente locale $\nabla \mathcal{L}_k(\theta)$, che punta verso l'ottimo della propria distribuzione locale. Con più worker, questi gradienti locali divergono tra loro e si allontanano tutti dal gradiente globale $\nabla \mathcal{L}(\theta) = \frac{1}{K}\sum_k \nabla \mathcal{L}_k(\theta)$. Dopo $H$ step, ogni modello si trova in una regione diversa dello spazio dei pesi — la media FedAvg produce un modello che non è ottimo per nessuna delle partizioni. Con H grande e dati molto eterogenei, il drift può essere così pronunciato che FedAvg produce un modello peggiore del training isolato.
+
+**2. Degrado della qualità di FedAvg.** FedAvg calcola una media pesata dei pesi: $w_{\text{agg}} = \sum_k \frac{n_k}{n} w_k$. Questo è ottimale quando i $w_k$ si trovano nello stesso bacino di attrazione dello spazio di loss. Se invece i modelli hanno divergito verso bacini diversi (scenario comune con dati non-i.i.d. e H grande), la loro media cade in un punto di loss elevata per tutti — un "compromesso" che non funziona bene su nessuna partizione. In geometria dell'ottimizzazione, questo corrisponde a mediare punti su versanti opposti di una valle — il risultato è la cima della cresta, non la valle.
+
+**3. Accuracy valley dopo la prima FedAvg.** È il fenomeno più visibile nei run di sviluppo su FEMNIST: l'accuracy crolla significativamente subito dopo la prima aggregazione (da ~75% a ~3% in un caso estremo). La causa è esattamente il punto 2: il modello locale aveva imparato feature ottimizzate per i propri scrittori; la media con un modello da scrittori completamente diversi produce un ibrido che non funziona bene su nessuna delle due partizioni. L'accuracy recupera nei round successivi man mano che il training locale "riadatta" il modello aggregato alla distribuzione locale — ma questo richiede diversi round, durante i quali il sistema appare regredire.
+
+**4. Staleness dell'ottimizzatore dopo FedAvg.** AdamW accumula momenti di primo ordine ($m_t$, proporzionale alla media mobile dei gradienti) e di secondo ordine ($v_t$, proporzionale alla media mobile del quadrato dei gradienti). Questi momenti sono calibrati sulla traiettoria di ottimizzazione del modello locale. Dopo FedAvg, i pesi del modello cambiano significativamente, ma i momenti rimangono quelli del modello pre-aggregazione: il primo step post-aggregazione applica una direzione di aggiornamento calibrata su un punto dello spazio dei pesi completamente diverso da quello attuale. Questo contribuisce direttamente all'instabilità osservata nei round immediatamente dopo l'aggregazione e amplifica la severity dell'accuracy valley.
+
+**5. Disallineamento delle statistiche BatchNorm.** I parametri appresi di BatchNorm ($\gamma$, $\beta$) vengono aggregati via FedAvg e riflettono una media tra worker. Le running statistics ($\mu_{\text{run}}$, $\sigma^2_{\text{run}}$) invece non vengono aggregate e rimangono quelle del training locale. Nei primi step post-aggregazione, i parametri di scaling/shift ($\gamma$, $\beta$) sono calibrati su una distribuzione diversa da quella rappresentata dalle running stats — producendo normalizzazione errata fino a quando le running stats convergono al nuovo regime. L'impatto è solitamente limitato (pochi batch), ma amplifica l'instabilità del round post-aggregazione.
+
+**6. Asimmetria delle velocità e accumulo multi-round nel buffer.** In un sistema gossip asincrono, i worker più veloci (partizioni più piccole, meno step per epoch) completano più round prima che i worker lenti abbiano finito il loro. Il buffer di aggregazione del worker lento accumula più messaggi dal worker veloce che da quello lento — non per migliore qualità del modello, ma per pura differenza di velocità. Questo genera un'asimmetria di contributo: Worker 0 (209k campioni) è strutturalmente sovra-rappresentato nell'aggregazione di Worker 1 (272k campioni) perché può inviare 2–3 push mentre Worker 1 completa un singolo round.
+
+**7. Early stopping prematuro per effetto FedAvg.** Il contatore di patience dell'early stopping misura round consecutivi senza miglioramento della val loss *locale*. Poiché FedAvg può peggiorare temporaneamente la val loss locale (punti 2 e 4 sopra), il contatore può avanzare anche quando il sistema FL sta convergendo globalmente — non per overfitting, ma per il rimescolamento dei pesi dovuto all'aggregazione. Con patience=5, un worker potrebbe fermarsi proprio durante la fase di recovery post-aggregazione, producendo un risultato peggiore di quello che si otterrebbe con patience più alta.
+
+#### 2.4.3 Strategie di Mitigazione
+
+La letteratura FL ha sviluppato diverse strategie per affrontare questi problemi. Le distinguiamo in categorie per chiarezza:
+
+**Mitigazione del client drift:**
+
+- **FedProx** (Li et al., 2020): aggiunge un termine prossimale alla loss locale che penalizza la distanza dal modello globale: $\mathcal{L}_k^{\text{prox}}(\theta) = \mathcal{L}_k(\theta) + \frac{\mu}{2}\|\theta - \theta^{(B-1)}\|^2$. Il termine $\mu > 0$ limita quanto il modello locale può allontanarsi dal punto di partenza, controllando il drift. Il parametro $\mu$ bilancia aderenza al gradiente locale (basso $\mu$) e contenimento del drift (alto $\mu$).
+- **SCAFFOLD** (Karimireddy et al., 2020): introduce *control variates* — termini correttivi per ogni worker che stimano la differenza tra il gradiente locale e quello globale. Ogni worker mantiene un vettore $c_k$ che corregge il gradiente locale: $g_k^{\text{corr}} = \nabla \mathcal{L}_k(\theta) - c_k + c$, dove $c$ è la media globale dei control variates. SCAFFOLD elimina teoricamente il client drift in condizioni i.i.d. e lo riduce significativamente in condizioni non-i.i.d.
+- **FedNova** (Wang et al., 2020): normalizza gli aggiornamenti locali prima dell'aggregazione per tener conto del numero effettivo di step compiuti da ciascun worker. Questo risolve l'asimmetria generata da worker con un numero diverso di campioni locali (e quindi un numero diverso di step per epoch).
+- **H ridotto**: la soluzione più diretta — comunicare più frequentemente riduce il numero di step durante i quali i modelli possono divergere. Con H=100 invece di H=500, il drift è 5× inferiore per round. Il costo è proporzionalmente maggiore in termini di traffico di rete.
+
+**Mitigazione dell'instabilità post-aggregazione:**
+
+- **Reset dell'ottimizzatore dopo FedAvg**: azzerare i momenti $m_t$ e $v_t$ di AdamW al momento dell'aggregazione elimina la staleness del punto 4. Il costo è che i primi step del round successivo ripartono senza il beneficio del momentum accumulato — essenzialmente un warm-up implicito. Non implementato in questo progetto per non alterare la comparabilità degli esperimenti.
+- **Learning rate warm-up post-aggregazione**: applicare un piccolo learning rate nei primi $W$ step dopo ogni FedAvg, poi tornare al lr nominale. DiLoCo stesso osserva spike di perplexity dopo ogni outer step e li attribuisce a questo effetto — il warm-up mitiga i picchi.
+
+**Mitigazione dei problemi BatchNorm:**
+
+- **FedBN** (Li et al., 2021): non aggrega i parametri BatchNorm ($\gamma$, $\beta$, running_mean, running_var) — ogni worker li mantiene localmente. Questo elimina il disallineamento del punto 5 a costo di una leggera perdita di potere aggregante per i layer di normalizzazione. Nel nostro sistema le running statistics non vengono già aggregate (solo i parametri appresi $\gamma$ e $\beta$ entrano nella FedAvg) — questa è una forma parziale di FedBN.
+- **GroupNorm / LayerNorm**: alternative a BatchNorm che non usano running statistics e si comportano identicamente in training e inference. GroupNorm è comunemente usato in letteratura FL come sostituto diretto di BatchNorm.
+
+**Strategie implementate in questo progetto:**
+
+| Strategia | Implementata | Dove | Effetto sul non-i.i.d. |
+|---|:---:|---|---|
+| Gradient clipping (max_norm=1.0) | ✅ | `trainer.py` | Limita la norma del gradiente locale → riduce il drift per step |
+| Running stats BatchNorm non aggregate | ✅ | `grpc_server.py` — solo float aggregati | Mitigazione parziale FedBN |
+| Label smoothing (ε=0.1) | ✅ | `trainer.py` | Riduce l'over-confidence su distribuzioni locali sbilanciate |
+| Staleness check (max_staleness=10) | ✅ | `grpc_server.py` | Scarta modelli troppo vecchi che amplificano il drift |
+| FedProx | ❌ | — | Direzione di miglioramento futura |
+| SCAFFOLD | ❌ | — | Incompatibile con gossip asincrono (richiede control variates globali) |
+| Reset optimizer post-FedAvg | ❌ | — | Scelta deliberata: non alterare la comparabilità degli esperimenti |
+| H variabile (grid search) | ✅ (in piano) | Esperimento 3b | Esplora il trade-off drift vs comunicazione |
+
+> **Nota su SCAFFOLD in un sistema P2P.** SCAFFOLD richiede che i control variates siano sincronizzati tra tutti i worker ad ogni round di aggregazione — un'operazione intrinsecamente centralizzata. In un sistema gossip asincrono dove ogni worker aggrega solo i modelli che riceve casualmente, non è possibile mantenere control variates globali coerenti. SCAFFOLD è quindi architetturalmente incompatibile con il nostro design, per la stessa ragione per cui l'outer optimizer di DiLoCo non può essere implementato.
+
+---
+
+### 2.5 Fondamenti Teorici: Gossip FL come Discesa del Gradiente Decentralizzata
+
+Questa sezione colloca il sistema implementato all'interno della teoria del *Decentralized Stochastic Gradient Descent* (DSGD) e spiega perché il gossip P2P converge, a quali condizioni, e come la scelta dei parametri di sistema si riflette sulle garanzie teoriche.
+
+#### 2.5.1 DSGD e matrice di mixing
+
+Nell'ottimizzazione decentralizzata classica (Lian et al., 2017; Koloskova et al., 2019), ogni nodo $k$ mantiene una propria copia dei parametri $\theta_k$ e aggiorna periodicamente il suo stato mescolando con i vicini tramite una *matrice di mixing* $W \in \mathbb{R}^{N \times N}$:
+
+$$\theta_k^{(t+1)} = \sum_{j=1}^{N} W_{kj} \cdot \theta_j^{(t)} - \eta \nabla \mathcal{L}_k(\theta_k^{(t)})$$
+
+dove $W_{kj} > 0$ se $j$ è un vicino di $k$ (o $j = k$) e $W_{kj} = 0$ altrimenti. Perché la media decentralizzata converga alla media globale, $W$ deve essere *doubly stochastic* ($\mathbf{1}^T W = \mathbf{1}^T$ e $W \mathbf{1} = \mathbf{1}$) e connessa. Il gossip k-push produce implicitamente una matrice di mixing stocastica in senso spettrale: in attesa, ogni worker riceve aggiornamenti da tutti gli altri con probabilità positiva, garantendo la connettività del grafo di comunicazione.
+
+La velocità di convergenza del mixing è governata dal **gap spettrale** $\gamma = 1 - \lambda_2(W)$, dove $\lambda_2(W)$ è il secondo autovalore più grande della matrice (in valore assoluto). Un gap spettrale grande (vicino a 1) significa che il mixing è rapido — le informazioni si propagano in pochi round. Un gap piccolo (vicino a 0) significa che il mixing è lento — servono molti round per che ogni nodo abbia "visto" indirettamente i contributi di tutti gli altri.
+
+Con gossip k-push su $N$ nodi, il gap spettrale atteso cresce con $k$: più peer contattati per round → matrice più densa → gap più grande → mixing più rapido. Questo è il fondamento teorico del parametro `gossip_fanout`: non è solo una leva empirica sul traffico, ma determina la velocità di mixing del sistema e quindi la velocità di convergenza teorica dell'algoritmo.
+
+Con $N=3$ e `gossip_fanout=1`, il grafo di comunicazione è uno sparse random graph con 1 arco uscente per nodo per round. Il *mixing time* atteso — il numero di round perché la distribuzione dell'informazione sia $\epsilon$-vicina all'uniforme — è $O(\log N / k) = O(\log 3 / 1) \approx 1.6$ round: una notizia si propaga all'intera rete in meno di 2 round. Questa è la ragione per cui il sistema può funzionare anche con fanout=1 su reti piccole: la velocità di mixing è già molto alta per $N$ piccolo.
+
+Con $N=8$ e `gossip_fanout=1`, il mixing time cresce a $O(\log 8) = 3$ round. Con `gossip_fanout=3`, si riduce a 1 round. Il vantaggio del fanout alto diventa più marcato al crescere di $N$ — confermando che gli esperimenti di scalabilità (Esperimento 4) sono quelli dove l'effetto di `gossip_fanout` è più interessante da studiare.
+
+#### 2.5.2 Linear Mode Connectivity e perché FedAvg funziona
+
+FedAvg calcola una media lineare nello spazio dei pesi. Per un'interpolazione lineare tra due modelli $\theta_A$ e $\theta_B$ abbia senso, è necessario che il *segmento* $\{(1-\alpha)\theta_A + \alpha\theta_B, \alpha \in [0,1]\}$ nello spazio dei pesi non attraversi regioni di loss elevata — ovvero che i due modelli si trovino nello stesso *bacino* di attrazione della loss landscape.
+
+Frankle et al. (2020) hanno osservato empiricamente che modelli addestrati con la stessa architettura su dati diversi tendono a convergere verso punti connessi linearmente nella loss landscape, con barriere di loss trascurabili lungo il segmento che li unisce. Questo fenomeno — chiamato *linear mode connectivity* — è la ragione profonda per cui FedAvg funziona: la media dei pesi di modelli convergenti è anch'essa un buon modello.
+
+Tuttavia la connettività si indebolisce sotto forte eterogeneità: modelli addestrati su distribuzioni molto diverse possono convergere verso bacini distanti, separati da una "cresta" di loss elevata. La media dei due modelli cade sulla cresta — non nel bacino di nessuno dei due. Questo spiega perché:
+
+1. **L'accuracy valley post-FedAvg** è tanto più profonda quanto più eterogenee sono le partizioni. I worker con distribuzioni più distanti producono modelli in bacini più lontani; la loro media è più lontana da entrambi.
+2. **H grande amplifica il problema**: con più inner steps, ogni modello si allontana di più dal punto di partenza comune, aumentando la distanza tra i bacini finali. Convergenza verso bacini distanti → media nella cresta.
+3. **Il warm-up post-aggregazione funziona**: partendo dalla cresta (alta loss), i primi inner steps scendono rapidamente verso il bacino più vicino — che è quello corrispondente alla distribuzione locale. È questo "scivolamento" verso il bacino locale che produce il recupero dell'accuracy nei round successivi alla FedAvg.
+
+> **Corollario pratico.** La dimensione e la profondità dell'accuracy valley è un indicatore della distanza tra i bacini dei modelli aggregati — e quindi dell'eterogeneità effettiva delle distribuzioni locali. Un sistema con dati i.i.d. non mostrerebbe questo fenomeno (i bacini coincidono); un sistema con dati molto eterogenei mostra un calo profondo e un recupero lento. FEMNIST è un caso intermedio: la variabilità tra scrittori è reale ma contenuta — tutti scrivono le stesse 62 classi, con variazioni di stile ma non di semantica.
+
+#### 2.5.3 Consenso decentralizzato e convergenza al modello globale
+
+In DSGD, sotto le ipotesi standard (smoothness della loss, varianza bounded dei gradienti, mixing sufficientemente rapido), è possibile dimostrare che tutti i nodi convergono *allo stesso punto*:
+
+$$\frac{1}{K}\sum_k \|\theta_k^{(T)} - \theta^*\|^2 \xrightarrow{T \to \infty} 0$$
+
+dove $\theta^*$ è il minimizzatore della loss globale $\mathcal{L}$. La velocità di convergenza dipende dal gap spettrale $\gamma$ del gossip graph: maggiore è $\gamma$, più rapida è la convergenza. Nel regime non-i.i.d., il punto limite non è l'ottimo esatto di $\mathcal{L}$ ma una sua neighborhood, con raggio proporzionale a $G^2/\gamma$ (eterogeneità dei dati divisa per il gap spettrale del grafo).
+
+Questo mette in relazione diretta i due parametri principali del sistema:
+- `inner_steps_H` → controlla $G^2$: H più grande = modelli che divergono di più = maggiore "gradiente dissimilarity" al momento dell'aggregazione
+- `gossip_fanout` → controlla $\gamma$: fanout più grande = gap spettrale più alto = convergenza più rapida e neighborhood più piccola
+
+L'obiettivo degli esperimenti (Sezione 7) è empiricamente verificare queste relazioni e trovare il punto operativo ottimale nel piano (H, fanout) per questo specifico task e dataset.
+
+---
+
 ## 3. Architettura del Sistema
 
 Il sistema è composto da due tipologie di componenti con responsabilità nettamente separate: il **Discovery Server** (Registry) e i **nodi Worker**. Questa separazione è un vincolo di progettazione deliberato: il Registry non deve mai conoscere la struttura del modello, i suoi parametri o qualsiasi informazione relativa al training. La Figura 1 illustra l'architettura logica complessiva.
@@ -222,6 +410,8 @@ Il Discovery Server è implementato come un server HTTP ultra-leggero in Flask (
 - `GET /peers` — restituisce la lista degli indirizzi gRPC correntemente attivi.
 
 Il vincolo più importante di questo componente è **l'assoluta assenza di logica di training e di topologia**: il Registry non conosce né la struttura del modello, né i suoi parametri, né alcun iperparametro, né le relazioni di vicinanza tra i nodi. La selezione dei peer con cui comunicare è responsabilità esclusiva di ciascun worker (Sezione 4.2, Fase C). Questa separazione garantisce che il componente rimanga un semplice name server, scalabile e rimpiazzabile senza impatto sul processo di apprendimento.
+
+> **Il Registry come unico punto di centralizzazione.** Il Discovery Server è l'unico componente del sistema con un ruolo centralizzato, ed è una centralizzazione intenzionale e limitata al piano di rete — non al piano del learning. L'analogia corretta è il DNS: un server DNS è un single point of failure per la risoluzione dei nomi, ma non per il traffico applicativo. Allo stesso modo, se il Registry diventa irraggiungibile durante il training, i worker continuano a comunicare tra loro usando la lista peer memorizzata localmente dall'ultima chiamata a `/get_peers` — il training non si interrompe. La claim di decentralizzazione del sistema si riferisce al protocollo di apprendimento: nessun nodo vede i gradienti o i pesi degli altri se non tramite gossip diretto, nessun aggregatore centrale produce il modello finale. Questa proprietà è indipendente dall'esistenza del Registry.
 
 #### Scelta tecnologica: Flask vs alternative
 
@@ -384,6 +574,18 @@ Ogni container ha accesso **esclusivo e isolato** alla propria partizione: il fi
 
 La partizione è non-i.i.d. per costruzione: LEAF organizza i dati per autore, ciascuno con uno stile di scrittura caratteristico. Assegnare utenti contigui a un worker garantisce che la sua distribuzione di classi rifletta gli stili di un sottoinsieme specifico di scrittori — diverso da quello di ogni altro worker. Questo simula fedelmente lo scenario FL reale in cui i dispositivi partecipanti hanno dati generati da utenti diversi con abitudini proprie.
 
+**Perché le partizioni hanno dimensioni diverse.** Lo split è per *scrittore*, non per *campione*: ogni worker riceve circa $|\mathcal{U}|/N$ scrittori, ma ogni scrittore ha un numero diverso di immagini (alcuni hanno scritto 200 caratteri, altri 400 o più). Di conseguenza, anche con lo stesso numero di scrittori assegnati, il totale dei campioni varia tra worker. Con 3 worker sul dataset completo, a titolo indicativo:
+
+```
+Worker 0 → ~1166 scrittori → ~210k campioni
+Worker 1 → ~1166 scrittori → ~273k campioni
+Worker 2 → ~1165 scrittori → ~252k campioni
+```
+
+Questa asimmetria è intenzionale e realistica: in un deployment FL reale i dispositivi hanno quantità di dati eterogenee. Il meccanismo di FedAvg con ponderazione per `num_samples` compensa parzialmente questa differenza nel calcolo della media pesata dei modelli.
+
+**Come si realizza il non-i.i.d.** Tutti i worker hanno tutte e 62 le classi — non è che Worker 0 abbia solo le lettere A–M e Worker 1 solo N–Z. Il non-i.i.d. emerge dagli *stili di scrittura*: le `a` di un gruppo di scrittori assegnati a Worker 0 hanno un aspetto diverso dalle `a` degli scrittori di Worker 1. Il modello di ogni worker impara feature visive specifiche del proprio gruppo di scrittori, rendendo i modelli eterogenei tra loro anche a parità di classi — esattamente la condizione che il gossip FL deve saper gestire.
+
 #### Motivazione della scelta statica vs dinamica
 
 Una partizione dinamica (che ribilancia i dati al join di nuovi worker) avrebbe garantito partizioni di dimensione uniforme anche in caso di variazioni del numero di nodi. Tuttavia, introdurrebbe una dipendenza globale: ogni ribilanciamento richiederebbe un coordinatore che conosce l'intera distribuzione degli utenti — contraddittorio con l'approccio puramente P2P adottato. La scelta statica mantiene il sistema autonomo: ogni worker carica semplicemente i file presenti nella propria directory montata, senza conoscere `WORKER_ID` o `TOTAL_WORKERS` a livello di dataset.
@@ -447,6 +649,10 @@ L'early stopping è **locale e indipendente** per ogni worker: non esiste coordi
 **Meccanismo.** Il worker esegue esattamente `inner_steps_H` passi di ottimizzazione locale usando l'ottimizzatore AdamW con learning rate configurabile. Durante questa fase, Thread 1 continua ad accumulare i messaggi ricevuti nell'`AggregationBuffer`, ma Thread 2 non li legge: la sincronizzazione avviene solo all'inizio del round successivo (Fase A).
 
 **Scelta dell'ottimizzatore: AdamW vs SGD.** AdamW è preferito a SGD per la sua robustezza ai learning rate: richiede meno tuning del learning rate rispetto a SGD con momentum, che è critico in un contesto distribuito dove non c'è un tutor centrale che aggiusta i parametri. AdamW introduce la weight decay direttamente sull'aggiornamento dei pesi (non sul gradiente come L2 regularization), il che tende a produrre modelli con generalizzazione migliore.
+
+Nell'ambito del FL non-i.i.d., AdamW presenta un ulteriore vantaggio rispetto a SGD: i tassi di apprendimento adattativi *per parametro*. SGD applica lo stesso learning rate scalare a tutti i parametri in tutti i worker — ma in un setting non-i.i.d. il gradiente locale ha magnitude e direzione sistematicamente diverse tra worker, a causa delle distribuzioni eterogenee. Un learning rate che garantisce convergenza per Worker 0 può essere troppo alto per Worker 1 (causando oscillazioni) o troppo basso per Worker 2 (convergenza lenta). AdamW adatta implicitamente il learning rate effettivo di ogni parametro in base alla storia dei gradienti di quel worker: parametri con gradienti consistentemente grandi ricevono passi più piccoli; parametri con gradienti piccoli ricevono passi più grandi. Questo effetto di normalizzazione rende la traiettoria di ottimizzazione locale più stabile e più comparabile tra worker con distribuzioni diverse, migliorando la qualità dell'aggregazione FedAvg.
+
+Un secondo vantaggio di AdamW in FL è la velocità di recovery post-aggregazione. Dopo FedAvg, i pesi cambiano bruscamente e i momenti ($m_t$, $v_t$) di AdamW si trovano disallineati con il nuovo punto dello spazio dei pesi. Tuttavia AdamW aggiorna i momenti ad ogni step: dopo pochi batch post-aggregazione, $m_t$ e $v_t$ convergono alle statistiche del nuovo regime, permettendo una discesa efficiente verso il bacino locale. SGD con momentum richiede più tempo per "dimenticare" il momentum del round precedente, amplificando l'instabilità post-aggregazione.
 
 **Scelta di H=500.** Il valore $H=500$ è ispirato direttamente a DiLoCo [1] e rappresenta un trade-off tra qualità dell'aggregazione e costo di comunicazione. Con $H$ piccolo (es. 1), ogni aggiornamento è quasi un gradiente puro e l'aggregazione è equivalente al SGD distribuito sincrono — ottima qualità ma alta frequenza di comunicazione. Con $H$ grande (es. 10.000), ogni worker diverge significativamente dagli altri prima di sincronizzarsi — comunicazione rara ma aggregazione degradata. $H=500$ mantiene i worker sufficientemente allineati da rendere l'aggregazione FedAvg efficace, pur riducendo la frequenza di comunicazione di due ordini di grandezza rispetto al training sincrono.
 
@@ -672,11 +878,13 @@ Per questo progetto il disallineamento è accettabile: la validazione (early sto
 
 La probabilità `p=0.25` è conservativa rispetto al Dropout FC: i layer conv hanno già un effetto regolarizzante intrinseco (condivisione dei pesi, riduzione di risoluzione), quindi necessitano di meno regolarizzazione esterna.
 
+Nel contesto FL, il Dropout svolge un ruolo aggiuntivo rispetto alla semplice regolarizzazione: forza il modello a sviluppare **rappresentazioni distribuite e ridondanti**. Se il modello non può fare affidamento su nessun singolo filtro (perché viene azzerato con probabilità 0.25 ad ogni step), impara a codificare la stessa feature visiva su più filtri contemporaneamente. Questa ridondanza produce modelli più *compatibili* per la media FedAvg: se Worker A e Worker B codificano entrambi la feature "curva superiore della lettera `a`" su 4–5 filtri ciascuno (grazie al Dropout), la loro media mantiene quella feature su 4–5 filtri; se invece ciascuno la codificasse su un solo filtro (overfitting locale), la media potrebbe ridurla o cancellarla se i due filtri dominanti non coincidono per indice. La ridondanza aumenta la probabilità che i filtri "utili" di un worker sopravvivano nella media con quelli dell'altro.
+
 #### Dropout(p=0.5) nel Classificatore FC
 
 Il layer `Linear(3136→512)` è il layer più denso e il principale rischio di overfitting su partizioni locali piccole. Con `p=0.5`, la metà delle unità viene azzerata casualmente a ogni passo di training, forzando la rete a sviluppare rappresentazioni ridondanti e distribuite. In fase di inferenza (`model.eval()`), Dropout è disabilitato e tutti i neuroni contribuiscono con i pesi originali (senza il fattore di scala $1/p$ perché PyTorch usa *inverted dropout* di default).
 
-Il valore `p=0.5` è il valore classico proposto da Srivastava et al. (2014) per layer FC in classificazione.
+Il valore `p=0.5` è il valore classico proposto da Srivastava et al. (2014) per layer FC in classificazione. Nel contesto non-i.i.d. di FEMNIST, la ratio è ulteriormente rafforzata: con partizioni da ~210k–273k campioni e 62 classi, ogni worker ha mediamente ~3.400–4.400 campioni per classe. Su questa quantità, un layer FC da 1.6M parametri è a forte rischio di overfitting locale, specializzandosi sulle peculiarità visive degli scrittori di quella partizione. Un modello altamente overfit alla propria partizione produce pesi in zone remote dello spazio dei parametri, lontane dai pesi degli altri worker — rendendo la media FedAvg meno efficace. Il Dropout contrasta questo effetto mantenendo il modello in una regione dello spazio dei pesi più "centrale" e condivisa.
 
 #### Gradient Clipping in `train_step` — max\_norm=1.0
 
@@ -687,6 +895,8 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
 In FL, il gradient clipping svolge un ruolo specifico nel mitigare il **client drift**: su dati non-i.i.d., il gradiente locale può divergere significativamente dalla direzione del gradiente globale, specialmente dopo molti inner steps H. Gradienti grandi amplificano questa divergenza, rendendo il modello aggregato in Fase A meno stabile. Limitare la norma dei gradienti locali contiene la divergenza massima tra worker e migliora la qualità dell'aggregazione FedAvg. Il valore `max_norm=1.0` è una scelta conservativa standard in letteratura FL; con learning rate 0.001 i gradienti sono tipicamente già nell'ordine di $10^{-3}$–$10^{-1}$, quindi il clipping interviene solo in casi di gradiente esplosivo.
+
+Il gradient clipping fornisce inoltre una **garanzia di bounded drift** verificabile. Se la norma del gradiente è clippata a `max_norm` e il learning rate è $\eta$, ogni singolo passo di ottimizzazione può spostare i parametri di al più $\eta \cdot \text{max\_norm} = 0.001 \times 1.0 = 10^{-3}$ in norma L2. Dopo $H = 500$ inner steps, il drift massimo dal punto di partenza del round è limitato superiormente da $H \cdot \eta \cdot \text{max\_norm} = 0.5$. Questo upper bound — nella pratica molto più ottimistico perché i passi non sono allineati — garantisce che i pesi dei diversi worker non possano diverg oltre una distanza controllata prima della prossima aggregazione. È questa garanzia che rende FedAvg teoricamente fondata nel nostro sistema: la distanza L2 tra due modelli da aggregare è bounded, la loro interpolazione lineare cade quindi in una regione di peso space che è "vicina" a entrambi i punti di partenza.
 
 #### Label Smoothing — $\epsilon = 0.1$
 
@@ -699,6 +909,10 @@ $$\tilde{y}_k = (1 - \epsilon) \cdot \delta_{k,y} + \frac{\epsilon}{K}$$
 dove $\epsilon = 0.1$ e $K = 62$. La probabilità target della classe corretta diventa 0.90 invece di 1.0, distribuendo 0.10 uniformemente tra tutte le classi. I benefici sono:
 - **Riduzione dell'over-confidence** su classi ambigue, con output probabilistici meglio calibrati.
 - **Miglioramento della generalizzazione post-aggregazione**: un modello calibrato su dati non-i.i.d. locali generalizza meglio quando i suoi pesi vengono mediati con quelli di worker con distribuzioni diverse.
+
+La motivazione è particolarmente forte su FEMNIST per due ragioni legate alla struttura del task. Prima: le 62 classi includono molte coppie visivamente ambigue (`0`/`O`, `1`/`l`/`I`, `b`/`d`/`p`/`q`, `c`/`C`, `s`/`S`, `v`/`V`, `x`/`X`). Su questi caratteri, la "risposta corretta" è meno netta che su, ad esempio, MNIST con sole 10 cifre ben distinte. Addestrare il modello a produrre probabilità 1.0 sulla classe corretta lo porta a tracciare frontiere di decisione molto strette e fragili in prossimità di queste coppie ambigue. Con label smoothing ε=0.1, il modello impara invece a mantenere una probabilità residua sulle classi simili — comportamento più robusto alle variazioni di stile tra scrittori.
+
+Seconda: in un sistema FL non-i.i.d., i modelli di worker diversi sviluppano *gerarchie di confidenza* diverse sulle stesse classi, perché i loro scrittori scrivono le stesse lettere in modo leggermente diverso. Un modello molto over-confident su Worker 0 (che assegna p=0.99 alla classe `a` per certi tratti) e uno altrettanto over-confident su Worker 1 (che assegna p=0.99 alla classe `a` per tratti leggermente diversi) producono, dopo la media FedAvg dei pesi, un modello con logit inconsistenti — perché le regioni di attivazione che ciascun modello considera "definitivamente `a`" non coincidono nello spazio delle feature. Modelli con distribuzioni di output più morbide sono intrinsecamente più compatibili per la media: la loro interpolazione lineare nello spazio dei pesi produce logit che conservano la gerarchia di confidenza su entrambe le distribuzioni.
 
 *Nota*: label smoothing aumenta leggermente la loss di training (target meno estremi), ma riduce la validation loss — questo è il segnale atteso di miglioramento della generalizzazione. I confronti di accuracy tra configurazioni devono essere fatti sulla validation loss senza smoothing per comparabilità.
 
@@ -724,6 +938,12 @@ L'early stopping è implementato nel training loop principale (`main_worker.py`)
 
 Il comportamento post-early stopping è intenzionalmente non-terminante: il thread di training (Thread 2) si ferma, ma il **server gRPC (Thread 1) rimane attivo**. Questo comportamento è ottenuto chiamando `grpc_server.wait_for_termination()` dopo il break dal loop, che blocca il thread principale finché il server non viene fermato esternamente.
 
+#### Scopo originale dell'early stopping e adattamento al contesto FL
+
+In ML centralizzato, l'early stopping nasce per rilevare l'**overfitting**: quando la train loss scende ancora ma la val loss smette di migliorare o peggiora, il modello sta memorizzando il training set invece di generalizzare. Si ferma il training al minimo della val loss — il punto in cui il modello generalizza meglio su dati mai visti — e si scarta tutto il training successivo. La val loss è il segnale affidabile perché è calcolata su campioni che il modello non ha mai usato per aggiornarsi.
+
+Nel nostro sistema la stessa meccanica si applica a livello di round: se la val loss locale non migliora di almeno $10^{-4}$ per `early_stopping_patience` round **consecutivi** (non totali — il contatore si azzera ad ogni miglioramento), il worker ferma il proprio training. L'unità temporale è il round invece dell'epoca.
+
 #### Differenza semantica rispetto all'early stopping centralizzato
 
 In ML centralizzato, l'early stopping misura la loss sul validation set **globale**: se peggiora, il modello sta overfittando l'intero dataset di training. La decisione è globale e coordinata.
@@ -735,6 +955,8 @@ Nel nostro sistema la decisione è **locale e indipendente**: ogni worker misura
 2. **Perdita di un vicino gossip.** Quando un worker si ferma, chiama `deregister_worker()` nel blocco `finally` e sparisce dalla lista peer del Discovery Server. Gli altri worker non lo trovano più come target per i push di Phase C, riducendo il `gossip_fanout` effettivo della rete. Con 3 worker totali, la perdita di uno riduce il fanout disponibile da 2 a 1 — impatto significativo.
 
 Il fatto che la validation avvenga dopo la Phase A mitiga parzialmente il primo problema: la loss misurata include il contributo degli aggiornamenti ricevuti dai vicini, non solo quello del training locale. Tuttavia non elimina il rischio di stopping prematuro.
+
+3. **FedAvg come fonte di rumore sul contatore.** In FL non-i.i.d., la FedAvg può causare un peggioramento temporaneo della val loss anche quando il sistema sta convergendo globalmente — il modello riceve pesi da worker con distribuzioni di dati diverse e impiega qualche round di training locale per "riadattarsi". Questo significa che il contatore di patience può salire non per overfitting ma per il normale rimescolamento dei pesi dovuto all'aggregazione. Nei run sperimentali su FEMNIST si osserva questa dinamica nei round iniziali: accuracy che crolla dopo la prima FedAvg (da ~75% a ~3% nel caso estremo) e poi risale gradualmente. Un early stopping con patience bassa (es. 5) potrebbe fermare il worker proprio durante questa fase di recovery, producendo un risultato peggiore di quanto si otterrebbe lasciandolo continuare.
 
 #### Raccomandazione per gli esperimenti
 
@@ -805,9 +1027,17 @@ Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per 
 # 1. Modifica il parametro in config.yaml
 
 # 2. Pulisci i risultati precedenti
-rm -f data/femnist/worker_*/metrics.csv data/femnist/worker_*/test_result.json
+rm -f data/femnist/worker_*/metrics.csv \
+      data/femnist/worker_*/model_final.pt \
+      data/femnist/worker_*/test_result.json
 
 # 3. Lancia la run
+# IMPORTANTE — quando usare --build:
+#   Qualsiasi modifica a config.yaml o a file .py → sempre --build
+#   (config.yaml è copiato nell'immagine durante il build, non montato)
+#   Stesso codice e stessa config → --build è opzionale (l'immagine esistente è riusata)
+#   Cambio di num_workers o use_test_set → ri-eseguire anche split_dataset.py
+#   e generate_compose.py prima del --build
 docker compose up --build
 
 # 4. Analizza e archivia prima di passare alla prossima configurazione
@@ -859,6 +1089,8 @@ Questo procedimento è interamente abilitato dal sistema di metriche descritto n
 
 In un sistema P2P decentralizzato, non esiste un nodo centrale che osservi le prestazioni globali in tempo reale. Il sistema di metriche adottato sfrutta la struttura dei **bind mount Docker**: ogni worker scrive le proprie metriche su `{data_dir}/metrics.csv`, che — essendo `data_dir` montata dall'host — è immediatamente visibile sul filesystem dell'host senza alcun trasferimento dati aggiuntivo.
 
+> **Osservabilità dall'host e decentralizzazione.** Il fatto che `aggregate_metrics.py` venga lanciato dall'host al termine del training non contraddice la natura decentralizzata del sistema. Gli script di analisi sono strumenti di osservabilità *post-hoc* — leggono i risultati dopo che il training è concluso, senza influenzare né coordinare il processo di apprendimento. La decentralizzazione riguarda il protocollo di training (nessun aggregatore centrale, gossip P2P), non gli strumenti di analisi dei risultati. In qualsiasi sistema FL reale — inclusi quelli descritti in letteratura — la valutazione finale avviene su un'infrastruttura separata dai nodi di training. Containerizzare `aggregate_metrics.py` non aggiungerebbe nulla alla claim di decentralizzazione: sarebbe un container che legge file CSV, non un partecipante al protocollo.
+
 ```
 Container Worker 0               Host
 /app/data/femnist/ ←────────── ./data/femnist/worker_0/
@@ -897,7 +1129,7 @@ La riga viene scritta **dopo** le fasi A, B e C, incluse le durate di rete. La `
 
 ### 6.3 Aggregazione Globale Post-Esperimento
 
-`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, i checkpoint `worker_*/model_final.pt`. Produce:
+`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, gli snapshot finali `worker_*/model_final.pt`. Produce:
 
 **1. Tabella per round** — per ogni round, aggrega le metriche di tutti i worker attivi:
 
@@ -910,7 +1142,9 @@ La riga viene scritta **dopo** le fasi A, B e C, incluse le durate di rete. La `
 
 **2. Riassunto per worker** — rounds completati, accuracy finale, accuracy migliore, media di peer contattati, media di vicini aggregati.
 
-**3. Divergenza dei pesi (weight divergence)** — se i checkpoint finali `model_final.pt` sono presenti (salvati automaticamente al termine di ogni worker), lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia:
+**3. Divergenza dei pesi (weight divergence)** — se gli snapshot finali `model_final.pt` sono presenti, lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia.
+
+> **Nota su `model_final.pt`:** non è un checkpoint di ripristino — non salva lo stato dell'optimizer né il round corrente, quindi non permette di riprendere il training. È uno snapshot una-tantum dei pesi del modello salvato nel blocco `finally` alla fine del training (o in caso di terminazione pulita). Il suo unico scopo è questo calcolo di divergenza.
 
 $$d(w_i, w_j) = \|w_i - w_j\|_2$$
 
@@ -1245,6 +1479,33 @@ Tutti questi grafici possono essere generati in Python con `matplotlib` leggendo
 
 ---
 
+### 7.10 Osservazioni Empiriche da Documentare (TODO — completare con dati reali)
+
+I punti seguenti sono fenomeni osservati durante i run di sviluppo o attesi dalla teoria FL. Vanno arricchiti con i valori numerici reali prodotti dagli esperimenti completi e integrati nella discussione finale.
+
+**1. Accuracy valley dopo la prima FedAvg.**
+Nei run su FEMNIST non-i.i.d. si osserva un crollo drastico dell'accuracy subito dopo la prima aggregazione (nel run di sviluppo: da ~75% a ~3% su Worker 1 al round 3). Il modello locale ha imparato feature specifiche del proprio gruppo di scrittori; la media con un modello addestrato su scrittori completamente diversi produce un ibrido che non funziona bene su nessuna delle due partizioni. L'accuracy recupera nei round successivi man mano che il training locale "riadatta" il modello aggregato. Da documentare: entità del crollo, numero di round per il recovery, confronto con il caso i.i.d. (baseline teorica).
+
+**2. Optimizer state staleness dopo FedAvg.**
+AdamW accumula momenti di primo e secondo ordine ($m_t$, $v_t$) basati sui gradienti del modello locale. Dopo FedAvg i pesi cambiano significativamente ma i momenti restano quelli del modello pre-aggregazione — il primo step post-aggregazione applica una direzione di aggiornamento calibrata su un modello diverso da quello attuale. Questo contribuisce all'instabilità dei round immediatamente successivi all'aggregazione. La soluzione standard sarebbe resettare l'optimizer dopo ogni FedAvg, ma non è implementata per non alterare la dinamica comparativa degli esperimenti. Da documentare: confronto loss dei primi N step post-aggregazione vs step a regime.
+
+**3. Accumulo multi-round nel buffer asincrono.**
+Un worker più veloce (meno campioni per partizione) può completare più round mentre un worker lento è ancora nel suo round corrente, inviando più messaggi che si accumulano nel buffer del ricevente. Nel run di sviluppo: `neighbors=713235 (3 models)` = Worker 0 (209k) + Worker 2 (251k) × 2 messaggi in un singolo round di Worker 1 (272k). Questo crea un'asimmetria di contributo implicita: i worker più veloci pesano di più nell'aggregazione per pura differenza di velocità, non per qualità del modello. Da documentare: frequenza di questo fenomeno al variare di `num_workers` e `inner_steps_H`.
+
+**4. Client drift e tensione con inner_steps_H.**
+Con H elevato e dati non-i.i.d., i modelli locali "derivano" progressivamente lontano da qualsiasi ottimo comune — ogni worker ottimizza per la propria distribuzione locale, allontanandosi dagli altri. La tensione è: H grande → meno traffico di rete ma più drift → FedAvg meno efficace; H piccolo → più comunicazione ma modelli più allineati. Da documentare: curva di val accuracy finale vs H (Esperimento 3), con interpretazione in termini di drift.
+
+**5. Propagazione dell'informazione con fanout=1.**
+In una rete di N nodi con fanout=1, un modello aggiornato da un worker raggiunge tutti gli altri in almeno $\lceil \log_2 N \rceil$ round nel caso ottimo, ma la selezione casuale dei peer introduce alta varianza. Con 3 worker, è possibile che un worker non riceva aggiornamenti da un certo peer per molti round consecutivi per pura casualità. Da documentare: distribuzione empirica degli intervalli tra ricezioni da ogni peer, confronto tra fanout=1 e fanout=2.
+
+**6. Early stopping come amplificatore delle asimmetrie di rete.**
+Quando un worker raggiunge il plateau locale e si deregistra, il fanout effettivo degli altri worker si riduce. Con 3 worker totali, perderne uno dimezza i peer disponibili per il gossip — impatto sproporzionato rispetto a quanto succederebbe con 8 worker. Da documentare: round a cui scatta l'early stopping per ogni worker, impatto sulla convergenza dei worker rimanenti.
+
+**7. Costo reale di comunicazione per configurazione.**
+Ogni messaggio gossip trasporta il modello serializzato (~6.5 MB float32). Il volume totale per un run completo è: `gossip_fanout × rounds × num_workers × 6.5 MB`. Con fanout=1, 200 round, 3 worker: ~3.9 GB totali. Da documentare: tabella comparativa del volume per ogni configurazione testata, con confronto al FL centralizzato equivalente (dove ogni round trasferisce N × model_size).
+
+---
+
 ## 8. Tolleranza ai Guasti e Fault Injection
 
 Il sistema include tre meccanismi di fault injection configurabili, progettati per simulare le condizioni avverse di una rete reale distribuita. I parametri sono raggruppati nella sezione `fault_injection` di `config.yaml`.
@@ -1285,13 +1546,13 @@ if random.random() < crash_prob:
 
 La scelta di `sys.exit(1)` è deliberata e ha implicazioni precise:
 
-1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e il checkpoint viene salvato.
+1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e lo snapshot finale `model_final.pt` viene salvato.
 
 2. `SystemExit` non viene catturata da `grpc_server.wait_for_termination()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
 
 3. Il Docker container si arresta con exit code 1, il che (in assenza di `restart: always` nel compose) lascia il servizio down — comportamento intenzionale.
 
-Lo stesso meccanismo `finally` è sfruttato dai signal handler descritti in Sezione 8.4: SIGTERM e SIGINT vengono intercettati e reindirizzati a `sys.exit(0)`, garantendo la stessa sequenza di cleanup (deregistrazione + checkpoint) anche per shutdown manuali e `docker stop`.
+Lo stesso meccanismo `finally` è sfruttato dai signal handler descritti in Sezione 8.4: SIGTERM e SIGINT vengono intercettati e reindirizzati a `sys.exit(0)`, garantendo la stessa sequenza di cleanup (deregistrazione + salvataggio snapshot finale) anche per shutdown manuali e `docker stop`.
 
 #### Gestione del nodo crashato dagli altri worker
 
@@ -1356,7 +1617,7 @@ signal.signal(signal.SIGINT, _handle_shutdown)
 Entrambi chiamano `sys.exit(0)`, che solleva `SystemExit` e attraversa il blocco `finally` — la stessa sequenza del crash simulato, ma con exit code 0 (terminazione normale). Il risultato è:
 
 1. `deregister_worker()` viene chiamato → il worker sparisce dalla lista peer
-2. Il checkpoint `model_final.pt` viene salvato
+2. Lo snapshot finale `model_final.pt` viene salvato
 3. Il processo termina con exit code 0
 
 #### Known limitation: SIGKILL e OOM
@@ -2078,7 +2339,7 @@ Ogni worker scrive `metrics.csv` in `/app/data/femnist/` dentro il container. Gr
 data/femnist/worker_0/metrics.csv
 data/femnist/worker_1/metrics.csv
 ...
-data/femnist/worker_0/model_final.pt   ← checkpoint finale
+data/femnist/worker_0/model_final.pt   ← snapshot finale dei pesi (solo per weight divergence)
 data/femnist/worker_0/test_result.json ← solo se use_test_set: true
 ```
 
@@ -2353,6 +2614,343 @@ python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
 ```
 
 La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) è indicativa del bias ottimistico, ma non lo misura con precisione: Run B allena su **80% dei dati** invece del 90% di Run A, quindi la `test_accuracy` sarà probabilmente più bassa per due motivi sovrapposti — meno dati di training (effetto reale) e assenza del bias ottimistico (effetto che si vuole isolare). I due contributi non sono separabili. Ciò che Run B garantisce è che la `test_accuracy` è una stima onesta della generalizzazione di quella configurazione su dati mai visti in nessuna decisione di training.
+
+---
+
+## 12. Target di Accuracy e Scalabilità Attesa
+
+Questa sezione raccoglie i valori di riferimento dalla letteratura, le aspettative teoriche per ogni parametro del sistema, e lo schema delle tabelle che verranno popolate con i risultati sperimentali reali al completamento della campagna di esperimenti (Sezione 7).
+
+### 12.1 Valori di Riferimento dalla Letteratura
+
+#### FEMNIST: difficoltà del task
+
+FEMNIST è il benchmark FL non-i.i.d. più usato in letteratura. Con 62 classi (10 cifre + 26 maiuscole + 26 minuscole) e alta variabilità interstile, è intrinsecamente più difficile di MNIST (10 classi, scrittura più uniforme). A titolo di confronto:
+
+- **Accuracy umana su EMNIST-62**: ~96–98% (con tempo sufficiente per disambiguare classi simili come `0`/`O`, `1`/`l`/`I`)
+- **CNN single-device su FEMNIST completo** (no FL, dati i.i.d.): ~85–92%, a seconda dell'architettura e del training budget
+- **CNN single-device su dati non-i.i.d. locali** (1 solo worker, nessun gossip): ~72–82%, perché il modello è esposto a un sottoinsieme di stili di scrittura
+
+#### Valori riportati in letteratura per FL su FEMNIST
+
+| Metodo | Setting | Accuracy riportata | Note |
+|---|---|:---:|---|
+| FedAvg [2] | 100 round, 2 epoche locali, 10% partecipazione | ~77–80% | LEAF split 90/10, non-i.i.d. per writer |
+| FedProx (Li et al., 2020) | stesso setup di FedAvg | ~79–83% | μ=0.01 proximal term |
+| SCAFFOLD (Karimireddy et al., 2020) | riduzione del client drift | ~82–87% | controllo varianza del gradiente |
+| Local (no FL, LEAF paper [3]) | training isolato per client | ~60–70% | baseline LEAF su subset ridotto |
+| **Questo progetto** | **3 worker, H=500, fanout=1, 200 round** | **TODO** | **popolate con i risultati reali** |
+
+> **Nota metodologica.** I valori in letteratura sono spesso ottenuti su configurazioni diverse (numero di client, frazione di partecipazione, dimensione dei dati locali). Il confronto diretto richiede cautela: la nostra configurazione (3 worker, tutto il dataset diviso in 3) differisce significativamente da un deployment con 100+ client su subset piccoli. L'obiettivo non è superare lo stato dell'arte, ma dimostrare che il gossip P2P converge a risultati comparabili al FL centralizzato su questa scala.
+
+#### Osservazione dai run di sviluppo
+
+Dai run di sviluppo su dataset completo con 3 worker, al round 14-16 l'accuracy è già ~84–85%. Questo suggerisce che la configurazione attuale è ben calibrata e i valori finali si attesteranno plausibilmente nella fascia **85–88%** — nella norma per un FL su FEMNIST con training sufficientemente lungo e architettura ben regolarizzata.
+
+Un risultato **superiore a 80%** è da considerarsi buono e competitivo con FedAvg centralizzato su questa scala. Un risultato **superiore a 85%** è eccellente e dimostra che il protocollo gossip P2P non perde qualità rispetto all'aggregazione centralizzata con N=3 worker.
+
+---
+
+### 12.2 Scaling con il Numero di Worker (`num_workers`)
+
+**Teoria:** aggiungere worker ha due effetti opposti.
+
+**Effetto positivo:** ogni worker copre una porzione diversa dello spazio degli stili di scrittura. Più worker → copertura più ampia → ogni modello, dopo l'aggregazione FedAvg, ha "visto" (indirettamente, via gossip) feature di più scrittori → migliore generalizzazione. Il modello finale tende verso una soluzione più vicina all'ottimo globale su tutti i 3.597 writer.
+
+**Effetto negativo:** con più worker, le partizioni locali diventano più piccole e più eterogenee. La distanza tra le distribuzioni locali cresce: il modello di Worker 0 e quello di Worker 7 (su un dataset a 8 worker) hanno visto stili completamente diversi. La media FedAvg di modelli molto divergenti produce un ibrido che non funziona bene su nessuna partizione — il **client drift** si amplifica.
+
+**Rendimento marginale decrescente:** il beneficio di aggiungere il 4° worker è inferiore a quello del 3°, e così via. Con N molto grande (e fanout piccolo), i modelli locali divergono così tanto che le aggregazioni potrebbero non convergere in un numero finito di round.
+
+**Attese quantitative per la nostra configurazione (dataset completo):**
+
+| `num_workers` | Campioni/worker | `mean_accuracy` finale attesa | Rounds a convergenza | Volume comunicazione (fanout=1, 200 round) |
+|:---:|:---:|:---:|:---:|:---:|
+| 3 | ~245k | **85–88%** | ~20–50 round | ~3.9 GB |
+| 5 | ~147k | **84–87%** | ~25–60 round | ~6.5 GB |
+| 8 | ~92k | **82–86%** | ~30–80 round | ~10.4 GB |
+
+> **TODO:** Sostituire con i valori reali degli Esperimenti 4a (N=3), 4b (N=5), 4c (N=8).
+
+**Come interpretare la `std_accuracy`:** con più worker e dati più eterogenei, ci si aspetta una deviazione standard leggermente più alta. Un sistema ben calibrato mantiene `std_accuracy < 5%` anche con 8 worker; valori superiori al 10% indicano che alcuni worker convergono bene e altri no — segnale di fanout troppo basso o H troppo alto rispetto all'eterogeneità dei dati.
+
+**Durata per round vs N:** la durata di un round è dominata dalla Fase B (H inner steps di training locale) e non dipende da N — questo è il principale vantaggio del gossip P2P rispetto al FL centralizzato. In FL centralizzato il server deve aggregare N modelli ad ogni round, diventando un collo di bottiglia: il tempo per round cresce con N. Nel gossip P2P ogni worker aggrega solo i modelli che riceve (al più `gossip_fanout` per round), indipendentemente da N.
+
+---
+
+### 12.3 Scaling con il Gossip Fanout (`gossip_fanout`)
+
+`gossip_fanout` è il parametro centrale del progetto: controlla esattamente il trade-off traffico/qualità di aggregazione.
+
+**Teoria — velocità di propagazione dell'informazione:**
+
+Con N=3 worker e fanout=1, ogni worker invia a 1 peer casuale per round. La probabilità che un modello aggiorni tutti gli altri worker cresce lentamente: in attesa che ogni worker venga raggiunto. Con fanout=N-1=2, ogni worker invia a entrambi gli altri ad ogni round — propagazione massima, ogni worker aggrega da tutti gli altri ogni round. Il vantaggio del fanout alto si riduce all'aumentare di N, dove N-1 diventa costoso.
+
+**Attese quantitative (N=3, H=500, dataset completo):**
+
+| `gossip_fanout` | Messaggi/round per worker | `mean_accuracy` attesa | Rounds a convergenza | Volume totale (200 round) |
+|:---:|:---:|:---:|:---:|:---:|
+| 1 | 1 | **85–87%** | ~30–60 round | ~3.9 GB |
+| 2 (= N-1) | 2 | **86–88%** | ~15–35 round | ~7.8 GB |
+
+> Con N=3, i valori significativi di fanout sono solo 1 e 2 (N-1). Fanout=3 con N=3 è equivalente a mandare a tutti + sé stesso — non ha senso.  
+> **TODO:** Sostituire con i valori reali degli Esperimenti 3c (fanout=1, fanout=2).
+
+**Differenza attesa tra fanout=1 e fanout=N-1:** con N=3 la differenza di fanout è solo 2× nel numero di messaggi, ma la qualità di aggregazione può variare significativamente nei round iniziali. Con fanout=1 è possibile che un worker non riceva aggiornamenti per 2-3 round consecutivi (per pura casualità della selezione random), rallentando la convergenza. Con fanout=N-1 ogni worker aggrega sempre tutti gli altri: convergenza più rapida nei primi round, poi entrambe le configurazioni tendono allo stesso valore asintotico.
+
+**Il "knee" del trade-off:** il punto di rendimento marginale decrescente su `gossip_fanout` è di grande interesse pratico — è la configurazione che massimizza l'accuracy ottenuta per unità di traffico di rete. Con N=3 la curva ha solo 2 punti, ma con N=8 (Esperimento 4) diventa possibile tracciare la curva completa: fanout ∈ {1, 2, 3, 4, 7} producono accuracy crescente e traffico crescente, e il punto in cui il guadagno marginale di accuracy si azzera è la configurazione ottimale per deployment su rete vincolata.
+
+---
+
+### 12.4 Scaling con gli Inner Steps (`inner_steps_H`)
+
+**Teoria — client drift:**
+
+H è il numero di gradient steps locali tra due gossip push. Con H grande, il modello di ogni worker si muove lungo la direzione del gradiente locale per molti passi prima di sincronizzarsi: i modelli divergono significativamente nello spazio dei pesi. La media FedAvg di modelli molto divergenti è meno accurata della media di modelli vicini — fenomeno noto come **client drift** (deriva del client).
+
+La tensione è:
+- **H piccolo** → modelli allineati, aggregazione di qualità alta, ma traffico $\propto 1/H$ più alto
+- **H grande** → risparmio di comunicazione, ma drift crescente e qualità dell'aggregazione in calo
+
+Con dati non-i.i.d. (come FEMNIST) il drift è amplificato rispetto al caso i.i.d.: ogni worker ottimizza per la distribuzione dei *propri* scrittori, e la direzione del gradiente locale può essere opposta a quella di un altro worker.
+
+**Attese quantitative (N=3, fanout=1, dataset completo):**
+
+| `inner_steps_H` | Epoche equiv. (Worker 0, ~210k campioni) | Drift atteso | `mean_accuracy` attesa | Volume/round |
+|:---:|:---:|:---:|:---:|:---:|
+| 100 | ~0.015 epoche | basso | **85–88%** | ~6.5 MB |
+| 500 (default) | ~0.076 epoche | medio | **85–87%** | ~6.5 MB |
+| 1000 | ~0.153 epoche | alto | **83–86%** | ~6.5 MB |
+
+> Il volume per round non cambia con H: ogni gossip push trasmette lo stesso modello (~6.5 MB) indipendentemente da quanti step ha compiuto. Quello che cambia è la *frequenza* del push, non la dimensione. Il traffico totale per ottenere un certo numero di campioni elaborati cambia: con H=100, per 50.000 step occorrono 500 push; con H=1000 bastano 50 push. Con H=100, il beneficio alla convergenza (modelli sempre allineati) potrebbe non compensare il costo di 10× più push.
+
+> **TODO:** Sostituire con i valori reali degli Esperimenti 3b (H=100, H=500, H=1000). La curva `mean_accuracy` vs `H` è uno dei grafici chiave della relazione.
+
+---
+
+### 12.5 Sintesi: Cosa Costituisce un Buon Risultato
+
+Tenendo conto della letteratura e delle aspettative teoriche, i criteri di valutazione sono:
+
+**Criterio 1 — Accuracy assoluta:**
+
+| Livello | `mean_accuracy` finale | Giudizio |
+|---|:---:|---|
+| Eccellente | ≥ 86% | Competitivo con FL centralizzato su questa scala |
+| Buono | 82–85% | Nella norma per gossip FL non-i.i.d. con N=3 |
+| Accettabile | 78–81% | Inferiore al FL centralizzato ma superiore al no-FL baseline |
+| Insufficiente | < 78% | La gossip aggregation non porta beneficio significativo rispetto al training isolato |
+
+**Criterio 2 — Vantaggio rispetto alla baseline no-FL:**
+Il gossip deve apportare un miglioramento misurabile rispetto al training in isolamento (Esperimento 1). L'entità attesa del vantaggio è **+5–15% di mean_accuracy** e una riduzione della `std_accuracy` tra worker di almeno il 30–50%.
+
+**Criterio 3 — Equità della convergenza (`std_accuracy`):**
+Un sistema FL sano produce modelli simili su tutti i worker. Con N=3 e dataset full, `std_accuracy < 3%` al termine indica convergenza uniforme. Valori tra 3% e 7% sono accettabili; oltre il 7% segnalano un'aggregazione inefficace o un fanout troppo basso.
+
+**Criterio 4 — Graceful degradation sotto fault injection:**
+Il sistema deve mantenere `mean_accuracy > 80%` con `drop_probability: 0.2`. Un crollo significativo dell'accuracy (> 5%) a `drop_probability: 0.2` indicherebbe dipendenza eccessiva dalla continuità delle comunicazioni — comportamento che il gossip asincrono dovrebbe proprio evitare.
+
+---
+
+### 12.6 Tabelle Risultati (TODO — completare con dati reali)
+
+**Esperimento 1 vs 2 — Baseline no-FL vs FL gossip:**
+
+| Metrica | Esp. 1 (no gossip) | Esp. 2 (gossip default) | Delta |
+|---|:---:|:---:|:---:|
+| `mean_accuracy` finale | TODO | TODO | TODO |
+| `std_accuracy` finale | TODO | TODO | TODO |
+| Round a convergenza | TODO | TODO | TODO |
+| L2 divergenza pesi | TODO | TODO | TODO |
+
+**Esperimento 3c — Effetto gossip_fanout (N=3, H=500):**
+
+| `gossip_fanout` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) |
+|:---:|:---:|:---:|:---:|:---:|
+| 1 | TODO | TODO | TODO | TODO |
+| 2 | TODO | TODO | TODO | TODO |
+
+**Esperimento 3b — Effetto inner_steps_H (N=3, fanout=1):**
+
+| `inner_steps_H` | `mean_accuracy` | `std_accuracy` | Round a conv. | Msg push totali |
+|:---:|:---:|:---:|:---:|:---:|
+| 100 | TODO | TODO | TODO | TODO |
+| 500 | TODO | TODO | TODO | TODO |
+| 1000 | TODO | TODO | TODO | TODO |
+
+**Esperimento 4 — Scalabilità num_workers (config ottimale, fanout=best):**
+
+| `num_workers` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) | Durata/round (s) |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 3 | TODO | TODO | TODO | TODO | TODO |
+| 5 | TODO | TODO | TODO | TODO | TODO |
+| 8 | TODO | TODO | TODO | TODO | TODO |
+
+**Esperimento 5 — Robustezza fault injection (config ottimale):**
+
+| `drop_probability` | `mean_accuracy` | Note |
+|:---:|:---:|---|
+| 0.0 | TODO | riferimento pulito |
+| 0.2 | TODO | default — deve reggere |
+| 0.5 | TODO | soglia critica |
+| 0.8 | TODO | degradazione attesa |
+
+---
+
+## 13. Piano Sperimentale Completo
+
+Questa sezione descrive in modo strutturato l'intero piano degli esperimenti: quali parametri variano, in quale ordine, e perché ogni run è necessario. La struttura usa una notazione a cicli annidati per rendere esplicite le dipendenze tra esperimenti.
+
+### 13.1 Spazio dei Parametri
+
+La tabella distingue i parametri fissi (identici in tutti i run) da quelli esplorati.
+
+**Parametri fissi in tutti i run:**
+
+| Parametro | Valore fisso | Motivazione |
+|---|:---:|---|
+| `batch_size` | 32 | bilanciamento gradiente / velocità |
+| `learning_rate` | 0.001 | AdamW con lr=1e-3 già calibrato su FEMNIST |
+| `clip_grad` | 1.0 | drift bound garantito (sezione 5.3) |
+| `label_smoothing` | 0.1 | calibrazione 62 classi (sezione 5.3) |
+| `dropout_conv` | 0.25 | regularizzazione validata |
+| `dropout_fc` | 0.5 | standard per classificatore FC |
+| `aggregation_strategy` | FedAvg | unica strategia implementata |
+| `early_stopping_patience` | 10 | stesso criterio di arresto per tutti i run comparativi |
+| `drop_probability` | 0.0 | nessuna fault injection (tranne Fase 4) |
+| `crash_probability` | 0.0 | nessuna fault injection (tranne Fase 4) |
+| `max_staleness` | 10 | ampio margine, mai attivo senza fault injection |
+
+**Parametri esplorati (il valore in grassetto è il valore di controllo — quello del run già completato):**
+
+| Parametro | Valori esplorati | Controllo | Fase |
+|---|:---:|:---:|:---:|
+| `gossip_enabled` | false, **true** | true | 0 |
+| `gossip_fanout` | **1**, 2 | 1 | 1 |
+| `inner_steps_H` | 100, **500**, 1000 | 500 | 2 |
+| `num_workers` | **3**, 5, 8 | 3 | 3 |
+| `drop_probability` | **0.0**, 0.2, 0.5 | 0.0 | 4 |
+| `crash_probability` | **0.0**, 0.05 | 0.0 | 4 |
+| `use_test_set` | false, **true** | false | 5 |
+| `learning_rate` *(opz.)* | **0.001**, 0.0001 | 0.001 | — |
+
+### 13.2 Struttura degli Esperimenti: Pseudocodice
+
+L'intero piano si legge come un programma. Ogni blocco corrisponde a una fase; le frecce indicano dipendenze (un blocco può iniziare solo quando i precedenti sono completati e analizzati). Il run ✓ è il punto di riferimento comune condiviso da Fase 0, 1 e 2 — non va ripetuto.
+
+```
+# ── RIFERIMENTO COMUNE ───────────────────────────────────────────────────────
+run ✓:  N=3, gossip=True,  fanout=1, H=500          # già completato
+
+# ── FASE 0 — FL vs no-FL ─────────────────────────────────────────────────────
+# Isola gossip_enabled; tutto il resto uguale al run ✓.
+# Nessuna dipendenza: si può fare subito.
+run B0: N=3, gossip=False, fanout=–, H=500
+
+# ── FASE 1 — Effetto fanout ───────────────────────────────────────────────────
+# Isola gossip_fanout; H=500 e N=3 come in run ✓.
+# Nessuna dipendenza: si può fare subito.
+run F1: N=3, gossip=True, fanout=2, H=500
+
+# ── FASE 2 — Effetto H (inner steps) ─────────────────────────────────────────
+# Isola inner_steps_H; fanout=1 e N=3 come in run ✓.
+# Nessuna dipendenza: si può fare subito.
+run H1: N=3, gossip=True, fanout=1, H=100,  total_rounds=300
+run H2: N=3, gossip=True, fanout=1, H=1000, total_rounds=100
+
+# ── ANALISI BLOCCO A ─────────────────────────────────────────────────────────
+# Dopo B0, F1, H1, H2: confronta mean_accuracy, round di convergenza, L2 divergenza.
+# Scegli la configurazione che massimizza l'accuracy media:
+best_fanout ← argmax over {1, 2}
+best_H      ← argmax over {100, 500, 1000}
+
+# ── FASE 3 — Scalabilità ─────────────────────────────────────────────────────
+# Prerequisito per ogni N: aggiorna num_workers in config.yaml,
+# poi esegui split_dataset.py + generate_compose.py.
+# Dipende da: best_fanout e best_H (da Blocco A).
+for N in [5, 8]:               # N=3 già coperto da run ✓
+    run S_N: N, gossip=True, fanout=best_fanout, H=best_H
+
+# ── FASE 4 — Fault tolerance (opzionale) ─────────────────────────────────────
+# N=3, config ottimale. No risplit necessario.
+# Dipende da: best_fanout e best_H (da Blocco A).
+for drop_prob in [0.2, 0.5]:
+    run D_p: N=3, fanout=best_fanout, H=best_H, drop_probability=drop_prob
+run C1: N=3, fanout=best_fanout, H=best_H, crash_probability=0.05
+
+# ── FASE 5 — Valutazione finale unbiased ─────────────────────────────────────
+# Prerequisito: download_femnist.py (flag --tf diverso a LEAF) + split_dataset.py.
+# Dipende da: tutti i run precedenti (usa la config migliore trovata).
+run T0: N=3, gossip=True, fanout=best_fanout, H=best_H, use_test_set=True
+
+# ── OPZIONALE — Tuning learning rate ─────────────────────────────────────────
+# Indipendente: si può fare in qualsiasi momento nel Blocco A.
+run L1: N=3, gossip=True, fanout=1, H=500, lr=0.0001
+```
+
+### 13.3 Lista Completa dei Run
+
+| Run | Nome da salvare | Cosa varia | Valore | Dipende da | Risplit? |
+|---|---|---|:---:|---|:---:|
+| ✓ | `fanout1_h500_lr1e3` | — | riferimento | — | no |
+| B0 | `no_fl_baseline` | `gossip_enabled` | false | — | no |
+| F1 | `fanout2_h500` | `gossip_fanout` | 2 | — | no |
+| H1 | `fanout1_h100` | `inner_steps_H` | 100 | — | no |
+| H2 | `fanout1_h1000` | `inner_steps_H` | 1000 | — | no |
+| S1 | `best_config_5w` | `num_workers` | 5 | F1, H1, H2 | **sì** |
+| S2 | `best_config_8w` | `num_workers` | 8 | F1, H1, H2 | **sì** |
+| D1 | `fault_drop20` | `drop_probability` | 0.2 | F1, H1, H2 | no |
+| D2 | `fault_drop50` | `drop_probability` | 0.5 | F1, H1, H2 | no |
+| C1 | `fault_crash5` | `crash_probability` | 0.05 | F1, H1, H2 | no |
+| T0 | `final_test_eval` | `use_test_set` | true | tutti | **sì** |
+| L1 | `lr_1e4` *(opz.)* | `learning_rate` | 0.0001 | — | no |
+
+*I run con "Risplit? = sì" richiedono di aggiornare `config.yaml` e rieseguire `split_dataset.py` + `generate_compose.py` prima del `docker compose up`.*
+
+### 13.4 Ordine di Esecuzione
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  BLOCCO A — stessa partizione N=3, eseguibili in parallelo  │
+│                                                             │
+│  B0   F1   H1   H2   L1(opz.)                              │
+└───────────────────┬─────────────────────────────────────────┘
+                    │  analisi → scegli best_fanout, best_H
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  BLOCCO B — scalabilità (risplit per ogni N)                │
+│                                                             │
+│  S1 (N=5)  →  S2 (N=8)                                     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  BLOCCO C — fault tolerance, N=3, eseguibili in parallelo  │
+│                                                             │
+│  D1   D2   C1                                              │
+└───────────────────┬─────────────────────────────────────────┘
+                    │  tutti i run completati
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  BLOCCO D — valutazione finale (risplit con use_test_set)   │
+│                                                             │
+│  T0                                                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Blocchi B e C sono indipendenti tra loro: si possono eseguire in qualsiasi ordine dopo il Blocco A. Blocco D è sempre l'ultimo.
+
+### 13.5 Razionale per Fase
+
+**Fase 0 — B0 (baseline no-FL)**: senza questo confronto non è possibile quantificare il contributo del gossip. Se i worker ottengono 87% in isolamento e 87% con FL, il protocollo non aggiunge valore. Ci aspettiamo un gap di 3–7 punti e una divergenza L2 finale molto maggiore (modelli che non si sincronizzano mai). Questo run stabilisce il pavimento assoluto.
+
+**Fase 1 — F1 (fanout=2)**: con N=3, fanout=2 equivale al broadcast completo — ogni worker invia il modello a entrambi i peer ogni round. È il confronto diretto con il run ✓ (fanout=1). Ci aspettiamo che il gap di accuracy tra worker 0 (~90%) e worker 1/2 (~86%) si riduca, che la divergenza L2 collassi verso zero, e che la convergenza sia più rapida. Il costo è il raddoppio del volume di traffico gossip.
+
+**Fase 2 — H1/H2 (ablazione su H)**: H=100 aumenta la frequenza di gossip mantenendo i modelli più allineati ma richiede più round per elaborare la stessa quantità di dati. H=1000 riduce la comunicazione ma lascia divergere i modelli localmente: il FedAvg agisce su modelli più distanti, potenzialmente causando accuracy valley più profonde dopo ogni aggregazione. L'obiettivo è verificare empiricamente se H=500 è effettivamente il sweet spot, come osservato da DiLoCo su LLM. Poiché il nostro dataset è non-i.i.d. e più piccolo, il sweet spot potrebbe spostarsi verso H più piccoli.
+
+**Fase 3 — S1/S2 (scalabilità)**: al crescere di N le partizioni diventano più piccole e più eterogenee (più writer, stili di scrittura più diversi per worker). Ci aspettiamo che l'accuracy media peggiori leggermente ma che il sistema rimanga funzionale fino a N=8. La durata per round decresce (meno dati per worker), ma la convergenza in numero di round potrebbe peggiorare. In modalità multi-instance AWS si misura anche la latenza di rete reale tra istanze EC2 nella stessa AZ.
+
+**Fase 4 — D1/D2/C1 (fault tolerance)**: verifica la resilienza del design P2P. Con `drop_probability=0.2` ogni worker perde in media il 20% dei gossip push in uscita; il sistema dovrebbe compensare con i messaggi ricevuti dagli altri round. Con `crash_probability=0.05` ogni worker ha un'aspettativa di vita di 20 round; il registry lo rimuove automaticamente e i peer sopravvissuti continuano a fare gossip tra loro senza coordinazione centralizzata. Questa proprietà — continuare a funzionare senza un coordinator — è il vantaggio fondamentale dell'architettura P2P rispetto a FedAvg centralizzato.
+
+**Fase finale — T0 (test set unbiased)**: tutti i run precedenti usano la validation accuracy come metrica finale, il che introduce un piccolo bias ottimistico perché l'early stopping ha osservato quella stessa metrica. T0 usa la partizione test separata (split 80/10/10) che non ha mai influenzato né il training né l'early stopping. L'accuracy riportata qui è la stima più onesta delle capacità generalizzative del sistema.
 
 ---
 
