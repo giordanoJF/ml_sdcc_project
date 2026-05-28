@@ -19,7 +19,6 @@ leaf/
 # Log e variabili d'ambiente
 *.log
 .env
-/.venwsl/
 
 # Compose file generato da scripts/generate_compose.py — non versionare
 /docker-compose.yml
