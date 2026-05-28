@@ -7,7 +7,8 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# File generati dal proto (creati nel Dockerfile)
+# Generati da gossip.proto durante il docker build (Dockerfile.worker).
+# Non esistono nell'host a meno che non si esegua protoc localmente per l'autocompletamento IDE.
 gossip_pb2.py
 gossip_pb2_grpc.py
 

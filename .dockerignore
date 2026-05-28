@@ -25,6 +25,6 @@ __pycache__/
 *.egg-info/
 
 # Compose files, Terraform, and experiment results (not needed inside the container)
-docker-compose*.yml
+docker-compose.yml
 terraform/
 /results/
