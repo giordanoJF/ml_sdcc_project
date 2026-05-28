@@ -275,7 +275,7 @@ L'accesso è sempre mediato da `buffer.lock`. Thread 1 scrive (accumula), Thread
 
 #### Definizione del contratto (gossip.proto)
 
-La comunicazione inter-worker è definita dal file `gossip.proto`:
+La comunicazione inter-worker è definita dal file `proto/gossip.proto`:
 
 ```protobuf
 syntax = "proto3";
@@ -304,23 +304,23 @@ Il messaggio `ModelMessage` trasporta quattro campi: i pesi serializzati del mod
 La motivazione principale per scegliere gRPC è la **serializzazione binaria compatta dei pesi del modello**. Un modello CNN per FEMNIST ha tipicamente nell'ordine di $10^5$–$10^6$ parametri float32. In JSON ogni float occupa mediamente 8–12 caratteri (es. `0.0034521`), per un totale di 4–12 MB per messaggio. Con `torch.save()` + Protobuf il payload è 4 byte per float, circa 400 KB–4 MB — un risparmio di 2–3× rispetto a JSON.
 
 Ulteriori motivazioni:
-- **Stub autogenerati**: `grpc_tools.protoc` produce codice client/server Python da `gossip.proto`, eliminando la necessità di scrivere manualmente il codice di serializzazione e routing.
+- **Stub autogenerati**: `grpc_tools.protoc` produce codice client/server Python da `proto/gossip.proto`, eliminando la necessità di scrivere manualmente il codice di serializzazione e routing.
 - **Timeout per chiamata**: ogni `stub.ReceiveModel(message, timeout=T)` solleva `grpc.RpcError` se il server non risponde entro `T` secondi, senza bisogno di gestione manuale di socket timeout.
 - **Evoluzione del protocollo**: Protobuf supporta l'aggiunta di nuovi campi con retro-compatibilità garantita; aggiungere metadati al messaggio (es. versione del modello, loss locale) richiede solo una modifica al `.proto`.
 
 #### Generazione degli stub a build time
 
-I file `gossip_pb2.py` e `gossip_pb2_grpc.py` sono generati dal compilatore `protoc` nel `Dockerfile.worker`, **prima** del `COPY` del sorgente applicativo:
+I file `gossip_pb2.py` e `gossip_pb2_grpc.py` sono generati dal compilatore `protoc` nel `docker/Dockerfile.worker`, **prima** del `COPY` del sorgente applicativo:
 
 ```dockerfile
-COPY gossip.proto .
+COPY proto/gossip.proto .
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. gossip.proto
 COPY config.yaml main_worker.py ./
 COPY core/ ./core/
 COPY network/ ./network/
 ```
 
-Questo ordine è critico: i file generati si trovano nella directory di lavoro del container prima che il sorgente venga copiato sopra. Poiché `.gitignore` esclude i file `pb2` dal repository, la `COPY` successiva non li sovrascrive. Il vantaggio aggiuntivo è il **riutilizzo del layer Docker**: il layer contenente la compilazione Protobuf viene invalidato solo se `gossip.proto` cambia, rendendo le rebuild successive molto più veloci.
+Questo ordine è critico: i file generati si trovano nella directory di lavoro del container prima che il sorgente venga copiato sopra. Poiché `.gitignore` esclude i file `pb2` dal repository, la `COPY` successiva non li sovrascrive. Il vantaggio aggiuntivo è il **riutilizzo del layer Docker**: il layer contenente la compilazione Protobuf viene invalidato solo se `proto/gossip.proto` cambia, rendendo le rebuild successive molto più veloci.
 
 #### Sicurezza nella deserializzazione
 
@@ -1514,16 +1514,18 @@ Oltre alla complessità implementativa, questa soluzione introdurrebbe un proble
 
 ```
 ml_sdcc_project/
-├── gossip.proto              # gRPC service and message definitions
 ├── registry_server.py        # Discovery Server (Flask)
 ├── main_worker.py            # Worker entry point — training loop + gRPC server
 ├── config.yaml               # Single source of truth for all parameters
 ├── .dockerignore             # Excludes data/, scripts/, docs from build context
 ├── requirements.registry.txt # Registry dependencies (Flask only)
 ├── requirements.worker.txt   # Worker dependencies (PyTorch, gRPC, ...)
-├── Dockerfile.registry       # Minimal image: no PyTorch, no grpcio
-├── Dockerfile.worker         # Full image: PyTorch + gRPC + proto compilation
 ├── docker-compose.yml        # [GENERATED] Local + Single EC2 deployment — do not edit manually
+├── docker/
+│   ├── Dockerfile.registry      # Minimal image: no PyTorch, no grpcio
+│   └── Dockerfile.worker        # Full image: PyTorch + gRPC + proto compilation
+├── proto/
+│   └── gossip.proto             # gRPC service and message definitions
 ├── scripts/
 │   ├── download_femnist.py      # LEAF dataset download and preprocessing
 │   ├── split_dataset.py         # Splits dataset into per-worker partitions
@@ -1545,8 +1547,8 @@ ml_sdcc_project/
 
 Il sistema usa due immagini Docker distinte, in accordo con il principio di separazione delle responsabilità:
 
-- **`Dockerfile.registry`** — immagine minimale: solo `python:3.11-slim` + Flask. Non contiene PyTorch, grpcio o il codice worker. Dimensione tipica: ~80 MB.
-- **`Dockerfile.worker`** — immagine completa: PyTorch CPU, grpcio, grpcio-tools. Dimensione tipica: ~1.5 GB.
+- **`docker/Dockerfile.registry`** — immagine minimale: solo `python:3.11-slim` + Flask. Non contiene PyTorch, grpcio o il codice worker. Dimensione tipica: ~80 MB.
+- **`docker/Dockerfile.worker`** — immagine completa: PyTorch CPU, grpcio, grpcio-tools. Dimensione tipica: ~1.5 GB.
 
 La separazione riduce significativamente i tempi di rebuild del registry (nessuna dipendenza pesante) e minimizza la superficie di attacco dell'immagine registry.
 
@@ -1556,7 +1558,7 @@ Docker costruisce le immagini a strati: ogni istruzione (`FROM`, `RUN`, `COPY`) 
 
 La regola pratica che ne discende è ordinare le istruzioni dal più stabile al più volatile: le dipendenze pesanti in cima, il codice sorgente in fondo. Entrambi i Dockerfile rispettano questo principio.
 
-**`Dockerfile.worker` — sequenza dei layer:**
+**`docker/Dockerfile.worker` — sequenza dei layer:**
 
 ```dockerfile
 # Layer 1 — base image: invalido solo al cambio di versione Python
@@ -1571,8 +1573,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
 COPY requirements.worker.txt .
 RUN pip install --no-cache-dir -r requirements.worker.txt
 
-# Layer 4 — compilazione Protobuf: invalido solo se cambia gossip.proto
-COPY gossip.proto .
+# Layer 4 — compilazione Protobuf: invalido solo se cambia proto/gossip.proto
+COPY proto/gossip.proto .
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. gossip.proto
 
 # Layer 5 — sorgente applicativo: invalido ad ogni modifica al codice
@@ -1581,7 +1583,7 @@ COPY core/ ./core/
 COPY network/ ./network/
 ```
 
-Il layer più costoso è il Layer 3 (installazione di PyTorch): viene rieseguito solo se `requirements.worker.txt` cambia. Ogni modifica al codice Python invalida esclusivamente il Layer 5 — la rebuild richiede secondi invece di minuti. Lo stesso principio vale per `Dockerfile.registry`: prima `requirements.registry.txt`, poi `registry_server.py`.
+Il layer più costoso è il Layer 3 (installazione di PyTorch): viene rieseguito solo se `requirements.worker.txt` cambia. Ogni modifica al codice Python invalida esclusivamente il Layer 5 — la rebuild richiede secondi invece di minuti. Lo stesso principio vale per `docker/Dockerfile.registry`: prima `requirements.registry.txt`, poi `registry_server.py`.
 
 **Condivisione dell'immagine tra N worker.** Tutti i container worker (`worker_0`, `worker_1`, ..., `worker_N`) sono istanze della **stessa immagine Docker** — non viene costruita una immagine separata per ognuno. `docker compose up --build` con 10 worker esegue `docker build` una sola volta, producendo una singola immagine con i suoi layer. I 10 container vengono poi istanziati da quell'unica immagine: i layer read-only (incluso il Layer 3 con PyTorch, ~750 MB) sono condivisi in memoria e su disco tra tutti i container. Ogni container ha solo un sottile layer scrivibile per i propri file di runtime (log, metriche, checkpoint), che è trascurabile rispetto al Layer 3.
 

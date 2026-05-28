@@ -20,7 +20,7 @@ pip install -r requirements.debug.txt
 
 `num_workers` in `config.yaml` sets the number of worker containers in all modes.
 In multi-instance mode each worker gets its own EC2 instance; the registry runs on a separate one.
-See `report.md` for full documentation on architecture, experiments, and AWS constraints.
+See `docs/report.md` for full documentation on architecture, experiments, and AWS constraints.
 
 ---
 
@@ -90,7 +90,7 @@ python scripts/aws_deploy.py resume_single
 - *Phase 2 — scalability*: fix the best config, vary `num_workers` (3 → 5 → 8); re-run setup steps 1–3 before each run.
 - *Phase 3 — final test evaluation*: set `use_test_set: true`, re-run all three setup steps, then train once; `aggregate_metrics.py` will also print unbiased test accuracy.
 
-See `report.md` section 11.1.1 for detailed per-step tables (who does what, on which machine).
+See `docs/report.md` section 11.1.1 for detailed per-step tables (who does what, on which machine).
 
 ---
 
