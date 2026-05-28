@@ -246,13 +246,13 @@ fault_injection:
   # Probability [0, 1] that a gossip push to a specific peer is silently dropped
   # before the gRPC call is even attempted (simulates packet loss / network partition).
   # At 0.20 with gossip_fanout=3, on average 2.4 messages are sent per round instead of 3.
-  drop_probability: 0.20
+  drop_probability: 0.0
 
   # Probability [0, 1] that a worker calls sys.exit(1) after Phase B in a given round,
   # simulating a node crash. The process terminates immediately; the finally block
   # still runs (deregistration + checkpoint save) because sys.exit raises SystemExit.
   # At 0.05, expected lifetime of a worker before crash = 1/0.05 = 20 rounds.
-  crash_probability: 0.05
+  crash_probability: 0.0
 
   # Timeout in seconds for each outgoing gRPC call (send_model). If the target
   # worker does not respond within this window, the call is marked as failed and
