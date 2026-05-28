@@ -48,6 +48,16 @@ python scripts/generate_compose.py
 ```bash
 docker compose up --build
 
+# Re-running experiments — what to clean and when to rebuild:
+#
+#   Changed config.yaml or any .py file → always use --build (config is copied into the image)
+#   Just re-running with the same code and config → --build is optional (existing image is reused)
+#   Changed num_workers or use_test_set → re-run setup steps 2–3, then --build
+#
+# Before each new run, delete the previous run's output files:
+rm -f data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
+docker compose up --build   # --build rebuilds images; omit only if nothing changed
+
 # Analyze results
 python scripts/aggregate_metrics.py
 # Prints: per-round accuracy table, per-worker timing breakdown (phase A/B/C),

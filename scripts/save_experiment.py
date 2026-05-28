@@ -18,6 +18,7 @@ Output:
         global_metrics.csv        ← per-round aggregated stats
         summary.txt               ← human-readable summary
         worker_0/metrics.csv      ← per-round per-worker metrics
+        worker_0/model_final.pt   ← final model checkpoint
         worker_0/test_result.json ← final test accuracy (if use_test_set: true)
         worker_1/...
         ...
@@ -65,7 +66,7 @@ def main():
         worker_dest = os.path.join(dest, worker_name)
         os.makedirs(worker_dest)
 
-        for fname in ("metrics.csv", "test_result.json"):
+        for fname in ("metrics.csv", "test_result.json", "model_final.pt"):
             src = os.path.join(worker_dir, fname)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(worker_dest, fname))
@@ -77,7 +78,6 @@ def main():
         print(f"  {f}")
 
     # Clean working directory so the next run starts from a blank slate.
-    # model_final.pt is kept (not archived here, may still be useful for analysis).
     cleaned = []
     for fname in ("global_metrics.csv", "summary.txt"):
         p = os.path.join(DATA_ROOT, fname)
@@ -85,7 +85,7 @@ def main():
             os.remove(p)
             cleaned.append(fname)
     for worker_dir in sorted(glob.glob(os.path.join(DATA_ROOT, "worker_*"))):
-        for fname in ("metrics.csv", "test_result.json"):
+        for fname in ("metrics.csv", "test_result.json", "model_final.pt"):
             p = os.path.join(worker_dir, fname)
             if os.path.exists(p):
                 os.remove(p)
