@@ -21,7 +21,7 @@ network:
   # SYSTEM PARAMETER — not a pure ML hyperparameter. Controls the traffic/convergence
   # trade-off that is the central subject of the comparative experiments.
   # Experiment candidates: 1, 2, 3 (default), N-1
-  gossip_fanout: 3
+  gossip_fanout: 1
 
   # Total number of worker containers. After changing this value, regenerate
   # the compose file and re-partition the dataset:
