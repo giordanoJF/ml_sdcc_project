@@ -15,6 +15,7 @@ Output:
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -75,6 +76,30 @@ def main():
         with open(data_to_json, "w") as f:
             f.write(src_text.replace("Image.ANTIALIAS", "Image.LANCZOS"))
         print("Patched data_to_json.py: Image.ANTIALIAS → Image.LANCZOS")
+
+    # Step 1c — Patch get_data.sh to use Python's zipfile instead of `unzip`.
+    # `unzip` is not universally available (absent on some Linux distros and WSL
+    # environments by default); Python's zipfile is always present and produces
+    # identical output.
+    get_data_sh = os.path.join(LEAF_DIR, "data", "femnist", "preprocess", "get_data.sh")
+    with open(get_data_sh) as f:
+        src_text = f.read()
+    if "unzip" in src_text:
+        patched_lines = []
+        for line in src_text.splitlines():
+            # Match `unzip [optional-flags] <file>` — LEAF uses no flags, but handle
+            # them defensively in case the script changes.
+            m = re.match(r"^(\s*)unzip(?:\s+-\w+)*\s+(\S+)", line)
+            if m:
+                indent, fname = m.group(1), m.group(2)
+                patched_lines.append(
+                    f"{indent}python3 -c \"import zipfile; zipfile.ZipFile('{fname}').extractall('.')\""
+                )
+            else:
+                patched_lines.append(line)
+        with open(get_data_sh, "w") as f:
+            f.write("\n".join(patched_lines))
+        print("Patched get_data.sh: unzip → python3 zipfile")
 
     # Step 2 — Install Python dependencies required by LEAF's preprocessing scripts
     run([sys.executable, "-m", "pip", "install", "tensorflow-cpu", "Pillow", "numpy"])

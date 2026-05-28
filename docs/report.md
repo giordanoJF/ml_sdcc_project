@@ -345,11 +345,17 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 **`scripts/download_femnist.py`** — scarica e preprocessa FEMNIST tramite il framework LEAF. I passi interni sono:
 
 1. Clone del repository LEAF da GitHub (saltato se già presente).
-2. Patch di compatibilità su `data_to_json.py` di LEAF: `Image.ANTIALIAS → Image.LANCZOS` (vedi Sezione 11).
-3. Installazione delle dipendenze di preprocessing di LEAF (`tensorflow-cpu`, `Pillow`, `numpy`) nell'ambiente Python corrente.
-4. Esecuzione di `preprocess.sh` con split non-i.i.d. per scrittore, 90% train / 10% test.
-5. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`. Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
-6. Rimozione automatica dell'intera directory `leaf/` (~20 GB). Una volta che `data/femnist/data/` esiste, il repository LEAF non serve più — se necessario verrà riclonato automaticamente da GitHub alla prossima esecuzione dello script.
+2. **Patch `data_to_json.py` — compatibilità Pillow ≥ 10.0** *(modifica a codice di terze parti — vedi nota sotto)*  
+   `Image.ANTIALIAS` è stato rimosso in Pillow 10.0 (ottobre 2023); `Image.LANCZOS` è il nome ufficiale dello stesso filtro Lanczos dal 2013. La patch sostituisce l'unica occorrenza in `leaf/data/femnist/preprocess/data_to_json.py`. Output pixel: identico.
+3. **Patch `get_data.sh` — sostituzione `unzip`** *(modifica a codice di terze parti — vedi nota sotto)*  
+   `get_data.sh` scarica prima entrambi i file (`by_class.zip` ~984 MB, `by_write.zip` ~542 MB) ed esegue poi `unzip <file>` per estrarli (senza flag `-q`: l'estrazione è silenziosa). `unzip` non è preinstallato di default in molte distribuzioni Linux e in ambienti WSL. La patch sostituisce ogni occorrenza di `unzip <file>` con `python3 -c "import zipfile; zipfile.ZipFile('<file>').extractall('.')"`, che usa la libreria standard Python — sempre disponibile — e produce output identico. L'estrazione avviene in silenzio (nessun log di avanzamento): è normale che lo script rimanga fermo per 5–10 minuti durante questo passo.
+4. Installazione delle dipendenze di preprocessing di LEAF (`tensorflow-cpu`, `Pillow`, `numpy`) nell'ambiente Python corrente.
+5. Esecuzione di `preprocess.sh` con split non-i.i.d. per scrittore, 90% train / 10% test.
+6. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`. Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
+7. Rimozione automatica dell'intera directory `leaf/` (~20 GB). Una volta che `data/femnist/data/` esiste, il repository LEAF non serve più — se necessario verrà riclonato automaticamente da GitHub alla prossima esecuzione dello script.
+
+> **Nota sulle modifiche a codice LEAF di terze parti.**  
+> LEAF (Caldas et al., 2018) è un repository accademico non più attivamente mantenuto per la compatibilità con Python e librerie di sistema moderne. Le due patch sopra non alterano l'algoritmo di preprocessing né la struttura dei dati prodotti — modificano esclusivamente chiamate di sistema o di libreria diventate obsolete o non portabili. Le patch vengono applicate programmaticamente da `download_femnist.py` alla copia locale clonata, e scompaiono insieme all'intera directory `leaf/` al passo 7: non è necessario mantenere un fork. Ad ogni nuova esecuzione di `download_femnist.py`, LEAF viene riclonato e riprotato da zero.
 
 **`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da `use_test_set` in `config.yaml`: con `false` (default) scrive `data/femnist/worker_{i}/{train,val}/data.json` rinominando la `test/` di LEAF in `val/`; con `true` scrive anche `data/femnist/worker_{i}/test/data.json` dividendo il 20% di LEAF al 50/50 per scrittore (10% val + 10% test). Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
@@ -1921,8 +1927,12 @@ Le tre modalità di deploy condividono gli stessi passi di setup iniziale (downl
 | Singola EC2 | 1 | `num_workers` + 1 | rete Docker interna (loopback) |
 | Multi-instance EC2 | `num_workers` + 1 | 1 per istanza | TCP/IP reale tra istanze VPC |
 
-> **Nota di compatibilità — Pillow ≥ 10.0.**
-> `download_femnist.py` applica automaticamente la patch `Image.ANTIALIAS → Image.LANCZOS` subito dopo il clone di LEAF — non è richiesto alcun intervento manuale.
+> **Nota di compatibilità — patch automatiche a codice LEAF.**  
+> `download_femnist.py` applica due patch a file di LEAF subito dopo il clone, prima di eseguire il preprocessing — non è richiesto alcun intervento manuale:
+> - **`data_to_json.py`**: `Image.ANTIALIAS → Image.LANCZOS` (rimosso in Pillow 10.0, ottobre 2023).
+> - **`get_data.sh`**: `unzip <file>` → `python3 -c "import zipfile; zipfile.ZipFile(...).extractall('.')"` (`unzip` assente su alcuni sistemi Linux/WSL; estrazione silenziosa, attesa normale di 5–10 minuti).
+>
+> Le patch sono transenti: scompaiono con la directory `leaf/` al termine del preprocessing. Vedere la nota nella descrizione di `download_femnist.py` per i dettagli.
 
 ---
 
@@ -1948,7 +1958,7 @@ python scripts/download_femnist.py
 # Con --sf 0.05 per verifiche rapide di installazione (non per risultati da riportare)
 ```
 
-`download_femnist.py` clona LEAF, patcha il codice per Pillow ≥ 10, lancia `preprocess.sh` con i parametri letti da `config.yaml` (`--tf 0.9` o `0.8` in base a `use_test_set`), copia i JSON in `data/femnist/data/`, e rimuove LEAF.
+`download_femnist.py` clona LEAF, applica due patch di compatibilità a codice LEAF (`data_to_json.py` per Pillow ≥ 10 e `get_data.sh` per sistemi senza `unzip`), lancia `preprocess.sh` con i parametri letti da `config.yaml` (`--tf 0.9` o `0.8` in base a `use_test_set`), copia i JSON in `data/femnist/data/`, e rimuove LEAF.
 
 **Passo 3 — Partizionamento e generazione compose** *(ripetere se `num_workers` o `use_test_set` cambia)*
 
