@@ -52,7 +52,7 @@ def send_model(
             message = gossip_pb2.ModelMessage(
                 weights=serialize_weights(state_dict),
                 round=round_num,
-                num_samples=local_samples,  # proto field name is fixed by gossip.proto
+                num_samples=local_samples,  # proto field name is fixed by proto/gossip.proto
                 worker_id=worker_id,
             )
             ack = stub.ReceiveModel(message, timeout=timeout)

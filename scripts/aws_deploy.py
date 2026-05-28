@@ -229,9 +229,9 @@ def _wait_for_docker(ip: str, key_path: str, timeout: int = 300) -> bool:
 def _create_source_archive() -> str:
     """Pack source files needed for docker build into a temp .tar.gz."""
     src_files = [
-        "Dockerfile.worker", "Dockerfile.registry",
+        "docker/Dockerfile.worker", "docker/Dockerfile.registry",
         "requirements.worker.txt", "requirements.registry.txt",
-        "gossip.proto", "main_worker.py", "registry_server.py", "config.yaml",
+        "proto/gossip.proto", "main_worker.py", "registry_server.py", "config.yaml",
     ]
     src_dirs = ["core", "network"]
     tmp = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
@@ -257,11 +257,11 @@ def _build_on_instance(ip: str, key_path: str, archive: str, role: str):
     if role == "registry":
         _ssh(ip, key_path,
              "docker build -t fl-registry:latest "
-             "-f /home/ubuntu/build/Dockerfile.registry /home/ubuntu/build")
+             "-f /home/ubuntu/build/docker/Dockerfile.registry /home/ubuntu/build")
     else:
         _ssh(ip, key_path,
              "docker build -t fl-worker:latest "
-             "-f /home/ubuntu/build/Dockerfile.worker /home/ubuntu/build")
+             "-f /home/ubuntu/build/docker/Dockerfile.worker /home/ubuntu/build")
 
 
 # ---------------------------------------------------------------------------

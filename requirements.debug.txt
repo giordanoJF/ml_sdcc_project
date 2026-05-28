@@ -13,7 +13,7 @@
 # ML
 torch>=2.1,<3.0
 
-# gRPC (runtime + code generation from gossip.proto)
+# gRPC (runtime + code generation from proto/gossip.proto)
 grpcio>=1.60,<2.0
 grpcio-tools>=1.60,<2.0
 

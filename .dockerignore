@@ -7,7 +7,7 @@
 data/
 leaf/
 
-# Generated proto stubs (generated inside the container during build)
+# Generated proto stubs (generated inside the container by docker/Dockerfile.worker from proto/gossip.proto)
 gossip_pb2.py
 gossip_pb2_grpc.py
 

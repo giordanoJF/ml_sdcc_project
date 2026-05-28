@@ -10,7 +10,7 @@ COPY requirements.worker.txt .
 RUN pip install --no-cache-dir -r requirements.worker.txt
 
 # Generate gossip_pb2.py and gossip_pb2_grpc.py from the proto definition
-COPY gossip.proto .
+COPY proto/gossip.proto .
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. gossip.proto
 
 # Copy source files (the pb2 files generated above will not be overwritten)
