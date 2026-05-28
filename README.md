@@ -4,6 +4,7 @@
 
 - Docker + Docker Compose
 - Python 3.11+
+- git (used by `scripts/download_femnist.py` to clone the LEAF repository)
 - Terraform (for both AWS single-EC2 and multi-instance deploy)
 
 ```bash

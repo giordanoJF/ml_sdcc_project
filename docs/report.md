@@ -1928,6 +1928,8 @@ Le tre modalità di deploy condividono gli stessi passi di setup iniziale (downl
 
 ### 11.1 Setup Iniziale (tutte le modalità — gira sulla macchina locale)
 
+**Prerequisiti della macchina locale:** Docker + Docker Compose, Python 3.11+, `git` (usato dal Passo 2 per clonare il repository LEAF). Per le modalità AWS è richiesto anche Terraform (v. Sezioni 11.3 e 11.4).
+
 Questi passi vanno ripetuti ogni volta che cambia `num_workers` o `use_test_set`.
 
 **Passo 1 — Configurazione**
@@ -2098,6 +2100,7 @@ Il workflow è **identico al locale** — stessi script, stessa immagine Docker,
   ```
 - Key pair: `vockey` (us-east-1) o nuova key pair in us-west-2; PEM scaricato da AWS Details → Download PEM
 - Terraform installato sulla macchina locale
+- `git` installato sulla macchina locale (usato da `scripts/download_femnist.py` — Passo 2 — per clonare LEAF)
 - `config.yaml`: parametri `aws.*` rilevanti per questa modalità:
 
   | Parametro | Default | Note |
@@ -2186,6 +2189,7 @@ Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra m
   ```
 - **Key pair**: in us-east-1 usare la `vockey` predefinita (AWS Details → Download PEM → `~/Downloads/labsuser.pem`); in us-west-2 creare una nuova key pair dalla console EC2
 - **Terraform** installato sulla macchina locale
+- **`git`** installato sulla macchina locale (usato da `scripts/download_femnist.py` — Passo 2 — per clonare LEAF)
 - `config.yaml`: parametri `aws.*` rilevanti per questa modalità:
 
   | Parametro | Default | Note |
