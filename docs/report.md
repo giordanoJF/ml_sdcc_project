@@ -1043,10 +1043,34 @@ docker compose up --build
 # 4. Analizza e archivia prima di passare alla prossima configurazione
 python scripts/aggregate_metrics.py
 python scripts/save_experiment.py <nome>   # es: lr_1e-3, fanout_2, baseline
-# → salva config.yaml + metriche in results/<timestamp>_<nome>/
+# → salva config.yaml + metriche + log container in results/<timestamp>_<nome>/
+# IMPORTANTE: eseguire PRIMA di docker compose down — i log vengono rimossi con i container
+docker compose down
 ```
 
-Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `test_result.json`, e il `config.yaml` usato. Senza quest'ultimo sarebbe impossibile ricordare quale configurazione ha prodotto quali risultati dopo più run.
+Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `test_result.json`, il `config.yaml` usato, e i log di ogni container Docker (`logs/<service>.log`). Il salvataggio dei log avviene tramite `docker compose logs` prima che i container vengano rimossi: Docker mantiene i log di un container finché il container non viene eliminato — anche se è crashato — quindi il file di log include l'output fino al momento del crash.
+
+**Cosa fa `docker compose down` e quando usarlo.** `docker compose down` ferma i container e li **rimuove** (lo stato "exited" viene eliminato insieme ai log Docker), rimuove le reti create dal compose, ma **non** rimuove le immagini Docker (rimangono in cache) né i file su disco (`data/femnist/worker_*/` rimane intatto). Va eseguito tra ogni run perché `config.yaml` è copiato nell'immagine al build time — non è montato come volume — quindi un run successivo con `config.yaml` modificato ma senza `docker compose down` + `--build` userebbe la config precedente baked nell'immagine.
+
+Quando cambia `num_workers` il ciclo è più lungo perché il dataset va ripartizionato e il compose rigenerato:
+
+```bash
+python scripts/save_experiment.py <nome>
+docker compose down
+# modifica num_workers in config.yaml
+python scripts/split_dataset.py      # ripartiziona i dati per il nuovo numero di worker
+python scripts/generate_compose.py   # rigenera docker-compose.yml con N servizi
+docker compose up --build
+```
+
+Quando cambia solo un parametro con `num_workers` invariato:
+
+```bash
+python scripts/save_experiment.py <nome>
+docker compose down
+# modifica il parametro in config.yaml
+docker compose up --build            # --build sempre necessario se config.yaml è cambiato
+```
 
 **Fase 2 — Conferma sul dataset completo**
 
@@ -2269,7 +2293,7 @@ Ripetere per ogni combinazione di iperparametri (griglia su `lr`, `gossip_fanout
 | 8. Archivia | Operatore | locale | `python scripts/save_experiment.py <nome>` *(es. `lr_1e-3_fanout3`)* | identico |
 | 9. Ripeti | Operatore | — | tornare al passo 1 con la prossima combinazione | identico |
 
-`save_experiment.py` archivia `config.yaml` + metriche in `results/<timestamp>_<nome>/` e rimuove i CSV dalla directory di lavoro, così il prossimo run parte da zero.
+`save_experiment.py` archivia `config.yaml` + metriche + log container in `results/<timestamp>_<nome>/` e rimuove i CSV dalla directory di lavoro, così il prossimo run parte da zero. Va eseguito **prima** di `docker compose down` per garantire che i log dei container siano ancora accessibili.
 
 ---
 
@@ -2591,7 +2615,7 @@ python scripts/save_experiment.py <nome>
 
 `global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
 
-`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/test_result.json` — poi pulisce la directory di lavoro per il prossimo run.
+`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro per il prossimo run. Va eseguito prima di `docker compose down`.
 
 ### Confronto tra approccio 90/10 e 80/10/10
 

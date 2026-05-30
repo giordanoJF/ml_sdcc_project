@@ -27,11 +27,45 @@ import argparse
 import glob
 import os
 import shutil
+import subprocess
 from datetime import datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = os.path.join(PROJECT_ROOT, "data", "femnist")
 RESULTS_ROOT = os.path.join(PROJECT_ROOT, "results")
+
+
+def save_docker_logs(dest):
+    logs_dir = os.path.join(dest, "logs")
+    os.makedirs(logs_dir)
+
+    try:
+        services = subprocess.check_output(
+            ["docker", "compose", "config", "--services"],
+            cwd=PROJECT_ROOT,
+            text=True,
+        ).splitlines()
+    except subprocess.CalledProcessError as e:
+        print(f"  WARNING: could not list docker services: {e}")
+        return []
+
+    saved = []
+    for svc in services:
+        log_path = os.path.join(logs_dir, f"{svc}.log")
+        try:
+            logs = subprocess.check_output(
+                ["docker", "compose", "logs", "--no-color", svc],
+                cwd=PROJECT_ROOT,
+                text=True,
+                stderr=subprocess.STDOUT,
+            )
+            with open(log_path, "w") as f:
+                f.write(logs)
+            saved.append(f"logs/{svc}.log")
+        except subprocess.CalledProcessError as e:
+            print(f"  WARNING: could not get logs for {svc}: {e}")
+
+    return saved
 
 
 def main():
@@ -71,6 +105,9 @@ def main():
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(worker_dest, fname))
                 copied.append(f"{worker_name}/{fname}")
+
+    log_files = save_docker_logs(dest)
+    copied.extend(log_files)
 
     print(f"Saved to: {dest}")
     print(f"Files archived: {len(copied)}")

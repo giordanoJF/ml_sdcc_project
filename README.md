@@ -47,24 +47,31 @@ python scripts/generate_compose.py
 
 ```bash
 docker compose up --build
+```
 
-# Re-running experiments — what to clean and when to rebuild:
-#
-#   Changed config.yaml or any .py file → always use --build (config is copied into the image)
-#   Just re-running with the same code and config → --build is optional (existing image is reused)
-#   Changed num_workers or use_test_set → re-run setup steps 2–3, then --build
-#
-# Before each new run, delete the previous run's output files:
-rm -f data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
-docker compose up --build   # --build rebuilds images; omit only if nothing changed
+**Cycle between runs (same `num_workers`, different config parameter):**
 
-# Analyze results
+```bash
 python scripts/aggregate_metrics.py
-# Prints: per-round accuracy table, per-worker timing breakdown (phase A/B/C),
-#         system convergence verdict (converged? at which round? wall-clock time),
-#         weight divergence between workers.
-python scripts/save_experiment.py <name>   # e.g. fanout_3, lr_1e-3, baseline
-# Archives config + metrics to results/<timestamp>_<name>/  and cleans working dir.
+python scripts/save_experiment.py <name>   # archives config + metrics + Docker logs
+# MUST run before docker compose down — logs are lost when containers are removed
+docker compose down                        # stops + removes containers and networks;
+                                           # does NOT remove images or data/femnist/ files
+# edit config.yaml
+docker compose up --build                  # --build always required when config.yaml changes
+                                           # (config is baked into the image, not volume-mounted)
+```
+
+**When `num_workers` changes** — dataset must be re-partitioned and compose regenerated:
+
+```bash
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <name>
+docker compose down
+# edit num_workers in config.yaml
+python scripts/split_dataset.py            # re-partition data for new worker count
+python scripts/generate_compose.py         # regenerate docker-compose.yml with N services
+docker compose up --build
 ```
 
 For **single EC2** — Terraform handles instance creation and Docker install automatically:
