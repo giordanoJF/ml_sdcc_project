@@ -8,6 +8,7 @@ or studying what changes when num_workers varies.
 
 Usage:
     python scripts/aggregate_metrics.py
+    python scripts/aggregate_metrics.py --plot                     # also generate PNG plots
     python scripts/aggregate_metrics.py --data-root data/femnist  # custom path
 
 Input:
@@ -23,8 +24,11 @@ Output (printed to stdout):
     Test results     : per-worker test_accuracy (only when use_test_set: true)
 
 Output (saved to disk):
-    data/femnist/global_metrics.csv  — per-round aggregated stats (+ phase timings if present)
-    data/femnist/summary.txt         — human-readable summary including convergence verdict
+    data/femnist/global_metrics.csv          — per-round aggregated stats (+ phase timings if present)
+    data/femnist/summary.txt                 — human-readable summary including convergence verdict
+    data/femnist/accuracy_over_rounds.png    — (--plot) mean accuracy ± std and per-worker curves
+    data/femnist/loss_over_rounds.png        — (--plot) mean val loss and per-worker curves
+    data/femnist/phase_timing.png            — (--plot) phase A/B/C durations over rounds
 """
 import argparse
 import csv
@@ -35,6 +39,93 @@ import statistics
 
 import torch
 import yaml
+
+
+def _plot_results(global_rows, worker_rows, data_root, has_timing):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not installed — skipping plots (pip install matplotlib)")
+        return
+
+    rounds = [r["round"] for r in global_rows]
+    mean_accs = [r["mean_accuracy"] for r in global_rows]
+    std_accs = [r["std_accuracy"] for r in global_rows]
+    mean_losses = [r["mean_val_loss"] for r in global_rows]
+
+    # --- accuracy over rounds ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(rounds, mean_accs, label="mean accuracy", linewidth=2, color="steelblue")
+    ax.fill_between(
+        rounds,
+        [m - s for m, s in zip(mean_accs, std_accs)],
+        [m + s for m, s in zip(mean_accs, std_accs)],
+        alpha=0.2, color="steelblue", label="±1 std",
+    )
+    for wid, rows in sorted(worker_rows.items()):
+        rows_s = sorted(rows, key=lambda r: int(r["round"]))
+        ax.plot(
+            [int(r["round"]) for r in rows_s],
+            [float(r["val_accuracy"]) for r in rows_s],
+            alpha=0.55, linestyle="--", label=f"worker {wid}",
+        )
+    ax.set_xlabel("Round")
+    ax.set_ylabel("Validation Accuracy")
+    ax.set_title("Validation Accuracy over Rounds")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    path = os.path.join(data_root, "accuracy_over_rounds.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Plot saved: {path}")
+
+    # --- loss over rounds ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(rounds, mean_losses, linewidth=2, color="tomato", label="mean val loss")
+    for wid, rows in sorted(worker_rows.items()):
+        rows_s = sorted(rows, key=lambda r: int(r["round"]))
+        ax.plot(
+            [int(r["round"]) for r in rows_s],
+            [float(r["val_loss"]) for r in rows_s],
+            alpha=0.55, linestyle="--", label=f"worker {wid}",
+        )
+    ax.set_xlabel("Round")
+    ax.set_ylabel("Validation Loss")
+    ax.set_title("Validation Loss over Rounds")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    path = os.path.join(data_root, "loss_over_rounds.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Plot saved: {path}")
+
+    # --- phase timing (only when timing columns are present) ---
+    if has_timing:
+        phase_b = [r["mean_phase_b_s"] for r in global_rows]
+        phase_a_ms = [r["mean_phase_a_s"] * 1000 for r in global_rows]
+        phase_c_ms = [r["mean_phase_c_s"] * 1000 for r in global_rows]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        ax1.plot(rounds, phase_b, color="steelblue")
+        ax1.set_xlabel("Round")
+        ax1.set_ylabel("Seconds")
+        ax1.set_title("Phase B — Local Training Duration")
+        ax1.grid(True, alpha=0.3)
+
+        ax2.plot(rounds, phase_a_ms, color="tomato", label="Phase A (aggregation)")
+        ax2.plot(rounds, phase_c_ms, color="seagreen", label="Phase C (gossip push)")
+        ax2.set_xlabel("Round")
+        ax2.set_ylabel("Milliseconds")
+        ax2.set_title("Phase A & C Duration")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        path = os.path.join(data_root, "phase_timing.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Plot saved: {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +147,11 @@ def main():
         "--data-root",
         default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "femnist"),
         help="Root directory containing worker_* subdirectories",
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate PNG plots (accuracy, loss, phase timing) saved alongside global_metrics.csv",
     )
     args = parser.parse_args()
 
@@ -382,6 +478,10 @@ def main():
             f.write(line + "\n")
         f.write(f"\nTotal gossip messages sent: {total_sent}\n")
     print(f"Summary saved to:       {summary_path}")
+
+    if args.plot:
+        print()
+        _plot_results(global_rows, worker_rows, args.data_root, has_timing)
 
 
 if __name__ == "__main__":
