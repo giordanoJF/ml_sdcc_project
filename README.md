@@ -28,7 +28,7 @@ See `docs/report.md` for full documentation on architecture, experiments, and AW
 ## Setup
 
 ```bash
-# 1. Edit config.yaml — set num_workers, gossip_fanout, learning_rate, etc.
+# 1. Edit config.yaml — set num_workers, gossip_fanout, learning_rate, use_gpu, etc.
 
 # 2. Download FEMNIST dataset
 #    Re-run only when use_test_set changes (different --tf flag to LEAF)
@@ -36,10 +36,23 @@ python scripts/download_femnist.py             # full dataset (default)
 # python scripts/download_femnist.py --sf 0.05  # 5% subset for quick install checks only
 
 # 3. Partition dataset and generate Docker Compose files
-#    Re-run when num_workers OR use_test_set changes
+#    Re-run when num_workers OR use_test_set OR use_gpu changes
 python scripts/split_dataset.py
 python scripts/generate_compose.py
 ```
+
+## GPU Acceleration (local only)
+
+Set `network.use_gpu: true` in `config.yaml`, then regenerate the compose and rebuild:
+
+```bash
+python scripts/generate_compose.py   # picks Dockerfile.worker.gpu + adds GPU device block
+docker compose up --build            # builds ~6 GB CUDA image (first time only, then cached)
+```
+
+**Requirements:** NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host. No code changes needed — the worker detects CUDA automatically.
+
+To switch back to CPU: set `use_gpu: false`, re-run `generate_compose.py`, and `docker compose up --build`. The GPU image stays in local cache but is not used.
 
 ---
 

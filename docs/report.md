@@ -111,7 +111,7 @@ Il contributo architetturale di questo progetto — la decentralizzazione comple
 
 **Cosa è veramente comparabile:**
 
-La metrica più utile per il confronto non è l'accuracy assoluta ma il **guadagno relativo del gossip rispetto al training isolato** (Esperimento 1 vs Esperimento 2 del piano sperimentale). DiLoCo mostra che l'architettura sparse communication porta benefici significativi — migliore generalizzazione e meno comunicazione — rispetto al training isolato. Se i nostri esperimenti mostrano un delta positivo significativo tra no-FL e FL gossip, si valida la stessa intuizione su un dominio diverso e con vincoli di sistema più stringenti. Questo delta è la metrica principale da confrontare con le affermazioni qualitative di DiLoCo.
+La metrica più utile per il confronto non è l'accuracy assoluta ma il **guadagno relativo del gossip rispetto al training isolato**. DiLoCo mostra che l'architettura sparse communication porta benefici significativi — migliore generalizzazione e meno comunicazione — rispetto al training isolato. Se i nostri esperimenti mostrano una `mean_accuracy` significativamente superiore a quella attesa per il training in isolamento, si valida la stessa intuizione su un dominio diverso e con vincoli di sistema più stringenti. Questo delta è la metrica principale da confrontare con le affermazioni qualitative di DiLoCo.
 
 ### 2.3 Dataset LEAF e FEMNIST
 
@@ -320,7 +320,7 @@ La letteratura FL ha sviluppato diverse strategie per affrontare questi problemi
 | FedProx | ❌ | — | Direzione di miglioramento futura |
 | SCAFFOLD | ❌ | — | Incompatibile con gossip asincrono (richiede control variates globali) |
 | Reset optimizer post-FedAvg | ❌ | — | Scelta deliberata: non alterare la comparabilità degli esperimenti |
-| H variabile (griglia manuale di run) | ✅ (in piano) | Esperimento 3b | Esplora il trade-off drift vs comunicazione |
+| H variabile (griglia manuale di run) | ✅ (in piano) | Esp. 1 (griglia) | Esplora il trade-off drift vs comunicazione |
 
 > **Nota su SCAFFOLD in un sistema P2P.** SCAFFOLD richiede che i control variates siano sincronizzati tra tutti i worker ad ogni round di aggregazione — un'operazione intrinsecamente centralizzata. In un sistema gossip asincrono dove ogni worker aggrega solo i modelli che riceve casualmente, non è possibile mantenere control variates globali coerenti. SCAFFOLD è quindi architetturalmente incompatibile con il nostro design, per la stessa ragione per cui l'outer optimizer di DiLoCo non può essere implementato.
 
@@ -344,7 +344,7 @@ Con gossip k-push su $N$ nodi, il gap spettrale atteso cresce con $k$: più peer
 
 Con $N=3$ e `gossip_fanout=1`, il grafo di comunicazione è uno sparse random graph con 1 arco uscente per nodo per round. Il *mixing time* atteso — il numero di round perché la distribuzione dell'informazione sia $\epsilon$-vicina all'uniforme — è $O(\log N / k) = O(\log 3 / 1) \approx 1.6$ round: una notizia si propaga all'intera rete in meno di 2 round. Questa è la ragione per cui il sistema può funzionare anche con fanout=1 su reti piccole: la velocità di mixing è già molto alta per $N$ piccolo.
 
-Con $N=8$ e `gossip_fanout=1`, il mixing time cresce a $O(\log 8) = 3$ round. Con `gossip_fanout=3`, si riduce a 1 round. Il vantaggio del fanout alto diventa più marcato al crescere di $N$ — confermando che gli esperimenti di scalabilità (Esperimento 4) sono quelli dove l'effetto di `gossip_fanout` è più interessante da studiare.
+Con $N=8$ e `gossip_fanout=1`, il mixing time cresce a $O(\log 8) = 3$ round. Con `gossip_fanout=3`, si riduce a 1 round. Il vantaggio del fanout alto diventa più marcato al crescere di $N$ — confermando che gli esperimenti di scalabilità (Esp. 2) sono quelli dove l'effetto di `gossip_fanout` è più interessante da studiare.
 
 #### 2.5.2 Linear Mode Connectivity e perché FedAvg funziona
 
@@ -1006,7 +1006,7 @@ I parametri del sistema si dividono in tre categorie con ruoli distinti:
 | `gossip_fanout` | 1, 2, 3, N-1 | 3 | Trade-off traffico/qualità aggregazione: fanout alto = più aggregazioni per round = convergenza più rapida ma volume di rete proporzionale |
 | `num_workers` | 3, 5, 8 | 3 | Dimensione delle partizioni locali e numero di peer disponibili per l'aggregazione |
 
-`gossip_fanout` è il parametro centrale del progetto: quantifica esattamente il trade-off traffico/convergenza che il sistema intende studiare, ed è il soggetto principale degli esperimenti comparativi. `num_workers` è fisso per ogni deployment ed è trattato in due fasi distinte: durante la ricerca degli iperparametri (Esp. 3) rimane fisso a un valore medio (es. 3 o 5), per isolare l'effetto degli iperparametri ML; successivamente, nella fase di scalabilità (Esp. 4), la configurazione ottimale trovata viene mantenuta fissa e si varia solo `num_workers` (3 → 5 → 8) per misurare come l'accuracy e il tempo di convergenza cambiano con la dimensione della rete.
+`gossip_fanout` è il parametro centrale del progetto: quantifica esattamente il trade-off traffico/convergenza che il sistema intende studiare, ed è il soggetto principale degli esperimenti comparativi. `num_workers` è fisso per ogni deployment ed è trattato in due fasi distinte: durante la ricerca degli iperparametri (Esp. 1) rimane fisso a 5, per isolare l'effetto degli iperparametri ML; successivamente, nella fase di scalabilità (Esp. 2), la configurazione ottimale trovata viene mantenuta fissa e si varia `num_workers` insieme a `gossip_fanout` (3/1 e 8/5) per misurare come l'accuracy e il tempo di convergenza cambiano con la dimensione della rete.
 
 **Parametri strutturali** — fissi per design, non si variano negli esperimenti:
 
@@ -1348,11 +1348,11 @@ I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.pn
 - `learning_rate` basso (1e-4) con `H` basso (100) → convergenza lenta ma stabile: aggregazioni frequenti con aggiornamenti conservativi.
 - `learning_rate` medio (1e-3) con `H` medio (500) → punto di riferimento DiLoCo: bilanciamento ottimale atteso.
 
-**Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 4 e 5).
+**Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 2, 3, 4).
 
 ### 7.4 Esperimento 2 — Scalabilità (2 run)
 
-**Obiettivo:** verificare come la configurazione ottimale trovata in Esp. 3 si comporta con un numero diverso di worker e fanout. Si testano due configurazioni di rete alternative alla (5, 3) usata nella griglia, mantenendo fissi `(lr, H)` ottimali.
+**Obiettivo:** verificare come la configurazione ottimale trovata in Esp. 1 si comporta con un numero diverso di worker e fanout. Si testano due configurazioni di rete alternative alla (5, 3) usata nella griglia, mantenendo fissi `(lr, H)` ottimali.
 
 | Run | `num_workers` | `gossip_fanout` | Razionale |
 |---|---|---|---|
@@ -1423,7 +1423,7 @@ docker compose down
 
 **Cosa documentare dai log e dai CSV:**
 - Quanti push sono stati droppati per round (`dropped` nel log di Fase C)
-- Se la `mean_accuracy` finale è comparabile a quella di Esp. 3 (resilienza dimostrata)
+- Se la `mean_accuracy` finale è comparabile a quella della config ottimale in Esp. 1 (resilienza dimostrata)
 - Eventuali crash simulati e il comportamento dei worker superstiti
 
 ### 7.7 Analisi e Visualizzazione dei Risultati
@@ -1432,13 +1432,13 @@ docker compose down
 
 **Confronti chiave da riportare:**
 
-**Plot 1 — No-FL vs FL** (Esp. 1 vs Esp. 2): `mean_accuracy` over rounds — il delta dimostra l'utilità del gossip.
+**Plot 1 — Griglia iperparametri** (Esp. 1): tabella 3×3 con `mean_accuracy` finale per ogni coppia `(lr, H)` — identifica la configurazione ottimale.
 
-**Plot 2 — Griglia iperparametri** (Esp. 3): tabella 3×3 con `mean_accuracy` finale per ogni coppia `(lr, H)` — identifica la configurazione ottimale.
+**Plot 2 — Curva di convergenza** (Esp. 1, run migliore vs peggiore): `mean_accuracy` over rounds — mostra la variabilità tra configurazioni.
 
-**Plot 3 — Scalabilità** (Esp. 4): `mean_accuracy` finale per N ∈ {3, 5, 8} — curva di rendimento marginale.
+**Plot 3 — Scalabilità** (Esp. 2): `mean_accuracy` finale per i tre punti N ∈ {3, 5, 8} — tendenza al crescere dei worker.
 
-**Plot 4 — Bias ottimistico** (Esp. 1–2 vs Esp. 3): migliore `val_accuracy` vs `test_accuracy` — quantifica il bias ottimistico accumulato.
+**Plot 4 — Bias ottimistico** (Esp. 1 migliore vs Esp. 3): migliore `val_accuracy` vs `test_accuracy` — quantifica il bias ottimistico accumulato.
 
 ---
 
@@ -1456,7 +1456,7 @@ AdamW accumula momenti di primo e secondo ordine ($m_t$, $v_t$) basati sui gradi
 Un worker più veloce (meno campioni per partizione) può completare più round mentre un worker lento è ancora nel suo round corrente, inviando più messaggi che si accumulano nel buffer del ricevente. Nel run di sviluppo: `neighbors=713235 (3 models)` = Worker 0 (209k) + Worker 2 (251k) × 2 messaggi in un singolo round di Worker 1 (272k). Questo crea un'asimmetria di contributo implicita: i worker più veloci pesano di più nell'aggregazione per pura differenza di velocità, non per qualità del modello. Da documentare: frequenza di questo fenomeno al variare di `num_workers` e `inner_steps_H`.
 
 **4. Client drift e tensione con inner_steps_H.**
-Con H elevato e dati non-i.i.d., i modelli locali "derivano" progressivamente lontano da qualsiasi ottimo comune — ogni worker ottimizza per la propria distribuzione locale, allontanandosi dagli altri. La tensione è: H grande → meno traffico di rete ma più drift → FedAvg meno efficace; H piccolo → più comunicazione ma modelli più allineati. Da documentare: curva di val accuracy finale vs H (Esperimento 3), con interpretazione in termini di drift.
+Con H elevato e dati non-i.i.d., i modelli locali "derivano" progressivamente lontano da qualsiasi ottimo comune — ogni worker ottimizza per la propria distribuzione locale, allontanandosi dagli altri. La tensione è: H grande → meno traffico di rete ma più drift → FedAvg meno efficace; H piccolo → più comunicazione ma modelli più allineati. Da documentare: curva di val accuracy finale vs H (Esp. 1), con interpretazione in termini di drift.
 
 **5. Propagazione dell'informazione con fanout=1.**
 In una rete di N nodi con fanout=1, un modello aggiornato da un worker raggiunge tutti gli altri in almeno $\lceil \log_2 N \rceil$ round nel caso ottimo, ma la selezione casuale dei peer introduce alta varianza. Con 3 worker, è possibile che un worker non riceva aggiornamenti da un certo peer per molti round consecutivi per pura casualità. Da documentare: distribuzione empirica degli intervalli tra ricezioni da ogni peer, confronto tra fanout=1 e fanout=2.
@@ -1749,11 +1749,13 @@ ml_sdcc_project/
 ├── config.yaml               # Single source of truth for all parameters
 ├── .dockerignore             # Excludes data/, scripts/, docs from build context
 ├── requirements.registry.txt # Registry dependencies (Flask only)
-├── requirements.worker.txt   # Worker dependencies (PyTorch, gRPC, ...)
-├── docker-compose.yml        # [GENERATED] Local + Single EC2 deployment — do not edit manually
+├── requirements.worker.txt     # Worker dependencies (PyTorch CPU, gRPC, ...)
+├── requirements.worker.gpu.txt # Worker dependencies for GPU build (torch from base image)
+├── docker-compose.yml          # [GENERATED] Local + Single EC2 deployment — do not edit manually
 ├── docker/
 │   ├── Dockerfile.registry      # Minimal image: no PyTorch, no grpcio
-│   └── Dockerfile.worker        # Full image: PyTorch + gRPC + proto compilation
+│   ├── Dockerfile.worker        # CPU image: python:3.11-slim + PyTorch CPU (~1.5 GB)
+│   └── Dockerfile.worker.gpu    # GPU image: pytorch/pytorch CUDA base (~6 GB)
 ├── proto/
 │   └── gossip.proto             # gRPC service and message definitions
 ├── scripts/
@@ -1775,10 +1777,15 @@ ml_sdcc_project/
 
 #### Due immagini separate
 
-Il sistema usa due immagini Docker distinte, in accordo con il principio di separazione delle responsabilità:
+Il sistema usa tre immagini Docker distinte, in accordo con il principio di separazione delle responsabilità:
 
 - **`docker/Dockerfile.registry`** — immagine minimale: solo `python:3.11-slim` + Flask. Non contiene PyTorch, grpcio o il codice worker. Dimensione tipica: ~80 MB.
-- **`docker/Dockerfile.worker`** — immagine completa: PyTorch CPU, grpcio, grpcio-tools. Dimensione tipica: ~1.5 GB.
+- **`docker/Dockerfile.worker`** — immagine CPU: `python:3.11-slim` + PyTorch CPU + grpcio. Usata per tutti i deployment AWS e per il training locale senza GPU. Dimensione tipica: ~1.5 GB.
+- **`docker/Dockerfile.worker.gpu`** — immagine GPU: base `pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime` (PyTorch con CUDA già incluso) + grpcio. Usata solo in locale quando `use_gpu: true` in `config.yaml`. Dimensione tipica: ~6 GB. Non adatta ad AWS Learner Lab (istanze senza GPU).
+
+La scelta del Dockerfile è controllata dal flag `network.use_gpu` in `config.yaml`: `generate_compose.py` seleziona `Dockerfile.worker.gpu` e aggiunge il blocco `deploy.resources.reservations.devices` al compose solo quando il flag è `true`. Rimettendo `use_gpu: false` e rigenerando il compose, i container successivi usano di nuovo l'immagine CPU leggera — l'immagine GPU resta in cache locale ma non viene istanziata.
+
+**Prerequisito per `use_gpu: true`:** NVIDIA Container Toolkit installato sull'host (`nvidia-docker2` o `nvidia-container-toolkit`). Il codice Python non richiede modifiche: `main_worker.py` usa già `torch.device("cuda" if torch.cuda.is_available() else "cpu")` e sposta automaticamente modello e batch sul device disponibile.
 
 La separazione riduce significativamente i tempi di rebuild del registry (nessuna dipendenza pesante) e minimizza la superficie di attacco dell'immagine registry.
 
@@ -2708,7 +2715,7 @@ Tenendo conto della letteratura e delle aspettative teoriche, i criteri di valut
 | Insufficiente | < 78% | La gossip aggregation non porta beneficio significativo rispetto al training isolato |
 
 **Criterio 2 — Vantaggio rispetto alla baseline no-FL:**
-Il gossip deve apportare un miglioramento misurabile rispetto al training in isolamento (Esperimento 1). L'entità attesa del vantaggio è **+5–15% di mean_accuracy** e una riduzione della `std_accuracy` tra worker di almeno il 30–50%.
+Il gossip deve apportare un miglioramento misurabile rispetto al training in isolamento. L'entità attesa del vantaggio rispetto a un training senza aggregazione è **+5–15% di mean_accuracy** e una riduzione della `std_accuracy` tra worker di almeno il 30–50%.
 
 **Criterio 3 — Equità della convergenza (`std_accuracy`):**
 Un sistema FL sano produce modelli simili su tutti i worker. Con N=3 e dataset full, `std_accuracy < 3%` al termine indica convergenza uniforme. Valori tra 3% e 7% sono accettabili; oltre il 7% segnalano un'aggregazione inefficace o un fanout troppo basso.
@@ -2720,46 +2727,37 @@ Il sistema deve mantenere `mean_accuracy > 80%` con `drop_probability: 0.2`. Un 
 
 ### 12.6 Tabelle Risultati (TODO — completare con dati reali)
 
-**Esperimento 1 vs 2 — Baseline no-FL vs FL gossip:**
+**Esp. 1 — Griglia iperparametri (N=5, fanout=3):**
 
-| Metrica | Esp. 1 (no gossip) | Esp. 2 (gossip default) | Delta |
+| `learning_rate` \ `inner_steps_H` | 100 | 500 | 1000 |
 |---|:---:|:---:|:---:|
-| `mean_accuracy` finale | TODO | TODO | TODO |
-| `std_accuracy` finale | TODO | TODO | TODO |
-| Round a convergenza | TODO | TODO | TODO |
-| L2 divergenza pesi | TODO | TODO | TODO |
+| 1e-4 | TODO | TODO | TODO |
+| 1e-3 | TODO | TODO | TODO |
+| 5e-3 | TODO | TODO | TODO |
 
-**Esperimento 3c — Effetto gossip_fanout (N=3, H=500):**
+**Esp. 2 — Scalabilità (config ottimale da Esp. 1):**
 
-| `gossip_fanout` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) |
-|:---:|:---:|:---:|:---:|:---:|
-| 1 | TODO | TODO | TODO | TODO |
-| 2 | TODO | TODO | TODO | TODO |
-
-**Esperimento 3b — Effetto inner_steps_H (N=3, fanout=1):**
-
-| `inner_steps_H` | `mean_accuracy` | `std_accuracy` | Round a conv. | Msg push totali |
-|:---:|:---:|:---:|:---:|:---:|
-| 100 | TODO | TODO | TODO | TODO |
-| 500 | TODO | TODO | TODO | TODO |
-| 1000 | TODO | TODO | TODO | TODO |
-
-**Esperimento 4 — Scalabilità num_workers (config ottimale, fanout=best):**
-
-| `num_workers` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) | Durata/round (s) |
+| `num_workers` | `gossip_fanout` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) |
 |:---:|:---:|:---:|:---:|:---:|:---:|
-| 3 | TODO | TODO | TODO | TODO | TODO |
-| 5 | TODO | TODO | TODO | TODO | TODO |
-| 8 | TODO | TODO | TODO | TODO | TODO |
+| 3 | 1 | TODO | TODO | TODO | TODO |
+| 5 | 3 | (da Esp. 1) | — | — | — |
+| 8 | 5 | TODO | TODO | TODO | TODO |
 
-**Esperimento 4 — Robustezza fault injection (config ottimale):**
+**Esp. 3 — Test set onesto (config migliore):**
 
-| `drop_probability` | `mean_accuracy` | Note |
-|:---:|:---:|---|
-| 0.0 | TODO | riferimento pulito |
-| 0.2 | TODO | default — deve reggere |
-| 0.5 | TODO | soglia critica |
-| 0.8 | TODO | degradazione attesa |
+| Metrica | Valore |
+|---|:---:|
+| `val_accuracy` (da Esp. 1/2) | TODO |
+| `test_accuracy` (Esp. 3) | TODO |
+| Differenza (bias ottimistico) | TODO |
+
+**Esp. 4 — Fault injection (config migliore, drop=0.10, crash=0.03):**
+
+| Metrica | Valore |
+|---|:---:|
+| `mean_accuracy` | TODO |
+| Push droppati / round (media) | TODO |
+| Worker crashati totali | TODO |
 
 ---
 

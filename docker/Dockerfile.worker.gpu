@@ -1,0 +1,22 @@
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+WORKDIR /app
+
+# gcc/g++ required to compile grpcio from source
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
+    && rm -rf /var/lib/lists/*
+
+# Python dependencies (torch already provided by base image)
+COPY requirements.worker.gpu.txt .
+RUN pip install --no-cache-dir -r requirements.worker.gpu.txt
+
+# Generate gossip_pb2.py and gossip_pb2_grpc.py from the proto definition
+COPY proto/gossip.proto .
+RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. gossip.proto
+
+# Copy source files (the pb2 files generated above will not be overwritten)
+COPY config.yaml main_worker.py ./
+COPY core/ ./core/
+COPY network/ ./network/
+
+EXPOSE 50051
+CMD ["python", "main_worker.py"]

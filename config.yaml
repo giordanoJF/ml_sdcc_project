@@ -63,6 +63,14 @@ federated_learning:
   # With fanout=0 no pushes are sent and the aggregation buffer stays empty,
   # producing identical behavior to the former gossip_enabled: false flag.
 
+  # Set to true to use NVIDIA GPU acceleration (local only — AWS Learner Lab
+  # instances do not have GPUs). Requires NVIDIA Container Toolkit on the host
+  # and regenerating the compose file: python scripts/generate_compose.py.
+  # When true, generate_compose.py uses Dockerfile.worker.gpu (CUDA base image)
+  # and adds the GPU device reservation to each worker service.
+  # When false (default), uses Dockerfile.worker (CPU-only, smaller image ~1 GB).
+  use_gpu: false
+
 machine_learning:
   dataset: "femnist"
 

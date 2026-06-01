@@ -1,0 +1,5 @@
+# GPU worker dependencies — torch is provided by the pytorch/pytorch base image.
+grpcio>=1.60,<2.0
+grpcio-tools>=1.60,<2.0
+pyyaml>=6.0
+requests>=2.31

@@ -25,7 +25,7 @@ def _healthcheck(registry_port: int) -> str:
     )
 
 
-def write_local_compose(num_workers: int, registry_port: int) -> None:
+def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool) -> None:
     """
     Generate docker-compose.yml for local single-machine development.
 
@@ -33,15 +33,28 @@ def write_local_compose(num_workers: int, registry_port: int) -> None:
     test is rendered as an inline flow sequence, which IDE schema validators
     accept without warnings.
     """
+    dockerfile = "docker/Dockerfile.worker.gpu" if use_gpu else "docker/Dockerfile.worker"
+    image_tag = "fl-worker-gpu" if use_gpu else "fl-worker"
+
+    gpu_block = [
+        "    deploy:",
+        "      resources:",
+        "        reservations:",
+        "          devices:",
+        "            - driver: nvidia",
+        "              count: all",
+        "              capabilities: [gpu]",
+    ] if use_gpu else []
+
     worker_blocks = []
     for i in range(num_workers):
         worker_blocks += [
             "",
             f"  worker_{i}:",
-            "    image: fl-worker",
+            f"    image: {image_tag}",
             "    build:",
             "      context: .",
-            "      dockerfile: docker/Dockerfile.worker",
+            f"      dockerfile: {dockerfile}",
             "    environment:",
             f"      - WORKER_ID={i}",
             f"      - TOTAL_WORKERS={num_workers}",
@@ -55,7 +68,7 @@ def write_local_compose(num_workers: int, registry_port: int) -> None:
             "        target: /app/data/femnist",
             "    networks:",
             "      - fl_net",
-        ]
+        ] + gpu_block
 
     lines = [
         'version: "3.8"',
@@ -96,9 +109,11 @@ def main():
     num_workers: int = cfg["network"]["num_workers"]
     grpc_port: int = cfg["network"]["grpc_port"]
     registry_port: int = cfg["network"]["registry_port"]
+    use_gpu: bool = cfg["network"].get("use_gpu", False)
 
-    print(f"Generating docker-compose.yml — {num_workers} workers, gRPC port {grpc_port} ...")
-    write_local_compose(num_workers, registry_port)
+    mode = "GPU (Dockerfile.worker.gpu)" if use_gpu else "CPU (Dockerfile.worker)"
+    print(f"Generating docker-compose.yml — {num_workers} workers, gRPC port {grpc_port}, mode={mode} ...")
+    write_local_compose(num_workers, registry_port, use_gpu)
     print("Done. Run: docker compose up --build")
 
 
