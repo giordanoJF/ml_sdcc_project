@@ -2631,11 +2631,15 @@ python scripts/aggregate_metrics.py  # riporta val_accuracy
 
 # Run B — con test set indipendente
 # config.yaml: use_test_set: true
-python scripts/download_femnist.py   # re-download necessario (--tf diverso)
+python scripts/download_femnist.py   # re-download necessario — vedi nota sotto
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
 ```
+
+**Perché il re-download è obbligatorio quando si cambia `use_test_set`.** Il rapporto train/test non è un parametro di `split_dataset.py` ma di LEAF stesso: `download_femnist.py` invoca lo script LEAF con `--tf 0.9` (con `use_test_set: false`) o `--tf 0.8` (con `use_test_set: true`), e LEAF bake il rapporto dentro i file JSON prodotti — ogni writer ha già le proprie immagini pre-assegnate a `train/` o `test/` nel momento in cui i JSON vengono scritti su disco. Con `--tf 0.9`, la cartella `data/femnist/data/test/` contiene esattamente il 10% dei campioni di ogni writer; con `--tf 0.8`, ne contiene il 20%. `split_dataset.py` con `use_test_set: true` divide questa seconda cartella al 50/50 per scrittore per ottenere 10% val + 10% test. Se si cambia `use_test_set` senza re-download, `split_dataset.py` opererebbe su una cartella `test/` costruita con il rapporto sbagliato: i JSON su disco non rifletterebbero la proporzione richiesta, e il risultato sarebbe silenziosamente errato (es. 5% val + 5% test invece di 10% + 10%).
+
+**Motivazione ML.** Il re-download non è solo un dettaglio implementativo: riflette un principio fondamentale della valutazione in ML. Con `use_test_set: false` il sistema usa lo stesso 10% di LEAF per due scopi distinti — early stopping round per round e confronto finale tra configurazioni — introducendo un doppio bias ottimistico. Aggiungere un test set separato richiede necessariamente di sottrarre dati al training (da 90% a 80%): non esiste un modo per avere un test set indipendente senza ridurre i dati di addestramento, perché i campioni totali sono fissi. Il trade-off è inevitabile: più dati al training → metriche finali più ottimistiche (bias non eliminato); meno dati al training → metriche finali più oneste ma modello potenzialmente meno capace. Il re-download rende questo trade-off esplicito e controllato, invece di lasciarlo implicito nella scelta di `use_test_set`.
 
 La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) è indicativa del bias ottimistico, ma non lo misura con precisione: Run B allena su **80% dei dati** invece del 90% di Run A, quindi la `test_accuracy` sarà probabilmente più bassa per due motivi sovrapposti — meno dati di training (effetto reale) e assenza del bias ottimistico (effetto che si vuole isolare). I due contributi non sono separabili. Ciò che Run B garantisce è che la `test_accuracy` è una stima onesta della generalizzazione di quella configurazione su dati mai visti in nessuna decisione di training.
 
