@@ -125,8 +125,6 @@ def main():
     total_rounds = fl_cfg["total_rounds"]
     inner_steps = fl_cfg["inner_steps_H"]            # H: local steps before gossip
     patience = fl_cfg["early_stopping_patience"]
-    gossip_enabled = fl_cfg.get("gossip_enabled", True)
-
     data_dir = ml_cfg["data_dir"]
     batch_size = ml_cfg["batch_size"]
     learning_rate = ml_cfg["learning_rate"]
@@ -145,8 +143,6 @@ def main():
     max_staleness = fault_injection_cfg["max_staleness"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if not gossip_enabled:
-        logger.warning("gossip_enabled=false — training in isolation (no-FL baseline mode)")
     logger.info(f"Starting on {my_address} | device={device} | total_workers={total_workers}")
 
     # --- Dataset: load this worker's pre-split partition ---
@@ -211,41 +207,40 @@ def main():
             # -----------------------------------------------------------
             t_phase_a = time.time()
             neighbors_aggregated = 0
-            if gossip_enabled:
-                with buffer.lock:
-                    if buffer.received_samples > 0:
-                        # neighbor_samples: total training examples contributed by all
-                        # neighbors whose updates arrived this round (denominator of
-                        # the neighbors' weighted average, already baked into weighted_sum).
-                        neighbor_samples = buffer.received_samples
-                        neighbors_aggregated = buffer.messages_received
-                        # combined_samples: grand total used to weight local vs. neighbors.
-                        combined_samples = local_samples + neighbor_samples
-                        local_state = model.state_dict()
-                        new_state = {}
-                        for k, v in local_state.items():
-                            if v.is_floating_point():
-                                # FedAvg formula:
-                                #   new_w = (local_w * local_samples + weighted_sum) / combined_samples
-                                # weighted_sum already holds sum(w_i * sender_samples_i)
-                                # over all received neighbors, so no intermediate average needed.
-                                new_state[k] = (
-                                    v.float() * local_samples + buffer.weighted_sum[k]
-                                ) / combined_samples
-                            else:
-                                # Non-float buffers (e.g. BatchNorm's num_batches_tracked)
-                                # are not averaged; keep the local value.
-                                new_state[k] = v
-                        model.load_state_dict(new_state)
-                        # Reset the buffer so the next round starts fresh
-                        buffer.weighted_sum = None
-                        buffer.received_samples = 0
-                        buffer.messages_received = 0
-                        logger.info(
-                            f"FedAvg applied — local={local_samples}, "
-                            f"neighbors={neighbor_samples} ({neighbors_aggregated} models), "
-                            f"combined={combined_samples}"
-                        )
+            with buffer.lock:
+                if buffer.received_samples > 0:
+                    # neighbor_samples: total training examples contributed by all
+                    # neighbors whose updates arrived this round (denominator of
+                    # the neighbors' weighted average, already baked into weighted_sum).
+                    neighbor_samples = buffer.received_samples
+                    neighbors_aggregated = buffer.messages_received
+                    # combined_samples: grand total used to weight local vs. neighbors.
+                    combined_samples = local_samples + neighbor_samples
+                    local_state = model.state_dict()
+                    new_state = {}
+                    for k, v in local_state.items():
+                        if v.is_floating_point():
+                            # FedAvg formula:
+                            #   new_w = (local_w * local_samples + weighted_sum) / combined_samples
+                            # weighted_sum already holds sum(w_i * sender_samples_i)
+                            # over all received neighbors, so no intermediate average needed.
+                            new_state[k] = (
+                                v.float() * local_samples + buffer.weighted_sum[k]
+                            ) / combined_samples
+                        else:
+                            # Non-float buffers (e.g. BatchNorm's num_batches_tracked)
+                            # are not averaged; keep the local value.
+                            new_state[k] = v
+                    model.load_state_dict(new_state)
+                    # Reset the buffer so the next round starts fresh
+                    buffer.weighted_sum = None
+                    buffer.received_samples = 0
+                    buffer.messages_received = 0
+                    logger.info(
+                        f"FedAvg applied — local={local_samples}, "
+                        f"neighbors={neighbor_samples} ({neighbors_aggregated} models), "
+                        f"combined={combined_samples}"
+                    )
 
             # Validate after aggregation to track convergence for early stopping
             val_loss, val_acc = validate(model, val_loader, device)
@@ -298,74 +293,73 @@ def main():
                 sys.exit(1)
 
             # -----------------------------------------------------------
-            # Phase C: Gossip Push (skipped in baseline mode)
+            # Phase C: Gossip Push
             # -----------------------------------------------------------
             sent_count = 0
             phase_c_s = 0.0
             grpc_latencies: list[float] = []
-            if gossip_enabled:
-                t_phase_c = time.time()
-                # Update current_round before sending so the receiver's staleness
-                # check sees the correct value.
-                shared_state["current_round"] = round_num
+            t_phase_c = time.time()
+            # Update current_round before sending so the receiver's staleness
+            # check sees the correct value.
+            shared_state["current_round"] = round_num
 
-                all_peers = fetch_peers(registry_url)
-                # Exclude self to avoid sending to ourselves
-                eligible_peers = [p for p in all_peers if p != my_address]
-                targets = (
-                    random.sample(eligible_peers, min(gossip_fanout, len(eligible_peers)))
-                    if eligible_peers else []
+            all_peers = fetch_peers(registry_url)
+            # Exclude self to avoid sending to ourselves
+            eligible_peers = [p for p in all_peers if p != my_address]
+            targets = (
+                random.sample(eligible_peers, min(gossip_fanout, len(eligible_peers)))
+                if eligible_peers else []
+            )
+
+            weights_snapshot = model.state_dict()  # snapshot once, reuse for all targets
+            dropped_count = 0
+            failed_targets = []
+            tried = set(targets)  # all peers attempted, used to avoid duplicates on retry
+
+            for target in targets:
+                # Simulate packet loss before attempting the RPC
+                if random.random() < drop_prob:
+                    dropped_count += 1
+                    logger.debug(f"Dropped message to {target}")
+                    continue
+                t_call = time.time()
+                success = send_model(
+                    target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
                 )
+                grpc_latencies.append(time.time() - t_call)
+                if success:
+                    sent_count += 1
+                else:
+                    failed_targets.append(target)
 
-                weights_snapshot = model.state_dict()  # snapshot once, reuse for all targets
-                dropped_count = 0
-                failed_targets = []
-                tried = set(targets)  # all peers attempted, used to avoid duplicates on retry
-
-                for target in targets:
-                    # Simulate packet loss before attempting the RPC
+            # Reactive re-query: if any gRPC push failed (not simulated drops),
+            # fetch a fresh peer list and attempt one replacement per failure.
+            # This covers the case where a peer crashed and deregistered between
+            # our initial fetch_peers() call and the push attempt.
+            # At most one extra HTTP call per round, only when failures occur.
+            retried = 0
+            if failed_targets:
+                fresh_peers = fetch_peers(registry_url)
+                replacements = [p for p in fresh_peers if p != my_address and p not in tried]
+                for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
+                    tried.add(replacement)
                     if random.random() < drop_prob:
                         dropped_count += 1
-                        logger.debug(f"Dropped message to {target}")
                         continue
                     t_call = time.time()
                     success = send_model(
-                        target, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
+                        replacement, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
                     )
                     grpc_latencies.append(time.time() - t_call)
                     if success:
                         sent_count += 1
-                    else:
-                        failed_targets.append(target)
+                    retried += 1
 
-                # Reactive re-query: if any gRPC push failed (not simulated drops),
-                # fetch a fresh peer list and attempt one replacement per failure.
-                # This covers the case where a peer crashed and deregistered between
-                # our initial fetch_peers() call and the push attempt.
-                # At most one extra HTTP call per round, only when failures occur.
-                retried = 0
-                if failed_targets:
-                    fresh_peers = fetch_peers(registry_url)
-                    replacements = [p for p in fresh_peers if p != my_address and p not in tried]
-                    for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
-                        tried.add(replacement)
-                        if random.random() < drop_prob:
-                            dropped_count += 1
-                            continue
-                        t_call = time.time()
-                        success = send_model(
-                            replacement, weights_snapshot, round_num, local_samples, worker_id, grpc_timeout
-                        )
-                        grpc_latencies.append(time.time() - t_call)
-                        if success:
-                            sent_count += 1
-                        retried += 1
-
-                phase_c_s = time.time() - t_phase_c
-                logger.info(
-                    f"Gossip push — sent={sent_count}, dropped={dropped_count}, "
-                    f"failed={len(failed_targets)}, retried={retried}"
-                )
+            phase_c_s = time.time() - t_phase_c
+            logger.info(
+                f"Gossip push — sent={sent_count}, dropped={dropped_count}, "
+                f"failed={len(failed_targets)}, retried={retried}"
+            )
 
             grpc_mean_latency_s = (sum(grpc_latencies) / len(grpc_latencies)) if grpc_latencies else 0.0
 

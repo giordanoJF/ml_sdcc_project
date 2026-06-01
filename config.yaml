@@ -59,11 +59,9 @@ federated_learning:
   # The threshold for "improvement" is 1e-4 (hardcoded in main_worker.py).
   early_stopping_patience: 10
 
-  # Set to false to disable Phase A (aggregation) and Phase C (gossip push).
-  # Workers train in complete isolation on their local partition — no model sharing.
-  # Use this as the no-FL baseline in Experiment 1 to quantify how much the
-  # federated aggregation actually contributes to accuracy and convergence.
-  gossip_enabled: true
+  # To run workers in isolation (no-FL baseline), set gossip_fanout: 0.
+  # With fanout=0 no pushes are sent and the aggregation buffer stays empty,
+  # producing identical behavior to the former gossip_enabled: false flag.
 
 machine_learning:
   dataset: "femnist"
