@@ -203,7 +203,7 @@ LEAF fornisce uno split predeterminato configurabile tramite `--tf` (default 0.9
 
 Il nostro sistema ha solo train e val, usando quest'ultimo per **due ruoli distinti**:
 1. **Early stopping** — durante ogni run, la val loss decide quando interrompere il training.
-2. **Selezione degli iperparametri** — tra le run, la val accuracy finale è la metrica usata per scegliere la configurazione migliore nella grid search (es. `learning_rate` ∈ {1e-4, 1e-3, 5e-3}, `inner_steps_H` ∈ {100, 500, 1000}, `gossip_fanout` ∈ {1, 2, N-1}).
+2. **Selezione degli iperparametri** — tra le run, la val accuracy finale è la metrica usata per scegliere la configurazione migliore in una griglia manuale di configurazioni (es. `learning_rate` ∈ {1e-4, 1e-3, 5e-3}, `inner_steps_H` ∈ {100, 500, 1000}, `gossip_fanout` ∈ {1, 2, N-1}): ogni combinazione viene eseguita come run separata, i risultati archiviati con `save_experiment.py`, e il confronto fatto a mano.
 
 Entrambi questi usi si basano sullo **stesso identico `val/`** — non esiste una suddivisione interna tra "val per early stopping" e "val per confronto". Questo genera un bias che si accumula su due livelli:
 
@@ -318,7 +318,7 @@ La letteratura FL ha sviluppato diverse strategie per affrontare questi problemi
 | FedProx | ❌ | — | Direzione di miglioramento futura |
 | SCAFFOLD | ❌ | — | Incompatibile con gossip asincrono (richiede control variates globali) |
 | Reset optimizer post-FedAvg | ❌ | — | Scelta deliberata: non alterare la comparabilità degli esperimenti |
-| H variabile (grid search) | ✅ (in piano) | Esperimento 3b | Esplora il trade-off drift vs comunicazione |
+| H variabile (griglia manuale di run) | ✅ (in piano) | Esperimento 3b | Esplora il trade-off drift vs comunicazione |
 
 > **Nota su SCAFFOLD in un sistema P2P.** SCAFFOLD richiede che i control variates siano sincronizzati tra tutti i worker ad ogni round di aggregazione — un'operazione intrinsecamente centralizzata. In un sistema gossip asincrono dove ogni worker aggrega solo i modelli che riceve casualmente, non è possibile mantenere control variates globali coerenti. SCAFFOLD è quindi architetturalmente incompatibile con il nostro design, per la stessa ragione per cui l'outer optimizer di DiLoCo non può essere implementato.
 
