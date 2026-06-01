@@ -1249,27 +1249,44 @@ Questa sezione descrive l'intera metodologia sperimentale adottata per validare 
 
 ```
 Fase 0 — Preparazione
-  └── Setup, download dataset, verifica installazione (Esp. 0)
+  └── Setup, download dataset, verifica installazione
 
-Fase 1 — Baseline e Griglia Iperparametri  [11 run]
-  └── Esp. 1: no-FL baseline (gossip_fanout: 0, num_workers=5)           [1 run]
-  └── Esp. 2: FL con configurazione di default (lr=1e-3, H=500)          [1 run]
-  └── Esp. 3: griglia 3×3 lr × H, num_workers=5, fanout=3 fissi          [9 run]
+Fase 1 — Griglia Iperparametri  [9 run]
+  └── Esp. 1: griglia 3×3 lr × H, num_workers=5, fanout=3 fissi
   └── Obiettivo: trovare la coppia (lr, H) ottimale
 
 Fase 2 — Scalabilità  [2 run]
-  └── Esp. 4: config ottimale da Esp. 3 con (num_workers=3, fanout=1)    [1 run]
-  └──          config ottimale da Esp. 3 con (num_workers=8, fanout=5)   [1 run]
+  └── Esp. 2a: config ottimale da Esp. 1 con (num_workers=3, fanout=1)
+  └── Esp. 2b: config ottimale da Esp. 1 con (num_workers=8, fanout=5)
   └── Obiettivo: scegliere la configurazione complessiva (lr, H, N, fanout) migliore
 
 Fase 3 — Valutazione Onesta con Test Set  [1 run]
-  └── Esp. 5: config migliore da Fase 2, use_test_set=true (80/10/10)    [1 run]
+  └── Esp. 3: config migliore da Fase 2, use_test_set=true (80/10/10)
   └── Obiettivo: stima non biased della generalizzazione
 
 Fase 4 — Fault Injection  [1 run]
-  └── Esp. 6: config migliore, crash_probability e drop_probability bassi [1 run]
+  └── Esp. 4: config migliore, drop_probability e crash_probability bassi
   └── Obiettivo: documentare il comportamento sotto guasto
 ```
+
+**Totale: 13 run.**
+
+#### Metrica di confronto: `mean_accuracy`
+
+La metrica usata per confrontare le configurazioni tra run è la **`mean_accuracy` finale** — media aritmetica della `val_accuracy` di tutti i worker all'ultimo round completato prima dell'early stopping.
+
+Questa scelta implica che tutti i worker abbiano lo stesso peso nel confronto, indipendentemente dalla dimensione della loro partizione. Un worker con 210k campioni contribuisce alla media quanto uno con 273k. Questo è accettabile perché le partizioni FEMNIST hanno dimensioni comparabili (variazione < 30% tra worker con N=5) e l'obiettivo è valutare la qualità del sistema FL nel suo complesso, non ottimizzare per il worker più grande.
+
+**Alternative valutate e scartate:**
+
+| Alternativa | Descrizione | Perché non usata |
+|---|---|---|
+| Media pesata per campioni | $\sum_k \frac{n_k}{N} \cdot \text{acc}_k$ | Più corretta statisticamente, ma con partizioni quasi uniformi il risultato è quasi identico alla media semplice — complessità non giustificata |
+| `min_accuracy` | Performance del worker peggiore | Conservativa: garantisce che nessun worker sia penalizzato, ma troppo sensibile a un singolo worker anomalo |
+| `median_accuracy` | Valore centrale tra i worker | Robusta agli outlier, ma con N=5 la mediana è il valore del terzo worker — poco informativa |
+| Velocità di convergenza | Round a cui si raggiunge una soglia di accuracy | Utile ma secondaria: dipende dalla scelta della soglia e non cattura la qualità finale |
+
+`std_accuracy` è usata come metrica secondaria: una std bassa indica che tutti i worker convergono uniformemente — proprietà desiderabile di un sistema FL sano dove il gossip distribuisce la conoscenza in modo equo.
 
 ### 7.2 Fase 0 — Preparazione dell'Ambiente
 
@@ -1298,77 +1315,7 @@ Se tutto funziona correttamente, il sistema è pronto per gli esperimenti.
 
 **Nota:** Tutti gli esperimenti usano il dataset completo (`--sf 1.0`, default). L'opzione `--sf 0.05` (5% del dataset, ~170 scrittori per split) è disponibile come scorciatoia per verifiche rapide di installazione o debugging del codice, ma non produce risultati rappresentativi da riportare.
 
-### 7.3 Esperimento 1 — Baseline No-FL (Training in Isolamento)
-
-**Obiettivo:** misurare le prestazioni di ogni worker quando allena il modello esclusivamente sui propri dati, senza nessuna forma di cooperazione. Questi risultati costituiscono il **limite inferiore** di riferimento.
-
-**Configurazione:** `num_workers=5`, `gossip_fanout=0` (nessun push inviato → nessuna aggregazione), `lr=1e-3`, `H=500`.
-```yaml
-network:
-  gossip_fanout: 0        # ← unica modifica rispetto al default; fanout=0 = isolamento completo
-federated_learning:
-  total_rounds: 100
-```
-
-**Procedura:**
-```bash
-# Modificare config.yaml come sopra, poi:
-docker compose up --build
-python scripts/aggregate_metrics.py
-# Salvare i risultati:
-cp data/femnist/global_metrics.csv results/exp1_baseline_no_fl.csv
-cp data/femnist/summary.txt results/exp1_summary.txt
-# Pulire per il prossimo esperimento:
-rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
-```
-
-**Risultati attesi:**
-- Ogni worker converge localmente: la sua `val_accuracy` aumenta nel tempo.
-- La `std_accuracy` rimane alta o non tende a zero: i worker hanno performance diverse perché ognuno conosce solo i propri scrittori.
-- La `mean_accuracy` finale sarà il benchmark da battere con il FL.
-- Il `mean pairwise L2 distance` dei pesi finali sarà elevato: i modelli hanno divergito, ognuno specializzandosi sul proprio subset.
-
-**Cosa dimostra:** senza gossip, il sistema riduce a K addestramenti indipendenti. I worker con più varietà di classi nei loro dati otterranno accuracy migliore; quelli con subset sbilanciati risulteranno più deboli su certe classi.
-
-### 7.4 Esperimento 2 — FL con Configurazione di Default
-
-**Obiettivo:** dimostrare che il gossip P2P migliora la convergenza rispetto alla baseline. Questo è il confronto fondamentale che valida l'utilità del Federated Learning nell'architettura implementata.
-
-**Configurazione:** `num_workers=5`, `fanout=3`, `lr=1e-3`, `H=500` (valori di default — corrisponde al Run 5 della griglia Esp. 3).
-```yaml
-network:
-  gossip_fanout: 3
-  num_workers: 5
-federated_learning:
-  learning_rate: 0.001
-  inner_steps_H: 500
-```
-
-**Procedura:**
-```bash
-docker compose up --build
-python scripts/aggregate_metrics.py
-cp data/femnist/global_metrics.csv results/exp2_fl_default.csv
-rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
-```
-
-**Risultati attesi e confronto con Esp. 1:**
-
-| Metrica | Esp. 1 (no FL) | Esp. 2 (FL) | Interpretazione |
-|---|---|---|---|
-| `mean_accuracy` finale | valore base | **più alta** | il gossip porta conoscenza dagli altri worker |
-| `std_accuracy` finale | alta | **più bassa** | i worker convergono a performance simili |
-| `L2 weight distance` | alta | **più bassa** | i modelli si sono avvicinati nello spazio dei pesi |
-| Rounds a convergenza | — | valore di riferimento | baseline temporale per confronti futuri |
-
-Se `mean_accuracy` FL > `mean_accuracy` no-FL e `std_accuracy` FL < `std_accuracy` no-FL, il Federated Learning ha dimostrato il suo valore su questa architettura.
-
-**Cosa monitorare nei log durante l'esecuzione:**
-- "FedAvg applied" compare nei log ad ogni round in cui si ricevono aggiornamenti.
-- `neighbors_aggregated` nel CSV deve essere > 0 per la maggior parte dei round.
-- La `val_accuracy` deve crescere più velocemente che nel baseline.
-
-### 7.5 Esperimento 3 — Ricerca degli Iperparametri
+### 7.3 Esperimento 1 — Griglia Iperparametri
 
 **Obiettivo:** trovare la coppia ottimale `(learning_rate, inner_steps_H)`. La ricerca è una **griglia completa 3×3** — tutte le combinazioni dei due parametri — per un totale di **9 run**. `num_workers=5` e `gossip_fanout=3` sono fissi per tutta la fase (valore medio, rappresentativo del regime distribuito). `batch_size` è fissato a 32 (motivazione in Sezione 6). Tutti gli esperimenti usano dataset completo (`--sf 1.0`, default).
 
@@ -1403,7 +1350,7 @@ I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.pn
 
 **Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 4 e 5).
 
-### 7.6 Esperimento 4 — Scalabilità (2 run)
+### 7.4 Esperimento 2 — Scalabilità (2 run)
 
 **Obiettivo:** verificare come la configurazione ottimale trovata in Esp. 3 si comporta con un numero diverso di worker e fanout. Si testano due configurazioni di rete alternative alla (5, 3) usata nella griglia, mantenendo fissi `(lr, H)` ottimali.
 
@@ -1427,7 +1374,7 @@ python scripts/save_experiment.py scalability_N3_f1   # o N8_f5
 docker compose down
 ```
 
-**Scelta della configurazione finale:** al termine di Esp. 3 e Esp. 4 si hanno 11 run totali. Si sceglie la combinazione `(lr, H, num_workers, fanout)` con `mean_accuracy` più alta — questa è la **configurazione complessiva ottimale** usata per Esp. 5 e Esp. 6.
+**Scelta della configurazione finale:** al termine di Esp. 1 e Esp. 2 si hanno 11 run totali. Si sceglie la combinazione `(lr, H, num_workers, fanout)` con `mean_accuracy` più alta — questa è la **configurazione complessiva ottimale** usata per Esp. 3 e Esp. 4.
 
 **Metriche da confrontare tra i 3 punti (N=3, N=5, N=8):**
 
@@ -1438,9 +1385,9 @@ docker compose down
 | Rounds a convergenza | tende a crescere — media di più contributi diversi |
 | Volume comunicazione | cresce ~linearmente con N (ogni worker invia a fanout fisso) |
 
-### 7.7 Esperimento 5 — Valutazione Onesta con Test Set (1 run)
+### 7.5 Esperimento 3 — Valutazione Onesta con Test Set (1 run)
 
-**Obiettivo:** produrre una stima non biased della generalizzazione della configurazione ottimale. Il val set usato in Esp. 1–4 ha servito sia per l'early stopping che per il confronto tra configurazioni — questo introduce un doppio bias ottimistico (documentato in Sezione 2.3). Esp. 5 lo elimina usando un test set completamente indipendente.
+**Obiettivo:** produrre una stima non biased della generalizzazione della configurazione ottimale. Il val set usato in Esp. 1 e Esp. 2 ha servito sia per l'early stopping che per il confronto tra configurazioni — questo introduce un doppio bias ottimistico (documentato in Sezione 2.3). Esp. 3 lo elimina usando un test set completamente indipendente.
 
 **Prerequisito:** questo esperimento richiede il re-download del dataset con `--tf 0.8` (split 80/10/10 invece di 90/10). Senza re-download il partizionamento sarebbe silenziosamente errato (Sezione 11.3).
 
@@ -1458,9 +1405,9 @@ python scripts/save_experiment.py final_test_set
 docker compose down
 ```
 
-`aggregate_metrics.py` stampa sia `val_accuracy` (early stopping) che `test_accuracy` (stima onesta). La `test_accuracy` è la metrica definitiva da riportare. La differenza tra `val_accuracy` di Esp. 3–4 e `test_accuracy` di Esp. 5 è indicativa del bias ottimistico accumulato (si allena su 80% dei dati invece del 90%, quindi una parte della differenza è reale — Sezione 11.3).
+`aggregate_metrics.py` stampa sia `val_accuracy` (early stopping) che `test_accuracy` (stima onesta). La `test_accuracy` è la metrica definitiva da riportare. La differenza tra la migliore `val_accuracy` di Esp. 1–2 e `test_accuracy` di Esp. 3 è indicativa del bias ottimistico accumulato (si allena su 80% dei dati invece del 90%, quindi una parte della differenza è reale — Sezione 11.3).
 
-### 7.8 Esperimento 6 — Fault Injection (1 run)
+### 7.6 Esperimento 4 — Fault Injection (1 run)
 
 **Obiettivo:** documentare il comportamento del sistema sotto condizioni di rete avverse. Non si cerca la soglia di tolleranza (richiederebbe molti run), ma si osserva qualitativamente che il sistema continua a convergere nonostante guasti.
 
@@ -1479,7 +1426,7 @@ docker compose down
 - Se la `mean_accuracy` finale è comparabile a quella di Esp. 3 (resilienza dimostrata)
 - Eventuali crash simulati e il comportamento dei worker superstiti
 
-### 7.9 Analisi e Visualizzazione dei Risultati
+### 7.7 Analisi e Visualizzazione dei Risultati
 
 `aggregate_metrics.py --plot` genera i grafici per-run automaticamente. Per il confronto tra esperimenti, leggere i `summary.txt` e `global_metrics.csv` archiviati in `results/` per ciascun run.
 
@@ -1491,11 +1438,11 @@ docker compose down
 
 **Plot 3 — Scalabilità** (Esp. 4): `mean_accuracy` finale per N ∈ {3, 5, 8} — curva di rendimento marginale.
 
-**Plot 4 — Bias ottimistico** (Esp. 3 vs Esp. 5): `val_accuracy` migliore vs `test_accuracy` — quantifica il bias.
+**Plot 4 — Bias ottimistico** (Esp. 1–2 vs Esp. 3): migliore `val_accuracy` vs `test_accuracy` — quantifica il bias ottimistico accumulato.
 
 ---
 
-### 7.10 Osservazioni Empiriche da Documentare (TODO — completare con dati reali)
+### 7.8 Osservazioni Empiriche da Documentare (TODO — completare con dati reali)
 
 I punti seguenti sono fenomeni osservati durante i run di sviluppo o attesi dalla teoria FL. Vanno arricchiti con i valori numerici reali prodotti dagli esperimenti completi e integrati nella discussione finale.
 
@@ -2805,7 +2752,7 @@ Il sistema deve mantenere `mean_accuracy > 80%` con `drop_probability: 0.2`. Un 
 | 5 | TODO | TODO | TODO | TODO | TODO |
 | 8 | TODO | TODO | TODO | TODO | TODO |
 
-**Esperimento 5 — Robustezza fault injection (config ottimale):**
+**Esperimento 4 — Robustezza fault injection (config ottimale):**
 
 | `drop_probability` | `mean_accuracy` | Note |
 |:---:|:---:|---|
