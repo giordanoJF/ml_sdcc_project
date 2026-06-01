@@ -52,14 +52,14 @@ docker compose up --build
 **Cycle between runs (same `num_workers`, different config parameter):**
 
 ```bash
-python scripts/aggregate_metrics.py
-python scripts/save_experiment.py <name>   # archives config + metrics + Docker logs
+python scripts/aggregate_metrics.py --plot  # --plot generates accuracy/loss/timing PNG charts
+python scripts/save_experiment.py <name>    # archives config + metrics + Docker logs + plots
 # MUST run before docker compose down — logs are lost when containers are removed
-docker compose down                        # stops + removes containers and networks;
-                                           # does NOT remove images or data/femnist/ files
+docker compose down                         # stops + removes containers and networks;
+                                            # does NOT remove images or data/femnist/ files
 # edit config.yaml
-docker compose up --build                  # --build always required when config.yaml changes
-                                           # (config is baked into the image, not volume-mounted)
+docker compose up --build                   # --build always required when config.yaml changes
+                                            # (config is baked into the image, not volume-mounted)
 ```
 
 **When `num_workers` changes** — dataset must be re-partitioned and compose regenerated:
@@ -104,9 +104,9 @@ python scripts/aws_deploy.py resume_single
 ```
 
 **Experiment workflow:**
-- *Phase 1 — hyperparameter search*: fix `num_workers` (e.g. 3), vary one parameter at a time, repeat the two commands above.
-- *Phase 2 — scalability*: fix the best config, vary `num_workers` (3 → 5 → 8); re-run setup steps 1–3 before each run.
-- *Phase 3 — final test evaluation*: set `use_test_set: true`, re-run all three setup steps, then train once; `aggregate_metrics.py` will also print unbiased test accuracy.
+- *Phase 1 — hyperparameter search*: fix `num_workers` (e.g. 3) and `batch_size` (32). Run all 9 combinations of `learning_rate` ∈ {1e-4, 1e-3, 5e-3} × `inner_steps_H` ∈ {100, 500, 1000}. Archive each with `save_experiment.py`; compare `mean_accuracy` across `results/` to pick the best config. No-FL baseline: set `gossip_fanout: 0`.
+- *Phase 2 — scalability*: fix the best config from Phase 1, vary `num_workers` (3 → 5 → 8); re-run setup steps 1–3 before each run.
+- *Phase 3 — final test evaluation*: set `use_test_set: true`, re-run all three setup steps, then train once with the best config; `aggregate_metrics.py` will also print unbiased test accuracy.
 
 See `docs/report.md` section 11.1.1 for detailed per-step tables (who does what, on which machine).
 
@@ -132,7 +132,7 @@ python scripts/aws_deploy.py deploy      # build images, upload data, start cont
 python scripts/aws_deploy.py status      # check container status
 python scripts/aws_deploy.py logs 0      # tail worker_0 logs (Ctrl+C to exit)
 python scripts/aws_deploy.py collect     # download metrics once training ends
-python scripts/aggregate_metrics.py
+python scripts/aggregate_metrics.py --plot
 python scripts/save_experiment.py <name>
 python scripts/aws_deploy.py destroy     # IMPORTANT: stop billing
 

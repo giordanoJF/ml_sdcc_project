@@ -990,13 +990,14 @@ Il sistema non usa cross-validation (motivata in Sezione 2.3) né ottimizzazione
 
 I parametri del sistema si dividono in tre categorie con ruoli distinti:
 
-**Iperparametri ML** — influenzano direttamente la qualità del modello. Sono quelli ottimizzati con la grid search:
+**Iperparametri ML** — influenzano direttamente la qualità del modello. La griglia esplora `learning_rate` e `inner_steps_H` su tre livelli (piccolo / medio / grande rispetto ai valori tipici della letteratura FL), per un totale di 9 run (3 × 3):
 
-| Parametro | Candidati | Default | Effetto |
-|---|---|---|---|
-| `learning_rate` | 1e-4, 1e-3, 5e-3 | 1e-3 | Velocità di convergenza e stabilità del gradiente |
-| `inner_steps_H` | 100, 500, 1000 | 500 | Drift locale tra worker; meno step = meno drift ma più traffico |
-| `batch_size` | 16, 32, 64 | 32 | Stabilità del gradiente e velocità per step |
+| Parametro | Piccolo | Medio (default) | Grande | Motivazione dei valori |
+|---|---|---|---|---|
+| `learning_rate` | 1e-4 | 1e-3 | 5e-3 | 1e-3 è il default standard per AdamW; 1e-4 è conservativo, 5e-3 è aggressivo |
+| `inner_steps_H` | 100 | 500 | 1000 | 500 è il valore DiLoCo; 100 è comunicazione frequente, 1000 è drift massimo |
+
+`batch_size` è **fissato a 32** e non entra nella griglia. Il motivo è che `batch_size` e `learning_rate` interagiscono direttamente: raddoppiare il batch size dimezza la varianza del gradiente, effetto equivalente a ridurre il learning rate (linear scaling rule). Variare entrambi nella stessa griglia creerebbe confounding — non sarebbe possibile separare l'effetto di uno dall'altro. 32 è il valore standard nella letteratura FEMNIST (usato da FedAvg [2] e dalla maggior parte dei benchmark su questo dataset).
 
 **Parametri di sistema** — influenzano le metriche ML ma sono determinati dall'architettura del deployment, non ottimizzati come iperparametri. Si studiano negli esperimenti di scalabilità (Sezione 9):
 
@@ -1150,6 +1151,8 @@ scripts/aggregate_metrics.py ── legge worker_*/metrics.csv
 ```
 
 Questo approccio non richiede alcuna modifica al Registry né alcun canale di comunicazione aggiuntivo tra worker: le metriche rimangono dati locali del worker, mai condivisi in rete.
+
+**Perché non Prometheus e Grafana.** Una soluzione alternativa sarebbe esporre le metriche di ogni worker via HTTP (formato Prometheus) e raccoglierle con un container Prometheus + dashboard Grafana. Questo approccio è stato valutato e scartato per due ragioni. Prima: il meccanismo CSV su bind mount è funzionalmente equivalente a un'implementazione custom di Prometheus — ogni worker scrive metriche a ogni round, l'host le legge senza traffico aggiuntivo. Seconda: Grafana è ottimizzata per il monitoraggio real-time di sistemi long-running, non per l'analisi comparativa post-run di esperimenti batch. Quello di cui si ha bisogno non è un dashboard live, ma **grafici finali** da confrontare tra configurazioni diverse. `aggregate_metrics.py --plot` genera direttamente i PNG necessari (`accuracy_over_rounds.png`, `loss_over_rounds.png`, `phase_timing.png`) leggendo i CSV già disponibili, senza aggiungere dipendenze di infrastruttura.
 
 ### 6.2 Metriche Raccolte Per Worker
 
@@ -1374,46 +1377,38 @@ Se `mean_accuracy` FL > `mean_accuracy` no-FL e `std_accuracy` FL < `std_accurac
 
 ### 7.5 Esperimento 3 — Ricerca degli Iperparametri
 
-**Obiettivo:** trovare la configurazione ottimale degli iperparametri di training. Si varia un parametro alla volta mantenendo gli altri al valore dell'Esp. 2. La metrica di confronto è la `mean_accuracy` finale da `aggregate_metrics.py`.
+**Obiettivo:** trovare la configurazione ottimale di `learning_rate` e `inner_steps_H`. La ricerca è una **griglia completa 3×3** — tutte le combinazioni dei due parametri — per un totale di **9 run**. `batch_size` è fissato a 32 per tutto l'esperimento (motivazione in Sezione 6, tassonomia dei parametri). Tutti gli esperimenti usano dataset completo (`--sf 1.0`, default).
 
-Tutti gli esperimenti di questa fase usano il dataset completo (`--sf 1.0`, default). Se necessario velocizzare le iterazioni di sviluppo è possibile usare `--sf 0.05`, ma i risultati finali da riportare devono essere ottenuti su dataset completo.
-
-#### 3a — Learning Rate
-
-| Config | `learning_rate` | Risultato atteso |
+| Run | `learning_rate` | `inner_steps_H` |
 |---|---|---|
-| A (default) | 0.001 | riferimento |
-| B | 0.0001 | convergenza più lenta ma stabile |
-| C | 0.005 | convergenza rapida, rischio instabilità |
+| 1 | 1e-4 | 100 |
+| 2 | 1e-4 | 500 |
+| 3 | 1e-4 | 1000 |
+| 4 | 1e-3 | 100 |
+| 5 (default) | 1e-3 | 500 |
+| 6 | 1e-3 | 1000 |
+| 7 | 5e-3 | 100 |
+| 8 | 5e-3 | 500 |
+| 9 | 5e-3 | 1000 |
+
+Per ogni run:
 
 ```bash
-# Per ogni valore, modificare config.yaml e lanciare:
-docker compose up --build && python scripts/aggregate_metrics.py
-cp data/femnist/global_metrics.csv results/exp3a_lr_VALORE.csv
-rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
+# modificare learning_rate e inner_steps_H in config.yaml, poi:
+docker compose up --build
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py lr_VALORE_h_VALORE
+docker compose down
 ```
 
-#### 3b — Inner Steps H
+I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.png`) vengono archiviati da `save_experiment.py` insieme ai CSV. Il confronto finale tra le 9 configurazioni avviene a mano leggendo la `mean_accuracy` finale di `global_metrics.csv` o `summary.txt` in ciascuna cartella `results/`.
 
-| Config | `inner_steps_H` | Effetto atteso |
-|---|---|---|
-| A | 100 | aggregazione frequente, convergenza più solida ma più comunicazione |
-| B (default) | 500 | bilanciamento ottimale (ispirato a DiLoCo) |
-| C | 1000 | meno comunicazione, ma i modelli divergono di più localmente |
+**Risultati attesi per direzione:**
+- `learning_rate` alto (5e-3) con `H` alto (1000) → convergenza instabile: drift elevato + passi grandi amplificano l'oscillazione post-aggregazione.
+- `learning_rate` basso (1e-4) con `H` basso (100) → convergenza lenta ma stabile: aggregazioni frequenti con aggiornamenti conservativi.
+- `learning_rate` medio (1e-3) con `H` medio (500) → punto di riferimento DiLoCo: bilanciamento ottimale atteso.
 
-Questo è il parametro che bilancia **qualità dell'aggregazione** vs **costo di comunicazione**. Con H grande, ogni worker si allontana di più dagli altri tra un gossip e l'altro; la media pesata sarà meno accurata ma il numero di messaggi scambiati sarà inferiore.
-
-#### 3c — Numero di Gossip Peers (M)
-
-| Config | `gossip_fanout` | Effetto atteso |
-|---|---|---|
-| A | 1 | propagazione lenta: serve più round per diffondere informazioni |
-| B (default) | 2 | buon compromesso |
-| C | N−1 | massima connettività ma volume di comunicazione più alto |
-
-Con M = N−1, ogni worker invia il modello a tutti gli altri ad ogni round. Con M = 1, la diffusione è più lenta ma il traffico è minimo.
-
-**Scelta della configurazione ottimale:** al termine di Esp. 3, selezionare la combinazione `(lr, H, M)` con la `mean_accuracy` più alta sul dataset completo. Questa diventa la **configurazione fissa** per tutti gli esperimenti successivi.
+**Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 4 e 5).
 
 ### 7.6 Esperimento 4 — Analisi della Scalabilità
 
