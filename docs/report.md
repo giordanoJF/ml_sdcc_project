@@ -1201,14 +1201,14 @@ I risultati vengono salvati in `data/femnist/global_metrics.csv` e `data/femnist
 
 ### 6.4 Baseline Senza Gossip (Confronto Isolamento vs FL)
 
-Per verificare che il gossip apporti un contributo reale alla convergenza, il sistema supporta una **modalità baseline** configurabile:
+Per verificare che il gossip apporti un contributo reale alla convergenza, il sistema supporta una **modalità baseline** configurabile impostando `gossip_fanout: 0`: nessun push viene inviato, il buffer di aggregazione rimane vuoto, e la Fase A non applica nessuna FedAvg.
 
 ```yaml
-federated_learning:
-  gossip_enabled: false   # disabilita Fase A e Fase C
+network:
+  gossip_fanout: 0   # nessun push → nessuna aggregazione → isolamento completo
 ```
 
-Con `gossip_enabled: false`, ogni worker addestra il proprio modello **in completo isolamento**: non invia né riceve modelli dagli altri. Questo replica lo scenario in cui ogni dispositivo allena una rete solo sui propri dati locali, senza alcuna forma di apprendimento federato.
+Con `gossip_fanout: 0`, ogni worker addestra il proprio modello **in completo isolamento**: non invia né riceve modelli dagli altri. Questo replica lo scenario in cui ogni dispositivo allena una rete solo sui propri dati locali, senza alcuna forma di apprendimento federato.
 
 Il confronto atteso è:
 - **Con gossip**: ogni worker migliora anche su classi poco rappresentate nei suoi dati, grazie alla conoscenza ricevuta dai vicini. La `std_accuracy` finale dovrebbe essere bassa (convergenza uniforme).
@@ -1243,39 +1243,32 @@ Le variabili di interesse per lo studio di scalabilità sono:
 
 ## 7. Piano Sperimentale
 
-Questa sezione descrive l'intera metodologia sperimentale adottata per validare il sistema: cosa misurare, in quale ordine, e come interpretare i risultati. Gli esperimenti sono organizzati in cinque fasi progressive, ciascuna costruita sui risultati della precedente. Lo strumento principale di analisi è `scripts/aggregate_metrics.py`, che aggrega i file `metrics.csv` prodotti dai worker e calcola statistiche globali.
+Questa sezione descrive l'intera metodologia sperimentale adottata per validare il sistema: cosa misurare, in quale ordine, e come interpretare i risultati. Gli esperimenti sono organizzati in quattro fasi progressive, ciascuna costruita sui risultati della precedente, per un totale di **13 run**. Lo strumento principale di analisi è `scripts/aggregate_metrics.py`, che aggrega i file `metrics.csv` prodotti dai worker e calcola statistiche globali.
 
 ### 7.1 Struttura Complessiva dello Studio
 
 ```
 Fase 0 — Preparazione
-  └── Setup, download dataset, verifica installazione
+  └── Setup, download dataset, verifica installazione (Esp. 0)
 
-Fase 1 — Baseline No-FL
-  └── Esp. 1: training in isolamento (gossip_enabled: false)
-  └── Obiettivo: misurare cosa ottiene ogni worker senza cooperazione
+Fase 1 — Baseline e Griglia Iperparametri  [11 run]
+  └── Esp. 1: no-FL baseline (gossip_fanout: 0, num_workers=5)           [1 run]
+  └── Esp. 2: FL con configurazione di default (lr=1e-3, H=500)          [1 run]
+  └── Esp. 3: griglia 3×3 lr × H, num_workers=5, fanout=3 fissi          [9 run]
+  └── Obiettivo: trovare la coppia (lr, H) ottimale
 
-Fase 2 — FL Standard
-  └── Esp. 2: FL con configurazione di default
-  └── Obiettivo: dimostrare che il gossip migliora rispetto alla baseline
+Fase 2 — Scalabilità  [2 run]
+  └── Esp. 4: config ottimale da Esp. 3 con (num_workers=3, fanout=1)    [1 run]
+  └──          config ottimale da Esp. 3 con (num_workers=8, fanout=5)   [1 run]
+  └── Obiettivo: scegliere la configurazione complessiva (lr, H, N, fanout) migliore
 
-Fase 3 — Ricerca degli Iperparametri
-  └── Esp. 3a: variare learning_rate
-  └── Esp. 3b: variare inner_steps_H
-  └── Esp. 3c: variare gossip_fanout
-  └── Obiettivo: trovare la configurazione ottimale
+Fase 3 — Valutazione Onesta con Test Set  [1 run]
+  └── Esp. 5: config migliore da Fase 2, use_test_set=true (80/10/10)    [1 run]
+  └── Obiettivo: stima non biased della generalizzazione
 
-Fase 4 — Analisi della Scalabilità
-  └── Esp. 4: variare num_workers (3, 5, 8) con config ottimale da Esp. 3
-  └── Obiettivo: misurare come cambiano accuracy e costo al crescere dei nodi
-
-Fase 5 — Robustezza alla Fault Injection
-  └── Esp. 5: variare drop_probability e crash_probability
-  └── Obiettivo: trovare la soglia di tolleranza del sistema
-
-Fase 6 — Esperimento Finale (Dataset Completo)
-  └── Esp. 6: configurazione ottimale su --sf 1.0
-  └── Obiettivo: risultati definitivi da riportare nella relazione
+Fase 4 — Fault Injection  [1 run]
+  └── Esp. 6: config migliore, crash_probability e drop_probability bassi [1 run]
+  └── Obiettivo: documentare il comportamento sotto guasto
 ```
 
 ### 7.2 Fase 0 — Preparazione dell'Ambiente
@@ -1309,10 +1302,11 @@ Se tutto funziona correttamente, il sistema è pronto per gli esperimenti.
 
 **Obiettivo:** misurare le prestazioni di ogni worker quando allena il modello esclusivamente sui propri dati, senza nessuna forma di cooperazione. Questi risultati costituiscono il **limite inferiore** di riferimento.
 
-**Configurazione:**
+**Configurazione:** `num_workers=5`, `gossip_fanout=0` (nessun push inviato → nessuna aggregazione), `lr=1e-3`, `H=500`.
 ```yaml
+network:
+  gossip_fanout: 0        # ← unica modifica rispetto al default; fanout=0 = isolamento completo
 federated_learning:
-  gossip_enabled: false   # ← unica modifica rispetto al default
   total_rounds: 100
 ```
 
@@ -1340,15 +1334,14 @@ rm data/femnist/worker_*/metrics.csv data/femnist/worker_*/model_final.pt
 
 **Obiettivo:** dimostrare che il gossip P2P migliora la convergenza rispetto alla baseline. Questo è il confronto fondamentale che valida l'utilità del Federated Learning nell'architettura implementata.
 
-**Configurazione:**
+**Configurazione:** `num_workers=5`, `fanout=3`, `lr=1e-3`, `H=500` (valori di default — corrisponde al Run 5 della griglia Esp. 3).
 ```yaml
-federated_learning:
-  gossip_enabled: true    # ← ripristinato
-  total_rounds: 100
-  inner_steps_H: 500
-  early_stopping_patience: 10
 network:
   gossip_fanout: 3
+  num_workers: 5
+federated_learning:
+  learning_rate: 0.001
+  inner_steps_H: 500
 ```
 
 **Procedura:**
@@ -1377,7 +1370,7 @@ Se `mean_accuracy` FL > `mean_accuracy` no-FL e `std_accuracy` FL < `std_accurac
 
 ### 7.5 Esperimento 3 — Ricerca degli Iperparametri
 
-**Obiettivo:** trovare la configurazione ottimale di `learning_rate` e `inner_steps_H`. La ricerca è una **griglia completa 3×3** — tutte le combinazioni dei due parametri — per un totale di **9 run**. `batch_size` è fissato a 32 per tutto l'esperimento (motivazione in Sezione 6, tassonomia dei parametri). Tutti gli esperimenti usano dataset completo (`--sf 1.0`, default).
+**Obiettivo:** trovare la coppia ottimale `(learning_rate, inner_steps_H)`. La ricerca è una **griglia completa 3×3** — tutte le combinazioni dei due parametri — per un totale di **9 run**. `num_workers=5` e `gossip_fanout=3` sono fissi per tutta la fase (valore medio, rappresentativo del regime distribuito). `batch_size` è fissato a 32 (motivazione in Sezione 6). Tutti gli esperimenti usano dataset completo (`--sf 1.0`, default).
 
 | Run | `learning_rate` | `inner_steps_H` |
 |---|---|---|
@@ -1410,109 +1403,95 @@ I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.pn
 
 **Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 4 e 5).
 
-### 7.6 Esperimento 4 — Analisi della Scalabilità
+### 7.6 Esperimento 4 — Scalabilità (2 run)
 
-**Obiettivo:** misurare come le prestazioni del sistema cambiano al variare del numero di worker. Questo è il requisito sperimentale esplicito della traccia di progetto ("analisi della scalabilità"). L'esperimento presuppone che la configurazione ottimale sia già stata trovata in Esp. 3 con un valore di `num_workers` fisso (es. 3 o 5): qui si varia **solo** `num_workers`, tenendo fissi tutti gli altri parametri.
+**Obiettivo:** verificare come la configurazione ottimale trovata in Esp. 3 si comporta con un numero diverso di worker e fanout. Si testano due configurazioni di rete alternative alla (5, 3) usata nella griglia, mantenendo fissi `(lr, H)` ottimali.
 
-> **Nota sul deploy:** per misurare il *tempo* di convergenza in modo significativo, questo esperimento va eseguito in modalità **AWS multi-instance** (`aws_deploy.py`) dove ogni worker gira su un'istanza EC2 separata con latenza di rete reale. In locale i worker comunicano via loopback e i tempi non sono confrontabili tra configurazioni diverse di N. La valutazione dell'accuracy è invece identica nei due ambienti.
+| Run | `num_workers` | `gossip_fanout` | Razionale |
+|---|---|---|---|
+| A | 3 | 1 | Rete piccola, fanout minimo — meno aggregazione per round |
+| B | 8 | 5 | Rete grande, fanout proporzionale — massima copertura testabile su Learner Lab |
 
-**Procedura per ogni valore di N:**
+La coppia `(num_workers, fanout)` è scelta in modo consistente: `fanout` deve essere strettamente minore di `num_workers`. Con N=8, fanout=5 significa che ogni worker raggiunge il 71% dei peer ad ogni round.
+
+> **Nota sul deploy:** per misurare il *tempo* di convergenza in modo significativo, questo esperimento va eseguito in modalità **AWS multi-instance** dove ogni worker gira su un'istanza EC2 separata. In locale i worker comunicano via loopback e i tempi non sono confrontabili. La `mean_accuracy` finale è invece identica nei due ambienti.
+
+**Procedura per ogni run (cambio di `num_workers` richiede re-partizionamento):**
 ```bash
-# 1. Modificare num_workers in config.yaml (es. 3, poi 5, poi 8)
-# 2. Ripartizionare il dataset (obbligatorio ad ogni cambio di num_workers)
+# modificare num_workers e gossip_fanout in config.yaml, poi:
 python scripts/split_dataset.py
 python scripts/generate_compose.py
-
-# Modalità locale (accuracy, non tempi reali):
 docker compose up --build
-python scripts/aggregate_metrics.py
-python scripts/save_experiment.py scalability_N3   # o N5, N8
-
-# Modalità AWS multi-instance (accuracy + tempi reali):
-python scripts/aws_deploy.py provision   # re-provisionare: il numero di istanze cambia
-python scripts/aws_deploy.py deploy
-python scripts/aws_deploy.py collect
-python scripts/aggregate_metrics.py
-python scripts/save_experiment.py scalability_aws_N3
-python scripts/aws_deploy.py destroy     # IMPORTANTE: distruggere prima di cambiare N
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py scalability_N3_f1   # o N8_f5
+docker compose down
 ```
 
-**Valori di N da testare:** 3, 5, 8 (massimo per AWS Learner Lab: 9 istanze totali, 1 usata dal registry).
+**Scelta della configurazione finale:** al termine di Esp. 3 e Esp. 4 si hanno 11 run totali. Si sceglie la combinazione `(lr, H, num_workers, fanout)` con `mean_accuracy` più alta — questa è la **configurazione complessiva ottimale** usata per Esp. 5 e Esp. 6.
 
-**Metriche di scalabilità da raccogliere e riportare:**
+**Metriche da confrontare tra i 3 punti (N=3, N=5, N=8):**
 
-| Metrica | Come cambia con N crescente | Perché |
-|---|---|---|
-| `mean_accuracy` finale | tendenza a crescere fino a un plateau | più worker = più varietà di dati distribuita |
-| `std_accuracy` finale | tendenza a crescere | più worker = distribuzione non-i.i.d. più eterogenea |
-| Rounds a convergenza | tende a crescere | i modelli devono mediare contributi più diversi |
-| `round_duration_s` media | quasi invariata | la Fase B (training locale) domina e non dipende da N |
-| Volume comunicazione totale | cresce con O(N × R × M) | più worker × più round × stessi M peers |
+| Metrica | Tendenza attesa con N crescente |
+|---|---|
+| `mean_accuracy` finale | cresce fino a plateau — più dati eterogenei distribuiti |
+| `std_accuracy` finale | tende a crescere — distribuzioni più diverse tra worker |
+| Rounds a convergenza | tende a crescere — media di più contributi diversi |
+| Volume comunicazione | cresce ~linearmente con N (ogni worker invia a fanout fisso) |
 
-Il vantaggio del gossip P2P emerge chiaramente nell'ultimo punto: il volume di comunicazione scala linearmente con N (ogni worker invia a M peer fissi), non quadraticamente come nel FL centralizzato dove il server riceve da tutti N i worker ad ogni round.
+### 7.7 Esperimento 5 — Valutazione Onesta con Test Set (1 run)
 
-### 7.7 Esperimento 5 — Robustezza alla Fault Injection
+**Obiettivo:** produrre una stima non biased della generalizzazione della configurazione ottimale. Il val set usato in Esp. 1–4 ha servito sia per l'early stopping che per il confronto tra configurazioni — questo introduce un doppio bias ottimistico (documentato in Sezione 2.3). Esp. 5 lo elimina usando un test set completamente indipendente.
 
-**Obiettivo:** misurare la resistenza del sistema a condizioni di rete avverse e crash di nodo. Trovare le soglie oltre le quali il training non converge più.
-
-**Configurazione:** num_workers ottimale da Esp. 4, configurazione ottimale da Esp. 3.
-
-#### 5a — Variare drop_probability
-
-Testare: 0.0 (nessuna perdita), 0.2 (default), 0.5, 0.8.
-
-Con `drop_probability: 0.8` e `gossip_fanout: 2`, il numero atteso di messaggi inviati per round è solo $2 \times 0.2 = 0.4$ — meno di uno per round in media. Il sistema dovrebbe mostrare convergenza più lenta o divergenza.
-
-#### 5b — Variare crash_probability
-
-Testare: 0.0, 0.05 (default), 0.1, 0.2.
-
-Con `crash_probability: 0.2` ogni worker ha una probabilità del 20% di crashare ad ogni round. Con 3 worker, la probabilità che almeno uno crashi ad ogni round è $1 - 0.8^3 \approx 49\%$ — quasi un crash a round. Verificare che i worker superstiti continuino il training.
-
-**Risultati attesi:** il sistema è robusto fino a una certa soglia (quella propria del gossip asincrono), poi degrada gradualmente piuttosto che fallire improvvisamente. Questo comportamento di *graceful degradation* è una proprietà fondamentale dell'architettura P2P.
-
-### 7.8 Esperimento Finale — Dataset Completo
-
-**Obiettivo:** produrre i risultati definitivi da riportare nella relazione, su dataset completo.
+**Prerequisito:** questo esperimento richiede il re-download del dataset con `--tf 0.8` (split 80/10/10 invece di 90/10). Senza re-download il partizionamento sarebbe silenziosamente errato (Sezione 11.3).
 
 ```bash
-# 1. Scaricare il dataset completo (solo se non già presente)
+# 1. Aggiornare config.yaml: use_test_set: true + configurazione ottimale da Esp. 3+4
+# 2. Re-download obbligatorio (--tf cambia)
 python scripts/download_femnist.py
-
-# 2. Configurare la configurazione ottimale (da Esp. 3) + num_workers ottimale (da Esp. 4)
-#    + fault injection ai valori di default
-
-# 3. Partizionare e avviare
 python scripts/split_dataset.py
 python scripts/generate_compose.py
-docker compose up --build   # o su AWS
 
-# 4. Raccogliere i risultati definitivi
-python scripts/aggregate_metrics.py
+# 3. Allenare
+docker compose up --build
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py final_test_set
+docker compose down
 ```
 
-Questo esperimento può richiedere ore su CPU locale; è il principale candidato per il deployment su AWS EC2.
+`aggregate_metrics.py` stampa sia `val_accuracy` (early stopping) che `test_accuracy` (stima onesta). La `test_accuracy` è la metrica definitiva da riportare. La differenza tra `val_accuracy` di Esp. 3–4 e `test_accuracy` di Esp. 5 è indicativa del bias ottimistico accumulato (si allena su 80% dei dati invece del 90%, quindi una parte della differenza è reale — Sezione 11.3).
+
+### 7.8 Esperimento 6 — Fault Injection (1 run)
+
+**Obiettivo:** documentare il comportamento del sistema sotto condizioni di rete avverse. Non si cerca la soglia di tolleranza (richiederebbe molti run), ma si osserva qualitativamente che il sistema continua a convergere nonostante guasti.
+
+**Configurazione:** configurazione ottimale da Esp. 3+4, `drop_probability` e `crash_probability` bassi (es. 0.10 e 0.03) — abbastanza da produrre eventi osservabili nei log, non abbastanza da compromettere la convergenza.
+
+```bash
+# Aggiornare fault_injection in config.yaml, poi:
+docker compose up --build
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py fault_injection
+docker compose down
+```
+
+**Cosa documentare dai log e dai CSV:**
+- Quanti push sono stati droppati per round (`dropped` nel log di Fase C)
+- Se la `mean_accuracy` finale è comparabile a quella di Esp. 3 (resilienza dimostrata)
+- Eventuali crash simulati e il comportamento dei worker superstiti
 
 ### 7.9 Analisi e Visualizzazione dei Risultati
 
-I file `global_metrics.csv` prodotti da ogni esperimento contengono tutte le informazioni necessarie per i grafici della relazione. Di seguito i plot consigliati:
+`aggregate_metrics.py --plot` genera i grafici per-run automaticamente. Per il confronto tra esperimenti, leggere i `summary.txt` e `global_metrics.csv` archiviati in `results/` per ciascun run.
 
-**Plot 1 — Curva di convergenza (Esp. 1 vs Esp. 2)**
-`round` (asse X) vs `mean_accuracy` (asse Y), una linea per "no-FL" e una per "FL". Mostra visivamente che il gossip accelera la convergenza e raggiunge un'accuracy più alta.
+**Confronti chiave da riportare:**
 
-**Plot 2 — Deviazione standard dell'accuracy nel tempo**
-`round` (asse X) vs `std_accuracy` (asse Y). Con FL funzionante, questa curva dovrebbe tendere verso lo zero: i worker convergono a soluzioni sempre più simili.
+**Plot 1 — No-FL vs FL** (Esp. 1 vs Esp. 2): `mean_accuracy` over rounds — il delta dimostra l'utilità del gossip.
 
-**Plot 3 — Scalabilità: accuracy vs num_workers**
-Barre o punti: un punto per ogni valore di N, con `mean_accuracy` finale (asse Y). Mostra la curva di rendimento marginale decrescente: aggiungere worker aiuta fino a un certo punto.
+**Plot 2 — Griglia iperparametri** (Esp. 3): tabella 3×3 con `mean_accuracy` finale per ogni coppia `(lr, H)` — identifica la configurazione ottimale.
 
-**Plot 4 — Scalabilità: volume comunicazione vs num_workers**
-`num_workers` (asse X) vs `total_gossip_messages × 6.9 MB` (asse Y). Mostra la crescita lineare del costo di comunicazione — vantaggio del gossip P2P rispetto al FL centralizzato.
+**Plot 3 — Scalabilità** (Esp. 4): `mean_accuracy` finale per N ∈ {3, 5, 8} — curva di rendimento marginale.
 
-**Plot 5 — Robustezza: accuracy finale vs drop_probability**
-`drop_probability` (asse X) vs `mean_accuracy` finale (asse Y). Identifica la soglia di tolleranza oltre la quale le prestazioni degradano significativamente.
-
-Tutti questi grafici possono essere generati in Python con `matplotlib` leggendo direttamente i CSV salvati da ogni esperimento.
+**Plot 4 — Bias ottimistico** (Esp. 3 vs Esp. 5): `val_accuracy` migliore vs `test_accuracy` — quantifica il bias.
 
 ---
 
@@ -2134,7 +2113,7 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 | `federated_learning` | `total_rounds` | `200` | Tetto massimo di round; può terminare prima per early stopping |
 | `federated_learning` | `inner_steps_H` | `500` | Step di training locale per round (Fase B) |
 | `federated_learning` | `early_stopping_patience` | `10` | Round consecutivi senza miglioramento prima di fermare il training |
-| `federated_learning` | `gossip_enabled` | `true` | `false` = training in isolamento totale (baseline no-FL per confronto) |
+| `network` | `gossip_fanout` | `1` | `0` = training in isolamento totale (baseline no-FL); valori tipici 1–N-1 |
 | `machine_learning` | `batch_size` | `32` | Dimensione del mini-batch per AdamW |
 | `machine_learning` | `learning_rate` | `0.001` | Learning rate dell'ottimizzatore AdamW |
 | `machine_learning` | `clip_grad` | `1.0` | Max norma L2 per gradient clipping (0 = disabilitato) |
@@ -2865,8 +2844,7 @@ La tabella distingue i parametri fissi (identici in tutti i run) da quelli esplo
 
 | Parametro | Valori esplorati | Controllo | Fase |
 |---|:---:|:---:|:---:|
-| `gossip_enabled` | false, **true** | true | 0 |
-| `gossip_fanout` | **1**, 2 | 1 | 1 |
+| `gossip_fanout` | 0 (baseline), **3**, 1, 5 | 3 | 0→Esp.1, 1→Esp.4a, 5→Esp.4b |
 | `inner_steps_H` | 100, **500**, 1000 | 500 | 2 |
 | `num_workers` | **3**, 5, 8 | 3 | 3 |
 | `drop_probability` | **0.0**, 0.2, 0.5 | 0.0 | 4 |
@@ -2883,9 +2861,9 @@ L'intero piano si legge come un programma. Ogni blocco corrisponde a una fase; l
 run ✓:  N=3, gossip=True,  fanout=1, H=500          # già completato
 
 # ── FASE 0 — FL vs no-FL ─────────────────────────────────────────────────────
-# Isola gossip_enabled; tutto il resto uguale al run ✓.
+# Isola gossip_fanout=0; tutto il resto uguale al run ✓.
 # Nessuna dipendenza: si può fare subito.
-run B0: N=3, gossip=False, fanout=–, H=500
+run B0: N=3, fanout=0, H=500
 
 # ── FASE 1 — Effetto fanout ───────────────────────────────────────────────────
 # Isola gossip_fanout; H=500 e N=3 come in run ✓.
@@ -2933,7 +2911,7 @@ run L1: N=3, gossip=True, fanout=1, H=500, lr=0.0001
 | Run | Nome da salvare | Cosa varia | Valore | Dipende da | Risplit? |
 |---|---|---|:---:|---|:---:|
 | ✓ | `fanout1_h500_lr1e3` | — | riferimento | — | no |
-| B0 | `no_fl_baseline` | `gossip_enabled` | false | — | no |
+| B0 | `no_fl_baseline` | `gossip_fanout` | 0 | — | no |
 | F1 | `fanout2_h500` | `gossip_fanout` | 2 | — | no |
 | H1 | `fanout1_h100` | `inner_steps_H` | 100 | — | no |
 | H2 | `fanout1_h1000` | `inner_steps_H` | 1000 | — | no |

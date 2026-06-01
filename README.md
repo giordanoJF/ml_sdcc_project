@@ -103,10 +103,13 @@ python scripts/aws_deploy.py destroy_single     # IMPORTANT: stop billing
 python scripts/aws_deploy.py resume_single
 ```
 
-**Experiment workflow:**
-- *Phase 1 — hyperparameter search*: fix `num_workers` (e.g. 3) and `batch_size` (32). Run all 9 combinations of `learning_rate` ∈ {1e-4, 1e-3, 5e-3} × `inner_steps_H` ∈ {100, 500, 1000}. Archive each with `save_experiment.py`; compare `mean_accuracy` across `results/` to pick the best config. No-FL baseline: set `gossip_fanout: 0`.
-- *Phase 2 — scalability*: fix the best config from Phase 1, vary `num_workers` (3 → 5 → 8); re-run setup steps 1–3 before each run.
-- *Phase 3 — final test evaluation*: set `use_test_set: true`, re-run all three setup steps, then train once with the best config; `aggregate_metrics.py` will also print unbiased test accuracy.
+**Experiment workflow — 13 runs total:**
+- *Esp. 1 — no-FL baseline*: set `gossip_fanout: 0`, `num_workers=5`. One run.
+- *Esp. 2 — FL default*: set `gossip_fanout: 3`, `num_workers=5`, `lr=1e-3`, `H=500`. One run.
+- *Esp. 3 — hyperparameter grid*: `num_workers=5`, `fanout=3`, `batch_size=32` fixed. Run all 9 combinations of `learning_rate` ∈ {1e-4, 1e-3, 5e-3} × `inner_steps_H` ∈ {100, 500, 1000}. Pick best `(lr, H)` by `mean_accuracy`.
+- *Esp. 4 — scalability*: apply best `(lr, H)` from Esp. 3 with `(num_workers=3, fanout=1)` then `(num_workers=8, fanout=5)`. Re-run setup steps 1–3 before each. Pick overall best config.
+- *Esp. 5 — honest test evaluation*: set `use_test_set: true` with best config → re-download dataset (required, `--tf` changes), re-run steps 1–3, train once. `aggregate_metrics.py` prints unbiased `test_accuracy`.
+- *Esp. 6 — fault injection*: best config, low `drop_probability` and `crash_probability` (e.g. 0.10 / 0.03). One run to document graceful degradation.
 
 See `docs/report.md` section 11.1.1 for detailed per-step tables (who does what, on which machine).
 
