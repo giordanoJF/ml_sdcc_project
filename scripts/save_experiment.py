@@ -86,12 +86,13 @@ def main():
         copied.append("config.yaml")
 
     # Aggregated outputs from aggregate_metrics.py
-    for fname in ("global_metrics.csv", "summary.txt"):
+    for fname in ("global_metrics.csv", "summary.txt",
+                  "accuracy_over_rounds.png", "loss_over_rounds.png", "phase_timing.png"):
         src = os.path.join(DATA_ROOT, fname)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(dest, fname))
             copied.append(fname)
-        else:
+        elif fname in ("global_metrics.csv", "summary.txt"):
             print(f"  WARNING: {fname} not found — run aggregate_metrics.py first")
 
     # Per-worker files
@@ -127,6 +128,12 @@ def main():
             if os.path.exists(p):
                 os.remove(p)
                 cleaned.append(os.path.join(os.path.basename(worker_dir), fname))
+
+    for fname in ("accuracy_over_rounds.png", "loss_over_rounds.png", "phase_timing.png"):
+        p = os.path.join(DATA_ROOT, fname)
+        if os.path.exists(p):
+            os.remove(p)
+            cleaned.append(fname)
 
     if cleaned:
         print(f"\nCleaned {len(cleaned)} file(s) from working directory (ready for next run):")

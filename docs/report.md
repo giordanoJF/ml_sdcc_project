@@ -1269,7 +1269,62 @@ Le variabili di interesse per lo studio di scalabilità sono:
 
 Questa sezione descrive l'intera metodologia sperimentale adottata per validare il sistema: cosa misurare, in quale ordine, e come interpretare i risultati. Gli esperimenti sono organizzati in quattro fasi progressive, ciascuna costruita sui risultati della precedente, per un totale di **13 run**. Lo strumento principale di analisi è `scripts/aggregate_metrics.py`, che aggrega i file `metrics.csv` prodotti dai worker e calcola statistiche globali.
 
-### 7.1 Struttura Complessiva dello Studio
+### 7.1 Riproducibilità degli Esperimenti
+
+Gli esperimenti di questo sistema **non sono deterministici** e non producono risultati numericamente identici se rilasciati. Il trend di convergenza e i range di accuracy sono però stabili e comparabili tra run. Le tre fonti di stocasticità sono:
+
+1. **Shuffle del dataset.** `DataLoader` con `shuffle=True` rimescola i campioni ad ogni epoca. L'ordine dei mini-batch cambia ad ogni run, influenzando la traiettoria SGD. Due run con la stessa configurazione percorrono cammini diversi nello spazio dei parametri.
+
+2. **Selezione random dei peer.** La funzione `random.sample(eligible_peers, gossip_fanout)` in `main_worker.py` sceglie i destinatari del gossip ad ogni round senza seed fisso. Il grafo di comunicazione effettivo varia tra run: Worker 0 potrebbe inviare a {1,3,4} in un run e a {2,3,4} in quello successivo, modificando quali modelli vengono aggregati da chi e quando.
+
+3. **Timing asincrono.** I cinque container non sono sincronizzati. La velocità relativa di ogni worker (influenzata dal carico GPU, scheduling del kernel, latenza gRPC) determina quali modelli si trovano nel buffer al momento di ogni Phase A. Piccole differenze di timing producono aggregazioni diverse.
+
+**Cosa è riproducibile:** il range di accuracy finale (±1–2%) e la direzione qualitativa degli effetti (lr alto→instabilità, H basso→convergenza più rapida). Due run con lr=1e-3 e H=500 producono entrambi mean accuracy ~87–88%, convergenza in ~35–55 round, ~7 minuti su GPU locale.
+
+**Cosa non è riproducibile:** il valore esatto di accuracy, il numero di round a cui ogni worker converge, e la sequenza di spike post-FedAvg nei round iniziali.
+
+**Implicazione per la griglia:** le differenze tra configurazioni (es. lr=1e-4 vs lr=5e-3) producono effetti molto più grandi della varianza run-to-run (~1–2%), quindi un singolo run per cella è sufficiente per identificare la configurazione ottimale. Se i valori di due configurazioni differiscono di meno del 2%, la differenza non è interpretabile con un singolo run.
+
+### 7.1b Cosa Determina la Velocità di Round e Cosa Determinano il Gossip e il Dataset
+
+Tre variabili distinte controllano tre aspetti ortogonali del sistema. È importante non confonderle.
+
+#### Velocità di avanzamento dei round
+
+La durata di un round è la somma di tre fasi:
+
+| Fase | Durata tipica (GPU locale) | Determinata da |
+|---|---|---|
+| Phase A (FedAvg) | 1.1–2.0s | Numero di modelli ricevuti nel buffer (operazione CPU) |
+| Phase B (training) | 2.7–3.5s | GPU scheduling; fisso a H=500 step |
+| Phase C (gossip push) | 50–95ms | Numero di peer contattati + latenza rete |
+
+**Il dataset non influisce sulla velocità del round.** Ogni worker esegue esattamente `inner_steps_H=500` passi di ottimizzazione per round, indipendentemente dalla dimensione della sua partizione locale. La dimensione del dataset determina quante epoche vengono attraversate nel tempo, non la velocità del round. Questo è il motivo per cui H è misurato in step e non in epoche (Sezione 2.1).
+
+**La distanza massima di round tra worker** (misurata a 10 round in run su GPU locale) è causata da **GPU scheduling contention**: 5 container condividono la stessa GPU e il kernel CUDA distribuisce le risorse in modo non uniforme tra i processi. In un run reale, la variabilità di Phase B varia da 2.67s a 3.54s tra worker (+33%), che su 30 round accumula ~26s di ritardo — equivalenti a ~6–8 round di vantaggio del worker più veloce. Su deployment AWS (un worker per EC2), ogni worker ha CPU/GPU dedicata e la distanza di round è strutturalmente più bassa.
+
+#### Ruolo del gossip (fanout)
+
+Il `gossip_fanout` non accelera i round — al massimo li allunga leggermente per via di Phase A più lunga con più modelli da processare. Il gossip agisce su due dimensioni distinte:
+
+1. **Qualità dell'apprendimento per round**: più modelli aggregati in Phase A → FedAvg su una distribuzione più rappresentativa del dataset globale → salto di accuracy per round più grande. Un worker con fanout=0 (isolato) converge esclusivamente con il proprio gradiente locale; con fanout=3 ogni round incorpora informazione da 2–3 altri worker.
+
+2. **Traffico di rete**: ogni gossip push trasmette l'intero modello (~7MB serializzato). Con fanout=3 e H=500, il traffico per round per worker è ~21MB in uscita. Raddoppiare il fanout raddoppia il traffico ma non raddoppia il guadagno di accuracy (rendimenti decrescenti).
+
+In sintesi: **H controlla comunicazione vs drift**, **fanout controlla qualità dell'aggregazione vs traffico**, **GPU scheduling controlla la distanza di round** (non modificabile tramite iperparametri del sistema).
+
+#### Distanza Massima di Round e Comportamento Staleness
+
+Nei run su GPU locale la distanza massima simultanea è stata di **10 round** (Worker 0 al round 40, Worker 4 al round 30, tutti e 5 i worker ancora attivi). Questa distanza coincide esattamente con `max_staleness=10`.
+
+**Come testare la soglia.** La distanza di round non è controllabile tramite fault injection:
+
+- `drop_probability` su Worker X fa sì che X non invii alcuni messaggi — X avanza di round alla stessa velocità, non rimane indietro. Gli altri ricevono meno aggregazioni ma X non è il laggard.
+- `crash_probability` causa `sys.exit(1)` definitivo — il worker non ripartire, non produce staleness.
+
+Il modo corretto è **ridurre `max_staleness`** nel config (es. da 10 a 5). La distanza naturale fino a 10 round già osservata causerà rifiuti (`Ack(accepted=False)` nei log) visibili come calo di `avg_neighbors_aggregated`. Con `max_staleness=3` i rifiuti sarebbero frequenti e mostrerebbero chiaramente la degradazione della convergenza.
+
+### 7.2 Struttura Complessiva dello Studio
 
 ```
 Fase 0 — Preparazione

@@ -37,7 +37,6 @@ import json
 import os
 import statistics
 
-import torch
 import yaml
 
 
@@ -410,6 +409,7 @@ def main():
         print("\nModel weight divergence (pairwise L2 distance of final weights):")
         print("-" * 55)
         try:
+            import torch
             checkpoints = {}
             for path in checkpoint_paths:
                 worker_dir = os.path.basename(os.path.dirname(path))
