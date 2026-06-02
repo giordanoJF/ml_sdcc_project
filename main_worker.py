@@ -412,10 +412,12 @@ def main():
             }, f)
         logger.info(f"Test result saved → {result_path}")
 
-    # Keep the process alive so Thread 1 can continue serving peers that are
-    # still training. Reached only after a clean break from the loop.
-    logger.info("Training complete. gRPC server still active for remaining peers.")
-    grpc_server.wait_for_termination()
+    # Give in-flight RPCs up to 10 s to complete (covers peers that fetched our
+    # address just before we deregistered), then exit. After deregistration no
+    # new peer will select us as a gossip target, so waiting indefinitely serves
+    # no purpose — and it would prevent the container from stopping on its own.
+    logger.info("Training complete. Shutting down gRPC server.")
+    grpc_server.stop(grace=10)
 
 
 if __name__ == "__main__":
