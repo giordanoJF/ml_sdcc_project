@@ -934,6 +934,28 @@ Seconda: in un sistema FL non-i.i.d., i modelli di worker diversi sviluppano *ge
 
 *Nota*: label smoothing aumenta leggermente la loss di training (target meno estremi), ma riduce la validation loss — questo è il segnale atteso di miglioramento della generalizzazione. I confronti di accuracy tra configurazioni devono essere fatti sulla validation loss senza smoothing per comparabilità.
 
+#### Kernel 3×3
+
+Il kernel 3×3 è lo standard de facto nelle CNN moderne (da VGGNet in poi). La motivazione è triplice. Prima: è il più piccolo kernel in grado di catturare relazioni spaziali direzionali (orizzontale, verticale, diagonale) — un kernel 1×1 opera su ogni pixel in isolamento, senza vedere i vicini. Seconda: due Conv(3×3) in cascata hanno campo ricettivo equivalente a Conv(5×5) con meno parametri e una non-linearità intermedia aggiuntiva (18 pesi per coppia canali vs 25 per 5×5), come già discusso nella sezione Double Conv Block. Terza: su immagini 28×28, kernel più grandi (es. 7×7) occuperebbero una frazione significativa dell'immagine già al primo layer, eliminando troppa informazione spaziale locale — i tratti di un singolo carattere scritto a mano hanno una granularità fine che richiede kernel piccoli per essere catturati.
+
+#### Canali 32 e 64 (progressione 1→32→64)
+
+Il blocco 1 espande 1 canale (scala di grigi) a 32 feature map; il blocco 2 raddoppia a 64. Questa progressione rispetta tre principi. Primo: **conservazione del volume di informazione** — man mano che la risoluzione spaziale si dimezza (28→14→7), il numero di canali raddoppia, mantenendo approssimativamente costante la "quantità di informazione" totale (canali × altezza × larghezza): $1 \times 28^2 = 784$, $32 \times 14^2 = 6.272$, $64 \times 7^2 = 3.136$. Secondo: **gerarchia di feature** — 32 canali al primo blocco sono sufficienti per rappresentare feature elementari (bordi orizzontali, verticali, curve semplici); 64 canali al secondo blocco permettono di combinare queste in pattern più complessi (angoli, incroci, archi) senza parametri eccessivi. Terzo: **costo di comunicazione gossip** — il numero di canali determina il numero di parametri nei layer conv e, indirettamente, la dimensione del modello serializzato trasmesso via gRPC. Con 32 e 64 i layer conv pesano ~74K parametri (~0.3 MB), una frazione trascurabile rispetto ai 1.6M del layer FC. Raddoppiare i canali (64/128) aumenterebbe il costo conv di 4× senza benefici significativi su immagini 28×28.
+
+#### MaxPool 2×2
+
+`MaxPool2d(2)` dimezza le dimensioni spaziali (stride=2, finestra 2×2). La scelta del fattore 2 è determinata dalla risoluzione di partenza: con 28×28 pixel e due pool da 2×2, si ottengono 7×7 feature map al flatten — 49 posizioni spaziali per canale, sufficienti a preservare la struttura globale del carattere (proporzioni, posizione relativa dei tratti). Un pool da 3×3 produrrebbe 3×3=9 posizioni spaziali dopo due applicazioni su 28×28 (28→9→3), perdendo troppa informazione spaziale. MaxPool è preferito all'average pooling perché seleziona la risposta massima del filtro nella finestra, che corrisponde alla posizione dove la feature è più presente — rilevante per caratteri scritti a mano dove la posizione esatta del tratto varia tra scrittori.
+
+#### Attivazione ReLU
+
+ReLU ($f(x) = \max(0, x)$) è la scelta standard per reti convoluzionali per quattro ragioni pratiche: (1) gradiente costante (1 per $x>0$) che non satura come sigmoid/tanh, riducendo il problema del *vanishing gradient*; (2) sparsità degli output — in media metà dei neuroni emette zero, producendo rappresentazioni sparse efficienti; (3) calcolo banale rispetto a funzioni smooth come GELU o SiLU; (4) comportamento ben studiato con BatchNorm — le due tecniche sono state progettate per funzionare insieme (BatchNorm normalizza prima di ReLU, che taglia i valori negativi). ReLU inplace (`inplace=True`) evita un'allocazione di tensore temporanea a ogni passo, riducendo il consumo di memoria del ~10% senza impatto sulla convergenza.
+
+#### Numero di blocchi conv (2) e struttura del classificatore (1 layer FC nascosto)
+
+**Due blocchi conv.** Con input 28×28, due pool da 2×2 producono 7×7 feature map — la risoluzione minima che conserva struttura spaziale utile (un ulteriore pool produrrebbe 3×3, troppo coarse per caratteri con 62 classi). Tre blocchi richiederebbero input ≥56×56 per mantenere feature map ≥7×7; con 28×28 il terzo blocco produrrebbe 3×3, peggiorando la rappresentazione. Due blocchi è quindi il numero massimo compatibile con la risoluzione di FEMNIST.
+
+**Un solo layer FC nascosto (512 neuroni).** Il classificatore ha struttura `3136 → 512 → 62`. Un secondo layer nascosto (es. `3136 → 512 → 256 → 62`) aggiunge ~131K parametri (+8%) senza benefici misurabili su un task di classificazione a 62 classi: la capacità discriminativa necessaria è già raggiunta dalla combinazione feature-extractor conv + un layer FC. 512 neuroni è la dimensione minima che offre un collo di bottiglia significativo rispetto ai 3136 input (rapporto ~6:1), forzando una compressione delle feature estratte dai blocchi conv in una rappresentazione densa prima della classificazione finale. Valori più bassi (256, 128) aumenterebbero la compressione a rischio di perdita di informazione; valori più alti (1024, 2048) aumenterebbero il rischio di overfitting locale senza guadagno di capacità utile.
+
 ### 5.4 Confronto con il Modello Placeholder
 
 | Caratteristica | Placeholder | Modello Proposto |
