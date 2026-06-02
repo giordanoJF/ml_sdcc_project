@@ -81,6 +81,7 @@ def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool) -> 
         "      dockerfile: docker/Dockerfile.registry",
         "    environment:",
         f"      - REGISTRY_PORT={registry_port}",
+        f"      - TOTAL_WORKERS={num_workers}",
         "    ports:",
         f'      - "{registry_port}:{registry_port}"',
         "    networks:",
