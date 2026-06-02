@@ -43,7 +43,7 @@ federated_learning:
   # Default 500: with batch_size=32 this processes 16000 samples between gossip rounds.
   # ML HYPERPARAMETER — affects model quality. Tune with grid search.
   # Grid search candidates: 100, 500 (default), 1000
-  inner_steps_H: 500
+  inner_steps_H: 1000
 
   # Aggregation algorithm applied in Phase A. Currently only FedAvg is implemented.
   aggregation_strategy: "FedAvg"
