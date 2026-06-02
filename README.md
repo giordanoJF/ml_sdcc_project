@@ -43,14 +43,14 @@ python scripts/generate_compose.py
 
 ## GPU Acceleration (local only)
 
-Set `network.use_gpu: true` in `config.yaml`, then regenerate the compose and rebuild:
+Set `federated_learning.use_gpu: true` in `config.yaml`, then regenerate the compose and rebuild:
 
 ```bash
 python scripts/generate_compose.py   # picks Dockerfile.worker.gpu + adds GPU device block
-docker compose up --build            # builds ~6 GB CUDA image (first time only, then cached)
+docker compose up --build            # builds ~8 GB CUDA image (first time only, then cached)
 ```
 
-**Requirements:** NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host. No code changes needed — the worker detects CUDA automatically.
+**Requirements:** NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host. Requires RTX 30xx or newer; RTX 50xx (Blackwell) supported from PyTorch 2.7.0+. No code changes needed — the worker detects CUDA automatically.
 
 To switch back to CPU: set `use_gpu: false`, re-run `generate_compose.py`, and `docker compose up --build`. The GPU image stays in local cache but is not used.
 

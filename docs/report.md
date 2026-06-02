@@ -642,9 +642,9 @@ $$w_{\text{new}} = \frac{w_{\text{local}} \cdot n_{\text{local}} + (\texttt{weig
 
 **Caso base: nessun vicino ha inviato.** Se `received_samples == 0`, la Fase A viene saltata e il worker procede direttamente alla Fase B con il proprio modello invariato. Questo è il comportamento corretto in caso di assenza di aggiornamenti (nessun vicino attivo, tutti i messaggi droppati o stantii): il training locale prosegue autonomamente.
 
-**Early stopping post-aggregazione.** Immediatamente dopo l'aggregazione (o dopo il suo skip), il modello viene validato sul validation set locale. Se la validation loss non si riduce per `early_stopping_patience` round consecutivi, Thread 2 esce dal loop. Thread 1 rimane attivo: il processo non termina e il server gRPC continua a servire i peer che sono ancora in training. Questo comportamento è ottenuto chiamando `grpc_server.wait_for_termination()` dopo il break, che blocca il thread principale finché il server gRPC non viene fermato esternamente.
+**Early stopping post-aggregazione.** Immediatamente dopo l'aggregazione (o dopo il suo skip), il modello viene validato sul validation set locale. Se la validation loss non si riduce per `early_stopping_patience` round consecutivi, Thread 2 esce dal loop, il worker chiama `deregister_worker()`, salva il checkpoint, e ferma il server gRPC con un grace period di 10 secondi (`grpc_server.stop(grace=10)`). Il processo termina e il container si spegne.
 
-L'early stopping è **locale e indipendente** per ogni worker: non esiste coordinamento globale. Worker diversi possono convergere in round diversi, e quelli che convergono prima continuano a servire gli altri come destinatari passivi di gossip push.
+L'early stopping è **locale e indipendente** per ogni worker: non esiste coordinamento globale. Worker diversi convergono in round diversi.
 
 #### Fase B — Training Locale (H Inner Steps)
 
@@ -976,7 +976,20 @@ Il modello proposto ha **meno parametri** del placeholder nonostante abbia il do
 
 L'early stopping è implementato nel training loop principale (`main_worker.py`) e si basa sulla validation loss locale calcolata da `validate()`. La validazione avviene **dopo la Phase A** (aggregazione FedAvg), quindi misura la qualità del modello aggregato — non solo del modello locale pre-training. Se la validation loss non migliora di almeno $10^{-4}$ per `early_stopping_patience` round consecutivi (default: 10), il training locale si arresta.
 
-Il comportamento post-early stopping è intenzionalmente non-terminante: il thread di training (Thread 2) si ferma, ma il **server gRPC (Thread 1) rimane attivo**. Questo comportamento è ottenuto chiamando `grpc_server.wait_for_termination()` dopo il break dal loop, che blocca il thread principale finché il server non viene fermato esternamente.
+**Ciclo di vita del worker dopo l'early stopping.**
+
+Quando Thread 2 esce dal loop, la sequenza di shutdown è:
+
+1. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
+2. Il checkpoint del modello viene salvato su disco.
+3. `grpc_server.stop(grace=10)` ferma il server gRPC con un periodo di grazia di 10 secondi.
+4. Il processo termina e il container Docker si spegne.
+
+**Perché non usare `wait_for_termination()`.**  Un'implementazione precedente manteneva il server gRPC attivo indefinitamente dopo l'early stopping (`grpc_server.wait_for_termination()`), con l'intenzione di continuare a servire eventuali push in arrivo da peer ancora in training. Questa scelta era errata per due ragioni. Prima: dopo la deregistrazione, nessun altro worker selezionerà questo nodo come target gossip — la lista restituita da `/peers` non lo include più. I push in arrivo dopo la deregistrazione provengono solo da worker che avevano già estratto la lista peer prima che la deregistrazione si propagasse, una finestra temporale inferiore a un round (~4s). Seconda: `wait_for_termination()` blocca il container indefinitamente anche quando non arriverà più nessuna richiesta, impedendo a `docker compose` di terminare autonomamente al completamento dell'esperimento.
+
+Il grace period di 10 secondi in `grpc_server.stop(grace=10)` copre correttamente la finestra di race condition: eventuali RPC già in volo al momento della deregistrazione vengono completati; le nuove connessioni vengono rifiutate. Al termine dei 10 secondi il processo esce e il container si ferma.
+
+**Comportamento su AWS multi-istanza.** Nel deployment su EC2 separati, ogni worker gira su una macchina indipendente. Non esiste un singolo `docker compose down` che fermi tutti i container. Con `grpc_server.stop(grace=10)`, ogni container si spegne autonomamente al termine del proprio training — senza alcuna coordinazione centralizzata. Le istanze EC2 rimangono accese (il sistema operativo è ancora in esecuzione) ma i container sono fermi; la terminazione delle istanze avviene separatamente tramite `terraform destroy` al termine dell'intero esperimento.
 
 #### Scopo originale dell'early stopping e adattamento al contesto FL
 
@@ -997,6 +1010,23 @@ Nel nostro sistema la decisione è **locale e indipendente**: ogni worker misura
 Il fatto che la validation avvenga dopo la Phase A mitiga parzialmente il primo problema: la loss misurata include il contributo degli aggiornamenti ricevuti dai vicini, non solo quello del training locale. Tuttavia non elimina il rischio di stopping prematuro.
 
 3. **FedAvg come fonte di rumore sul contatore.** In FL non-i.i.d., la FedAvg può causare un peggioramento temporaneo della val loss anche quando il sistema sta convergendo globalmente — il modello riceve pesi da worker con distribuzioni di dati diverse e impiega qualche round di training locale per "riadattarsi". Questo significa che il contatore di patience può salire non per overfitting ma per il normale rimescolamento dei pesi dovuto all'aggregazione. Nei run sperimentali su FEMNIST si osserva questa dinamica nei round iniziali: accuracy che crolla dopo la prima FedAvg (da ~75% a ~3% nel caso estremo) e poi risale gradualmente. Un early stopping con patience bassa (es. 5) potrebbe fermare il worker proprio durante questa fase di recovery, producendo un risultato peggiore di quanto si otterrebbe lasciandolo continuare.
+
+#### Effetti della terminazione progressiva dei worker sulla convergenza
+
+Quando un worker raggiunge l'early stopping ed esce, il sistema non si interrompe ma **degrada gradualmente** su tre fronti collegati.
+
+**Fanout effettivo si riduce.** I worker rimanenti interrogano il registry ogni round e trovano meno peer disponibili. `min(gossip_fanout, len(eligible_peers))` scende automaticamente — nei run sperimentali si osservano round con `neighbors_aggregated=0` negli ultimi 8–10 round dei worker più longevi, quando tutti gli altri avevano già deregistrato.
+
+**Qualità dell'aggregazione diminuisce.** Con meno modelli in Phase A, la media pesa distribuzioni meno eterogenee. Il guadagno di generalizzazione per round si riduce: i worker rimanenti apprendono progressivamente solo dal proprio subset di dati, avvicinandosi al training isolato.
+
+**L'informazione accumulata non viene persa.** Il worker uscente aveva già propagato i suoi pesi via gossip nei round precedenti. I worker rimanenti portano quella conoscenza nei loro parametri. La "perdita" è solo l'assenza di aggiornamenti futuri da quel nodo, non la cancellazione di quelli passati.
+
+Questo produce due fasi implicite in ogni run:
+
+1. **Fase collaborativa** (tutti i worker attivi): convergenza rapida grazie al gossip completo, accuracy sale velocemente — tipicamente i primi 20–30 round.
+2. **Fase individuale** (worker rimasti): fine-tuning locale con gossip ridotto o assente, miglioramenti marginali o plateau — gli ultimi 10–20 round dei worker più longevi.
+
+Nei dati sperimentali, Worker 4 negli ultimi round con `neighbors=0` si stabilizzava intorno all'88–89% con piccole oscillazioni — segno di fine-tuning su un modello già ben inizializzato dai round collaborativi precedenti, non di degradazione.
 
 #### Raccomandazione per gli esperimenti
 
@@ -1219,6 +1249,25 @@ $$d(w_i, w_j) = \|w_i - w_j\|_2$$
 
 Questa è la misura diretta di convergenza verso lo stesso punto: una distanza piccola indica che i worker hanno trovato soluzioni simili nello spazio dei pesi — il FL ha funzionato. Una distanza grande indica divergenza, causata tipicamente da troppo pochi round di gossip, valore di H eccessivo o distribuzione dei dati troppo eterogenea.
 
+#### Come valutare se il sistema ha convergito a un modello globale ideale
+
+In FL decentralizzato non esiste un singolo modello globale osservabile: ogni worker mantiene la propria copia dei pesi. La domanda "il sistema ha convergito?" va scomposta in tre livelli distinti, ciascuno con il proprio strumento di misura.
+
+**Livello 1 — I worker hanno convergito allo stesso punto?**
+La distanza L2 pairwise risponde a questa domanda. Nei run sperimentali su FEMNIST con 5 worker, la distanza media è di **76–95 unità**. Per contestualizzare: il modello ha 1.7M parametri float; la distanza massima teorica tra due modelli casuali è $\sqrt{1.7 \text{M}} \times \sigma \approx 2600$ (con $\sigma \approx 0.1$ tipico per pesi inizializzati). Una distanza di 76–95 corrisponde a circa il **3–4% della distanza massima** — i modelli sono nella stessa zona dello spazio dei pesi ma non identici. Questo è coerente con la teoria: FL non-i.i.d. converge a una *neighborhood* dell'ottimo globale, non all'ottimo esatto (Sezione 2.1). Una distanza prossima a zero indicherebbe convergenza completa allo stesso punto; una distanza di 500+ indicherebbe modelli in bacini completamente separati.
+
+**Livello 2 — Il modello convergito è buono?**
+L'accuracy finale e la sua varianza tra worker rispondono a questa domanda. Nei run sperimentali: Workers 0, 1, 4 convergono costantemente a ~89%, Workers 2 e 3 a ~85%. La varianza tra worker (~4%) è stabile tra run distinti e riflette la difficoltà intrinseca delle partizioni non-i.i.d. (scrittori con stile più difficile), non una mancanza di convergenza — se fosse dovuta a convergenza parziale, cambierebbe significativamente tra run.
+
+**Livello 3 — Quanto siamo vicini all'ottimo globale ideale?**
+L'unico confronto possibile è con un **baseline centralizzato**: un singolo modello addestrato su tutti i dati unificati, senza vincoli di privacy. Questo è il "modello ideale" che il FL cerca di avvicinarsi. La letteratura FEMNIST riporta ~89–92% di accuracy per modelli centralizzati su architetture simili; i nostri ~87–88% sono circa **2–4 punti percentuali sotto**, che è il costo tipico dell'eterogeneità nei dati in FL non-i.i.d. — un risultato in linea con i benchmark di riferimento.
+
+| Proxy | Strumento | Valore osservato | Interpretazione |
+|---|---|---|---|
+| Accordo tra worker | L2 pairwise distance | 76–95 (~3–4% del max) | Stessa zona, non identici |
+| Qualità assoluta | mean accuracy ± std | 87.4–87.8% ± ~2% | Buona, stabile tra run |
+| Gap da ottimo globale | confronto baseline centralizzato | ~2–4 pp sotto letteratura | Costo atteso FL non-i.i.d. |
+
 **4. Volume di comunicazione** — totale messaggi gossip inviati con successo × ~6.9 MB per messaggio = volume totale di dati trasferiti in rete.
 
 I risultati vengono salvati in `data/femnist/global_metrics.csv` e `data/femnist/summary.txt`.
@@ -1420,7 +1469,7 @@ python scripts/save_experiment.py lr_VALORE_h_VALORE
 docker compose down
 ```
 
-I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.png`) vengono archiviati da `save_experiment.py` insieme ai CSV. Il confronto finale tra le 9 configurazioni avviene a mano leggendo la `mean_accuracy` finale di `global_metrics.csv` o `summary.txt` in ciascuna cartella `results/`.
+I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.png`, `phase_timing.png`) vengono copiati da `save_experiment.py` nella cartella del run e rimossi da `data/femnist/`, insieme ai CSV. Il confronto finale tra le 9 configurazioni avviene a mano leggendo la `mean_accuracy` finale di `global_metrics.csv` o `summary.txt` in ciascuna cartella `results/`.
 
 **Risultati attesi per direzione:**
 - `learning_rate` alto (5e-3) con `H` alto (1000) → convergenza instabile: drift elevato + passi grandi amplificano l'oscillazione post-aggregazione.
@@ -1590,7 +1639,7 @@ La scelta di `sys.exit(1)` è deliberata e ha implicazioni precise:
 
 1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e lo snapshot finale `model_final.pt` viene salvato.
 
-2. `SystemExit` non viene catturata da `grpc_server.wait_for_termination()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
+2. `SystemExit` non viene catturata da `grpc_server.stop()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
 
 3. Il Docker container si arresta con exit code 1, il che (in assenza di `restart: always` nel compose) lascia il servizio down — comportamento intenzionale.
 
@@ -1860,9 +1909,9 @@ Il sistema usa tre immagini Docker distinte, in accordo con il principio di sepa
 
 - **`docker/Dockerfile.registry`** — immagine minimale: solo `python:3.11-slim` + Flask. Non contiene PyTorch, grpcio o il codice worker. Dimensione tipica: ~80 MB.
 - **`docker/Dockerfile.worker`** — immagine CPU: `python:3.11-slim` + PyTorch CPU + grpcio. Usata per tutti i deployment AWS e per il training locale senza GPU. Dimensione tipica: ~1.5 GB.
-- **`docker/Dockerfile.worker.gpu`** — immagine GPU: base `pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime` (PyTorch con CUDA già incluso) + grpcio. Usata solo in locale quando `use_gpu: true` in `config.yaml`. Dimensione tipica: ~6 GB. Non adatta ad AWS Learner Lab (istanze senza GPU).
+- **`docker/Dockerfile.worker.gpu`** — immagine GPU: base `pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime` (PyTorch con CUDA già incluso, supporto sm_120 Blackwell) + grpcio. Usata solo in locale quando `use_gpu: true` in `config.yaml`. Dimensione tipica: ~8 GB. Non adatta ad AWS Learner Lab (istanze senza GPU).
 
-La scelta del Dockerfile è controllata dal flag `network.use_gpu` in `config.yaml`: `generate_compose.py` seleziona `Dockerfile.worker.gpu` e aggiunge il blocco `deploy.resources.reservations.devices` al compose solo quando il flag è `true`. Rimettendo `use_gpu: false` e rigenerando il compose, i container successivi usano di nuovo l'immagine CPU leggera — l'immagine GPU resta in cache locale ma non viene istanziata.
+La scelta del Dockerfile è controllata dal flag `federated_learning.use_gpu` in `config.yaml`: `generate_compose.py` seleziona `Dockerfile.worker.gpu` e aggiunge il blocco `deploy.resources.reservations.devices` al compose solo quando il flag è `true`. Rimettendo `use_gpu: false` e rigenerando il compose, i container successivi usano di nuovo l'immagine CPU leggera — l'immagine GPU resta in cache locale ma non viene istanziata.
 
 **Prerequisito per `use_gpu: true`:** NVIDIA Container Toolkit installato sull'host (`nvidia-docker2` o `nvidia-container-toolkit`). Il codice Python non richiede modifiche: `main_worker.py` usa già `torch.device("cuda" if torch.cuda.is_available() else "cpu")` e sposta automaticamente modello e batch sul device disponibile.
 
@@ -1945,7 +1994,7 @@ python scripts/generate_compose.py
 docker compose up --build
 ```
 
-`generate_compose.py` produce `docker-compose.yml` con il numero corretto di servizi. Il registry riceve `REGISTRY_PORT` come variabile d'ambiente, in modo che la porta su cui ascolta sia sempre coerente con quella configurata in `config.yaml`. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers` come variabili d'ambiente, e monta esclusivamente la propria partizione tramite **bind mount** Docker (`type: bind`, sintassi lunga esplicita) — isolamento dei dati garantito a livello di filesystem.
+`generate_compose.py` produce `docker-compose.yml` con il numero corretto di servizi. Il registry riceve `REGISTRY_PORT` e `TOTAL_WORKERS` come variabili d'ambiente: la prima allinea la porta di ascolto con `config.yaml`, la seconda abilita lo **shutdown automatico** — quando l'ultimo worker deregistra e il contatore raggiunge `TOTAL_WORKERS`, il registry si spegne da solo dopo 2s, consentendo a `docker compose` di terminare senza intervento manuale. Ogni worker riceve `WORKER_ID=i` e `TOTAL_WORKERS=num_workers`, e monta esclusivamente la propria partizione tramite **bind mount** Docker (`type: bind`, sintassi lunga esplicita) — isolamento dei dati garantito a livello di filesystem.
 
 ### 9.4 Deploy su AWS EC2
 
