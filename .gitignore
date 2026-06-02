@@ -23,6 +23,10 @@ leaf/
 # Compose file generato da scripts/generate_compose.py — non versionare
 /docker-compose.yml
 
+# Model checkpoints negli esperimenti — file binari pesanti (~6.6 MB ciascuno).
+# Si versionano solo CSV, PNG, log e summary; i .pt si rigenerano rieseguendo il run.
+results/**/*.pt
+
 # Terraform — generated files (contain IPs and sensitive state)
 terraform/.terraform/
 terraform/terraform.tfstate
