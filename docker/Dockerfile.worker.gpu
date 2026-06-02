@@ -1,9 +1,10 @@
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+# NOTE: 2.7.0-cuda12.8 is the minimum version with sm_120 (Blackwell/RTX 50xx) support compiled in.
 WORKDIR /app
 
 # gcc/g++ required to compile grpcio from source
 RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
-    && rm -rf /var/lib/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies (torch already provided by base image)
 COPY requirements.worker.gpu.txt .

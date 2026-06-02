@@ -225,7 +225,7 @@ def main():
                             # weighted_sum already holds sum(w_i * sender_samples_i)
                             # over all received neighbors, so no intermediate average needed.
                             new_state[k] = (
-                                v.float() * local_samples + buffer.weighted_sum[k]
+                                v.float() * local_samples + buffer.weighted_sum[k].to(v.device)
                             ) / combined_samples
                         else:
                             # Non-float buffers (e.g. BatchNorm's num_batches_tracked)
