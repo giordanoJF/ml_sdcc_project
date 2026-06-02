@@ -1,0 +1,25 @@
+Experiment summary — 5 workers
+============================================================
+
+  Worker  0: 76 rounds | final_acc=0.9080 | best_acc=0.9118 | total_training_s=360.7 | avg_peers_contacted=2.97 | avg_neighbors_aggregated=2.32
+           phase_a=1184.1ms  phase_b=3.47s  phase_c=89.6ms  grpc_latency=29.49ms/call
+  Worker  1: 98 rounds | final_acc=0.8982 | best_acc=0.9000 | total_training_s=456.1 | avg_peers_contacted=2.59 | avg_neighbors_aggregated=2.67
+           phase_a=1564.4ms  phase_b=3.01s  phase_c=75.2ms  grpc_latency=27.85ms/call
+  Worker  2: 85 rounds | final_acc=0.8596 | best_acc=0.8612 | total_training_s=431.9 | avg_peers_contacted=2.78 | avg_neighbors_aggregated=2.87
+           phase_a=1832.9ms  phase_b=3.18s  phase_c=65.8ms  grpc_latency=21.91ms/call
+  Worker  3: 73 rounds | final_acc=0.8466 | best_acc=0.8536 | total_training_s=371.8 | avg_peers_contacted=3.00 | avg_neighbors_aggregated=3.01
+           phase_a=1529.8ms  phase_b=3.49s  phase_c=73.7ms  grpc_latency=23.67ms/call
+  Worker  4: 95 rounds | final_acc=0.8922 | best_acc=0.8934 | total_training_s=459.3 | avg_peers_contacted=2.49 | avg_neighbors_aggregated=2.73
+           phase_a=1797.4ms  phase_b=2.98s  phase_c=61.5ms  grpc_latency=21.94ms/call
+  Worker  0: converged at round   76              wall-clock =   360.7s
+  Worker  1: converged at round   98              wall-clock =   456.1s
+  Worker  2: converged at round   85              wall-clock =   431.9s
+  Worker  3: converged at round   73              wall-clock =   371.8s
+  Worker  4: converged at round   95              wall-clock =   459.3s
+
+System convergence: YES — all workers converged
+System wall-clock total: 464.9s
+
+Mean pairwise L2 weight distance: 8.4579
+
+Total gossip messages sent: 1172
