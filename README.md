@@ -52,7 +52,7 @@ docker compose up --build            # builds ~8 GB CUDA image (first time only,
 
 **Requirements:** NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host. Requires RTX 30xx or newer; RTX 50xx (Blackwell) supported from PyTorch 2.7.0+. No code changes needed — the worker detects CUDA automatically.
 
-To switch back to CPU: set `use_gpu: false`, re-run `generate_compose.py`, and `docker compose up --build`. The GPU image stays in local cache but is not used.
+To switch back to CPU: set `federated_learning.use_gpu: false`, re-run `generate_compose.py`, and `docker compose up --build`. The GPU image stays in local cache but is not used.
 
 ---
 

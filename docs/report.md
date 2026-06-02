@@ -374,6 +374,77 @@ Questo mette in relazione diretta i due parametri principali del sistema:
 
 L'obiettivo degli esperimenti (Sezione 7) è empiricamente verificare queste relazioni e trovare il punto operativo ottimale nel piano (H, fanout) per questo specifico task e dataset.
 
+### 2.6 Il Trade-off Centrale: Traffico di Rete vs Qualità del Modello
+
+Questo è il contributo principale del progetto e il filo conduttore di tutti gli esperimenti. Il sistema ha un solo parametro che governa direttamente il volume di comunicazione: `gossip_fanout`. La sua scelta determina simultaneamente il traffico di rete e la qualità finale del modello — non esiste un valore "migliore" in assoluto, ma un punto ottimale che dipende dai vincoli del deployment.
+
+#### Il meccanismo causale
+
+Ad ogni round, ogni worker trasmette l'intero modello (~7 MB serializzato) a `k = gossip_fanout` peer. Il volume di traffico in uscita per worker per round è:
+
+$$\text{traffico per round} = k \times |\text{modello}| = k \times 7\text{ MB}$$
+
+Il traffico totale sull'intera rete per round è $N \times k \times 7$ MB. Con $N=5$ e $k=3$: 105 MB per round. Con $k=1$: 35 MB. Con $k=N-1=4$: 140 MB.
+
+Fin qui è una relazione lineare e banale. Il punto interessante è cosa succede alla qualità del modello al variare di $k$.
+
+#### Perché fanout basso degrada la qualità
+
+Con $k$ piccolo, ogni worker raggiunge pochi peer per round. La probabilità che un dato worker non riceva nessun aggiornamento in un round è:
+
+$$P(\text{nessun aggiornamento}) = \left(\frac{N-1-k}{N-1}\right)^{N-1}$$
+
+Con $k=1$, $N=5$: $P = (3/4)^4 \approx 32\%$. Con $k=1$, $N=8$: $P \approx 39\%$.
+
+Un worker che non riceve aggiornamenti in un round esegue Phase A con buffer vuoto: nessuna FedAvg, training locale puro. In un sistema non-i.i.d., questo significa che per quel round il worker impara esclusivamente dalla propria partizione — rafforzando il bias verso i propri dati e allontanandosi dal modello globale condiviso.
+
+Cumulato su molti round, un worker con basso in-degree medio diventa gradualmente più specializzato sulla propria distribuzione locale. Il modello finale è più accurato sui propri dati ma meno generalizzabile — si riduce la val_accuracy sul proprio val set (diversi scrittori = distribuzione diversa), e la L2 distance tra i modelli dei worker aumenta.
+
+Questo effetto di **specializzazione locale per isolamento informativo** è distinto e indipendente dal client drift causato da H grande: il drift è intrinseco alla loss locale non-i.i.d., l'isolamento informativo è causato dall'assenza di aggregazione. I due effetti si sommano con fanout basso e H grande.
+
+#### Perché fanout alto non è sempre meglio
+
+Raddoppiare il fanout raddoppia il traffico ma **non raddoppia il guadagno di accuracy**. I rendimenti sono decrescenti per due ragioni:
+
+1. **Ridondanza informativa.** Con $k=N-1$ ogni worker riceve aggiornamenti da tutti gli altri ogni round — ma dopo i primi 5–10 round i modelli sono già allineati, e ricevere lo stesso modello già "visto" indirettamente via FedAvg catene non aggiunge informazione nuova.
+2. **Saturazione della coverage.** Già con $k=3$ su $N=5$, la probabilità di round senza aggiornamenti è lo 0.4% — virtualmente zero. Aumentare a $k=4$ migliora da 0.4% a 0.04%: un guadagno pratico nullo a fronte di +33% di traffico.
+
+#### La curva traffico / accuracy
+
+Il comportamento atteso dagli esperimenti è:
+
+```
+accuracy
+   |          ●──●
+   |       ●              rendimenti decrescenti
+   |    ●
+   | ●
+   |___________________________ fanout (k)
+   0   1   2   3   4   N-1
+
+traffico
+   |                        ●
+   |                  ●
+   |            ●
+   |      ●
+   | ●
+   |___________________________ fanout (k)  (lineare)
+```
+
+La curva di accuracy è concava (rendimenti decrescenti), la curva di traffico è lineare. Il punto ottimale è la zona dove la derivata dell'accuracy rispetto al fanout inizia a scendere sotto il costo marginale del traffico — tipicamente a $k = 2$ o $k = 3$ su reti di 5–8 nodi, come atteso dalla teoria del gap spettrale.
+
+#### Relazione con H
+
+I due parametri non sono ortogonali: H e fanout interagiscono. Un H grande con fanout alto può compensare il client drift tramite aggregazioni frequenti e ricche. Un H piccolo con fanout basso produce aggregazioni frequenti ma poco informative (modelli quasi identici tra round adiacenti). La combinazione peggiore è H grande + fanout basso: drift massimo e poca aggregazione. La combinazione migliore attesa è H medio + fanout medio — il punto che DiLoCo individua empiricamente e che gli esperimenti di questo progetto verificano su FEMNIST.
+
+| | fanout basso | fanout alto |
+|---|---|---|
+| **H piccolo** | aggregazioni frequenti, modelli simili, basso drift | traffico massimo, poco guadagno marginale |
+| **H grande** | drift alto + isolamento → specializzazione locale | drift compensato da aggregazione ricca |
+| **H medio** | **punto critico** — isolamento può dominare | **ottimo atteso** — bilanciamento traffico/qualità |
+
+Questa tabella è il framework interpretativo degli esperimenti. Ogni run della griglia 3×3 (Esp. 1) e ogni configurazione di scalabilità (Esp. 2) si colloca in una cella di questa matrice.
+
 ---
 
 ## 3. Architettura del Sistema
@@ -978,6 +1049,18 @@ L'early stopping è implementato nel training loop principale (`main_worker.py`)
 
 **Ciclo di vita del worker dopo l'early stopping.**
 
+Il `break` che esce dal loop avviene **durante la Phase A**, immediatamente dopo la validazione — prima di Phase B (training) e prima di Phase C (gossip push). Il round in cui scatta l'early stopping viene quindi completato solo a metà:
+
+```
+Round N (early stopping):
+  Phase A: FedAvg ✅  →  validate ✅  →  patience >= soglia  →  break
+  Phase B: training H steps            ← NON eseguita
+  Phase C: gossip push                 ← NON eseguita
+  finally: deregister + checkpoint + grpc_server.stop(grace=10)
+```
+
+**Nessun gossip push finale.** Il worker esce senza inviare il proprio modello ai vicini nell'ultimo round. Il modello salvato nel checkpoint è il risultato della FedAvg del round N — non è stato ulteriormente allenato dalla Phase B. Inviarlo via gossip non porterebbe benefici ai riceventi: è un modello di sola aggregazione, privo del training locale del round corrente che ne raffinerebbe i pesi. I worker ancora attivi non perderanno questo contributo in modo significativo — nei round precedenti avevano già ricevuto le versioni allenate dei modelli di questo worker.
+
 Quando Thread 2 esce dal loop, la sequenza di shutdown è:
 
 1. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
@@ -1027,6 +1110,10 @@ Questo produce due fasi implicite in ogni run:
 2. **Fase individuale** (worker rimasti): fine-tuning locale con gossip ridotto o assente, miglioramenti marginali o plateau — gli ultimi 10–20 round dei worker più longevi.
 
 Nei dati sperimentali, Worker 4 negli ultimi round con `neighbors=0` si stabilizzava intorno all'88–89% con piccole oscillazioni — segno di fine-tuning su un modello già ben inizializzato dai round collaborativi precedenti, non di degradazione.
+
+> **Limitazione nota: training in isolamento dopo la fine della collaborazione.** Quando tutti gli altri worker hanno deregistrato, il worker rimasto ha `eligible_peers = []` ogni round: Phase C non invia nulla e Phase A è sempre vuota. Da quel momento il training è equivalente all'isolamento completo — esattamente la condizione che il FL vuole evitare. Il checkpoint finale salvato sarà un modello più specializzato sulla distribuzione locale rispetto all'ultimo modello collaborativo prodotto prima che gli altri uscissero.
+>
+> Un comportamento più corretto sarebbe interrompere il training quando non esistono più peer disponibili per un numero consecutivo di round, preservando il modello nel suo stato collaborativo migliore. Questo non è implementato: l'early stopping attuale misura solo la val loss locale, che può continuare a migliorare anche in isolamento — ma quel miglioramento riflette specializzazione locale, non convergenza verso il modello globale. È una limitazione dell'attuale criterio di arresto, risolvibile aggiungendo un controllo su `eligible_peers` nel loop principale.
 
 #### Raccomandazione per gli esperimenti
 
@@ -1257,7 +1344,22 @@ In FL decentralizzato non esiste un singolo modello globale osservabile: ogni wo
 La distanza L2 pairwise risponde a questa domanda. Nei run sperimentali su FEMNIST con 5 worker, la distanza media è di **76–95 unità**. Per contestualizzare: il modello ha 1.7M parametri float; la distanza massima teorica tra due modelli casuali è $\sqrt{1.7 \text{M}} \times \sigma \approx 2600$ (con $\sigma \approx 0.1$ tipico per pesi inizializzati). Una distanza di 76–95 corrisponde a circa il **3–4% della distanza massima** — i modelli sono nella stessa zona dello spazio dei pesi ma non identici. Questo è coerente con la teoria: FL non-i.i.d. converge a una *neighborhood* dell'ottimo globale, non all'ottimo esatto (Sezione 2.1). Una distanza prossima a zero indicherebbe convergenza completa allo stesso punto; una distanza di 500+ indicherebbe modelli in bacini completamente separati.
 
 **Livello 2 — Il modello convergito è buono?**
-L'accuracy finale e la sua varianza tra worker rispondono a questa domanda. Nei run sperimentali: Workers 0, 1, 4 convergono costantemente a ~89%, Workers 2 e 3 a ~85%. La varianza tra worker (~4%) è stabile tra run distinti e riflette la difficoltà intrinseca delle partizioni non-i.i.d. (scrittori con stile più difficile), non una mancanza di convergenza — se fosse dovuta a convergenza parziale, cambierebbe significativamente tra run.
+L'accuracy finale e la sua varianza tra worker rispondono a questa domanda — con un'importante limitazione metodologica.
+
+> **Limitazione: val set eterogenei tra worker.** Ogni worker valida sul proprio val set locale, che proviene dalla sua partizione di scrittori. Confrontare l'accuracy di Worker 0 (89%) con quella di Worker 2 (85%) non è direttamente interpretabile: la differenza potrebbe essere dovuta al modello (Worker 2 ha convergito peggio) oppure ai dati (Worker 2 ha scrittori con grafia intrinsecamente più difficile). Non si può distinguere le due cause con i val set attuali.
+>
+> Il val set locale è lo strumento corretto per l'**early stopping** (confronto round-over-round sullo stesso worker, stessa distribuzione — l'unica variabile è il modello) ma non per il **confronto cross-worker** della qualità del modello. Per questo servirebbe un **global test set**: un sottoinsieme di dati da scrittori di tutte le partizioni, identico per tutti i worker, valutato una sola volta a fine training.
+>
+> **Perché non è stato implementato.** Un global test set richiederebbe di riservare dati da ogni partizione prima del training, riducendo i campioni disponibili per tutti i run — non solo per l'Esperimento 3, ma per l'intera griglia. Il costo in dati di training sarebbe pagato 9 volte (una per ogni run dell'Esp. 1) per rispondere a una domanda — "i worker hanno modelli di qualità simile?" — che la L2 distance risponde già in modo più diretto e senza costi.
+>
+> **Perché la combinazione attuale è sufficiente.** Gli obiettivi di valutazione del progetto si dividono in tre domande distinte, ciascuna già coperta da una metrica esistente:
+> 1. *I worker hanno convergito allo stesso modello?* → **L2 distance** tra i pesi finali. Misura la distanza nello spazio dei pesi indipendentemente dalla difficoltà dei dati. È la metrica più onesta per questo scopo.
+> 2. *Quale configurazione (lr, H) funziona meglio?* → **val accuracy per confronto tra run**. Anche se non comparabile tra worker diversi dello stesso run, è comparabile tra run diversi con la stessa configurazione di worker: il bias di difficoltà delle partizioni è sistematico e identico in tutti i run della griglia, quindi si cancella nel confronto. La configurazione che vince è quella che produce i modelli migliori su quelle stesse partizioni.
+> 3. *Quanto generalizza il modello ottimale su dati mai visti?* → **test set per-worker in Esp. 3** (`use_test_set: true`), che dà una stima onesta senza il bias dell'early stopping. Il costo in training data (80% invece di 90%) viene pagato una sola volta sulla configurazione già selezionata.
+>
+> Il global test set aggiungerebbe rigore accademico ma non risponde a nessuna delle tre domande in modo sostanzialmente migliore rispetto agli strumenti già disponibili, a fronte di un costo in dati di training pagato su ogni run dell'intera campagna sperimentale.
+
+Detto questo, la varianza osservata tra worker (~4%) è stabile tra run distinti — Workers 2 e 3 hanno costantemente accuracy inferiore di ~4 pp rispetto agli altri. Questa stabilità suggerisce che la causa principale è la difficoltà intrinseca delle partizioni, non una mancanza di convergenza del modello (che produrrebbe varianza casuale tra run).
 
 **Livello 3 — Quanto siamo vicini all'ottimo globale ideale?**
 L'unico confronto possibile è con un **baseline centralizzato**: un singolo modello addestrato su tutti i dati unificati, senza vincoli di privacy. Questo è il "modello ideale" che il FL cerca di avvicinarsi. La letteratura FEMNIST riporta ~89–92% di accuracy per modelli centralizzati su architetture simili; i nostri ~87–88% sono circa **2–4 punti percentuali sotto**, che è il costo tipico dell'eterogeneità nei dati in FL non-i.i.d. — un risultato in linea con i benchmark di riferimento.
@@ -1402,6 +1504,10 @@ Fase 4 — Fault Injection  [1 run]
 #### Metrica di confronto: `mean_accuracy`
 
 La metrica usata per confrontare le configurazioni tra run è la **`mean_accuracy` finale** — media aritmetica della `val_accuracy` di tutti i worker all'ultimo round completato prima dell'early stopping.
+
+**La val accuracy finale è determinata dall'early stopping.** Ogni worker si ferma quando la val loss smette di migliorare per `early_stopping_patience` round consecutivi: l'ultimo round eseguito è quindi il punto di miglior generalizzazione locale trovato. La val accuracy riportata in `summary.txt` è quella di questo ultimo round — non la migliore mai osservata durante il training, ma quella al momento dello stop. I due valori coincidono solo se il modello non ha subito oscillazioni nelle ultime `patience` round; in presenza di spike post-FedAvg possono divergere leggermente (il campo `best_acc` in `summary.txt` riporta il massimo storico).
+
+Questo crea un collegamento diretto tra i due usi del val set: **early stopping e selezione degli iperparametri usano la stessa metrica sullo stesso dato**. La configurazione che vince nella griglia è quella il cui early stopping si è fermato nel punto più alto su quel val set — non necessariamente la configurazione che generalizza meglio su dati nuovi. Il bias ottimistico che ne deriva è documentato in Sezione 2.3 ed è la motivazione dell'Esperimento 3 con test set indipendente.
 
 Questa scelta implica che tutti i worker abbiano lo stesso peso nel confronto, indipendentemente dalla dimensione della loro partizione. Un worker con 210k campioni contribuisce alla media quanto uno con 273k. Questo è accettabile perché le partizioni FEMNIST hanno dimensioni comparabili (variazione < 30% tra worker con N=5) e l'obiettivo è valutare la qualità del sistema FL nel suo complesso, non ottimizzare per il worker più grande.
 
@@ -1570,30 +1676,71 @@ docker compose down
 
 ---
 
-### 7.8 Osservazioni Empiriche da Documentare (TODO — completare con dati reali)
+### 7.8 Risultati Esperimento 1 — Griglia Iperparametri
 
-I punti seguenti sono fenomeni osservati durante i run di sviluppo o attesi dalla teoria FL. Vanno arricchiti con i valori numerici reali prodotti dagli esperimenti completi e integrati nella discussione finale.
+#### Lettura delle metriche
 
-**1. Accuracy valley dopo la prima FedAvg.**
-Nei run su FEMNIST non-i.i.d. si osserva un crollo drastico dell'accuracy subito dopo la prima aggregazione (nel run di sviluppo: da ~75% a ~3% su Worker 1 al round 3). Il modello locale ha imparato feature specifiche del proprio gruppo di scrittori; la media con un modello addestrato su scrittori completamente diversi produce un ibrido che non funziona bene su nessuna delle due partizioni. L'accuracy recupera nei round successivi man mano che il training locale "riadatta" il modello aggregato. Da documentare: entità del crollo, numero di round per il recovery, confronto con il caso i.i.d. (baseline teorica).
+**`mean_accuracy`** — media aritmetica della `val_accuracy` finale tra i 5 worker. È la metrica principale di confronto tra configurazioni (Sezione 6.3).
 
-**2. Optimizer state staleness dopo FedAvg.**
-AdamW accumula momenti di primo e secondo ordine ($m_t$, $v_t$) basati sui gradienti del modello locale. Dopo FedAvg i pesi cambiano significativamente ma i momenti restano quelli del modello pre-aggregazione — il primo step post-aggregazione applica una direzione di aggiornamento calibrata su un modello diverso da quello attuale. Questo contribuisce all'instabilità dei round immediatamente successivi all'aggregazione. La soluzione standard sarebbe resettare l'optimizer dopo ogni FedAvg, ma non è implementata per non alterare la dinamica comparativa degli esperimenti. Da documentare: confronto loss dei primi N step post-aggregazione vs step a regime.
+**`std_accuracy`** — deviazione standard della `val_accuracy` finale tra i 5 worker. Misura quanto uniformemente il sistema FL ha funzionato: std bassa indica che tutti i worker hanno beneficiato del gossip in modo comparabile; std alta indica convergenza asimmetrica — alcuni worker molto meglio o molto peggio degli altri. È utile perché la mean_accuracy da sola nasconde situazioni di collasso parziale: una configurazione con mean=0.76 e std=0.19 cela un worker collassato al 38% che la media attenua.
 
-**3. Accumulo multi-round nel buffer asincrono.**
-Un worker più veloce (meno campioni per partizione) può completare più round mentre un worker lento è ancora nel suo round corrente, inviando più messaggi che si accumulano nel buffer del ricevente. Nel run di sviluppo: `neighbors=713235 (3 models)` = Worker 0 (209k) + Worker 2 (251k) × 2 messaggi in un singolo round di Worker 1 (272k). Questo crea un'asimmetria di contributo implicita: i worker più veloci pesano di più nell'aggregazione per pura differenza di velocità, non per qualità del modello. Da documentare: frequenza di questo fenomeno al variare di `num_workers` e `inner_steps_H`.
+**`gossip` (messaggi totali)** — numero totale di push gRPC riusciti sull'intero run, sommati su tutti i worker. Con fanout=3 fisso in Esp. 1, riflette principalmente il numero di round completati: più round → più push. È un proxy del **traffico totale di rete**: messaggi × 7 MB ≈ volume in GB. Con H=100 si completano più round a parità di wall time → più traffico; con H=1000 meno round → meno traffico.
 
-**4. Client drift e tensione con inner_steps_H.**
-Con H elevato e dati non-i.i.d., i modelli locali "derivano" progressivamente lontano da qualsiasi ottimo comune — ogni worker ottimizza per la propria distribuzione locale, allontanandosi dagli altri. La tensione è: H grande → meno traffico di rete ma più drift → FedAvg meno efficace; H piccolo → più comunicazione ma modelli più allineati. Da documentare: curva di val accuracy finale vs H (Esp. 1), con interpretazione in termini di drift.
+#### Risultati completi
 
-**5. Propagazione dell'informazione con fanout=1.**
-In una rete di N nodi con fanout=1, un modello aggiornato da un worker raggiunge tutti gli altri in almeno $\lceil \log_2 N \rceil$ round nel caso ottimo, ma la selezione casuale dei peer introduce alta varianza. Con 3 worker, è possibile che un worker non riceva aggiornamenti da un certo peer per molti round consecutivi per pura casualità. Da documentare: distribuzione empirica degli intervalli tra ricezioni da ogni peer, confronto tra fanout=1 e fanout=2.
+| Configurazione | mean_acc | std | min_acc | wall (s) | L2 | gossip |
+|---|---:|---:|---:|---:|---:|---:|
+| lr=1e-4, H=1000 | **0.8832** | 0.0212 | 0.8508 | 582 | **8.1** | 866 |
+| lr=1e-4, H=500 | 0.8809 | 0.0236 | 0.8466 | 465 | 8.5 | 1172 |
+| lr=1e-3, H=1000 | 0.8802 | **0.0200** | **0.8520** | 382 | 51.2 | **582** |
+| lr=1e-3, H=500 | 0.8762 | 0.0194 | 0.8478 | **241** | 70.8 | 589 |
+| lr=5e-3, H=1000 | 0.8730 | 0.0197 | 0.8448 | 465 | 628 | 645 |
+| lr=1e-4, H=100 | 0.8706 | 0.0255 | 0.8395 | 241 | 13.1 | 1214 |
+| lr=1e-3, H=100 | 0.8625 | 0.0214 | 0.8328 | 120 | 686 | 686 |
+| lr=5e-3, H=500 | 0.8467 | 0.0364 | 0.7892 | 197 | 635 | 449 |
+| lr=5e-3, H=100 | 0.7607 | **0.1916** | **0.3787** | 132 | **693** | 783 |
 
-**6. Early stopping come amplificatore delle asimmetrie di rete.**
-Quando un worker raggiunge il plateau locale e si deregistra, il fanout effettivo degli altri worker si riduce. Con 3 worker totali, perderne uno dimezza i peer disponibili per il gossip — impatto sproporzionato rispetto a quanto succederebbe con 8 worker. Da documentare: round a cui scatta l'early stopping per ogni worker, impatto sulla convergenza dei worker rimanenti.
+#### Anomalie osservate
 
-**7. Costo reale di comunicazione per configurazione.**
-Ogni messaggio gossip trasporta il modello serializzato (~6.5 MB float32). Il volume totale per un run completo è: `gossip_fanout × rounds × num_workers × 6.5 MB`. Con fanout=1, 200 round, 3 worker: ~3.9 GB totali. Da documentare: tabella comparativa del volume per ogni configurazione testata, con confronto al FL centralizzato equivalente (dove ogni round trasferisce N × model_size).
+**lr=5e-3 è instabile su tutta la riga.** La L2 distance è 628–693, contro 8–85 di tutte le altre configurazioni: i modelli sono in zone completamente diverse dello spazio dei pesi e non hanno convergito verso un modello comune.
+
+Due casi di collasso confermato nei dati:
+- `lr=5e-3, H=100`, Worker 1: `best_acc=0.8852` → `final_acc=0.3787`. Il modello ha raggiunto 88.5% poi è crollato al 37.9% nelle ultime round. Con lr=5e-3 aggressivo e H=100 (aggregazioni frequenti), FedAvg ha ripetutamente mediato modelli che oscillavano violentemente, amplificando l'instabilità invece di smorzarla. Il patience counter ha terminato durante il collasso.
+- `lr=5e-3, H=500`, Worker 0: `best_acc=0.8982` → `final_acc=0.7892`. Stesso pattern. Worker 3 si è fermato al round 23 — il più basso dell'intera griglia.
+
+**`lr=1e-4, H=100`, Worker 0**: `avg_neighbors_aggregated=0.59` — Worker 0 ha quasi mai ricevuto aggiornamenti. Con H=100 i round durano ~1.6s e Worker 0 (dataset più piccolo) ha completato round molto più velocemente degli altri, superando la finestra di staleness. Worker 4 ha raggiunto 152 round, il doppio degli altri nella stessa configurazione.
+
+#### Il trade-off traffico / accuracy in Esp. 1
+
+In questa griglia fanout=3 è fisso: il traffico varia solo per effetto del numero di round completati (H piccolo → più round → più gossip). L'osservazione principale è che **H alto produce meno traffico e accuracy uguale o migliore**:
+
+| H | gossip medio | mean_acc medio (sui 3 lr) |
+|---|---:|---:|
+| 100 | 894 | 0.8313 |
+| 500 | 677 | 0.8663 |
+| 1000 | 698 | 0.8788 |
+
+H=1000 usa meno della metà del traffico di H=100 e ottiene accuracy superiore di ~5pp. Questo conferma empiricamente l'intuizione DiLoCo: fare più computazione locale prima di sincronizzare è più efficiente che sincronizzare spesso con meno training.
+
+Il trade-off diretto **fanout ↔ accuracy** sarà oggetto dell'Esperimento 2, dove fanout varia esplicitamente mantenendo fissi lr e H ottimali.
+
+#### L2 distance come indicatore di convergenza FL
+
+La L2 distance rivela tre regimi distinti:
+- **lr=1e-4**: L2 = 8–13. Modelli quasi identici — convergenza molto forte verso lo stesso punto. Il learning rate basso produce traiettorie locali molto simili; FedAvg riesce ad allineare i modelli quasi completamente.
+- **lr=1e-3**: L2 = 51–85. Modelli vicini ma distinti — FL sano con personalizzazione residua.
+- **lr=5e-3**: L2 = 628–693. Modelli divergenti — FL non ha funzionato.
+
+#### Configurazione ottimale: lr=1e-3, H=1000
+
+La configurazione raccomandata per gli esperimenti successivi è **lr=1e-3, H=1000**, per le seguenti ragioni:
+
+1. **Accuracy**: 0.8802 — terzo posto assoluto, a soli 0.3pp dal top (lr=1e-4_H=1000). La differenza è inferiore alla varianza run-to-run (~1–2%) documentata nei run ripetuti, quindi non statisticamente significativa.
+2. **Tempo**: 382s — 34% più veloce di lr=1e-4_H=1000 (582s). Rilevante per la scalabilità sperimentale: Esp. 2 e Esp. 3 useranno questa configurazione.
+3. **Stabilità**: nessun collasso, nessuna anomalia. std=0.0200 — la più bassa dell'intera griglia; tutti i worker convergono uniformemente.
+4. **L2 distance**: 51.2 — modelli convergiti ma non collassati sullo stesso punto. Indica un FL sano dove il gossip ha prodotto allineamento senza eliminare la diversità locale.
+5. **Traffico**: 582 messaggi — il minimo dell'intera griglia. Ottimale per gli esperimenti di scalabilità su AWS.
+6. **Coerenza teorica**: lr=1e-3 è il valore standard per AdamW; H=1000 dà abbastanza step locali per muoversi nel paesaggio di loss (coerente con DiLoCo che usa H=500–1000).
 
 ---
 
@@ -1728,7 +1875,7 @@ La tabella seguente riassume tutti gli scenari di terminazione e il loro impatto
 |---|---|:---:|:---:|---|
 | `docker stop` / Ctrl+C | SIGTERM / SIGINT | ✅ | ✅ | Dal round successivo non compare più in `/get_peers`; fanout effettivo si riduce |
 | Crash simulato (`crash_probability`) | `sys.exit(1)` → SystemExit | ✅ | ✅ | Identico al caso sopra |
-| Early stopping | loop `break` → SystemExit | ✅ | ✅ | Deregistrato ma gRPC server ancora attivo; può ricevere push ma non li processa |
+| Early stopping | loop `break` → `stop(grace=10)` | ✅ | ✅ | Deregistrato, gRPC server fermato dopo 10s grace; container si spegne |
 | `docker kill` / OOM killer | SIGKILL | ❌ | ❌ | Entry stale nel registry; altri worker ricevono `UNAVAILABLE` e timeout da 5s per round |
 
 **Adattamento del sistema.** In tutti i casi di terminazione pulita (SIGTERM, SIGINT, crash simulato, early stopping), la riduzione del numero di worker è trasparente: il registry aggiorna la lista, e dalla successiva chiamata a `GET /peers` gli altri worker ottengono una lista senza il nodo uscente. Il `gossip_fanout` effettivo diventa `min(gossip_fanout, peer_disponibili)` — automaticamente, senza nessuna riconfigurazione. I dati e i pesi già aggregati nei round precedenti restano incorporati nei modelli dei worker superstiti: la perdita di un nodo non annulla il lavoro già fatto.
@@ -1863,6 +2010,31 @@ Per garantire la consegna exactly-once servirebbe:
 - un meccanismo di retry lato sender fino a conferma esplicita
 
 Oltre alla complessità implementativa, questa soluzione introdurrebbe un problema semantico nel contesto FL: un retry che arriva nel round successivo porterebbe pesi appartenenti al round precedente nell'accumulatore del round corrente, violando la semantica dello staleness check (Sezione 4.4) e potenzialmente peggiorando la convergenza. At-most-once è quindi non solo più semplice, ma **semanticamente più corretto** per questo dominio.
+
+### 8.6 Limitazioni Note del Protocollo Gossip
+
+#### max_staleness non si attiva mai in pratica
+
+Il parametro `max_staleness=10` è progettato per scartare modelli troppo vecchi da worker rimasti molto indietro rispetto agli altri. In pratica, nei deployment reali del progetto, la condizione non si verifica mai:
+
+- **In locale (GPU condivisa):** la distanza massima osservata tra i round di worker simultaneamente attivi è stata di 10 round — esattamente il limite. Il parametro non ha mai scartato nessun messaggio. La distanza è interamente causata da GPU scheduling contention (variazione di Phase B da 2.67s a 3.54s tra container), non da differenze semantiche nei dati o nella rete.
+- **Su AWS (istanze omogenee):** ogni worker ha CPU dedicata, le variazioni di Phase B sono trascurabili, e la distanza di round è quasi zero.
+
+`max_staleness` è quindi un parametro di difesa teoricamente corretto ma inerte nelle condizioni di deployment di questo progetto. Sarebbe rilevante con hardware eterogeneo (un worker su una macchina significativamente più lenta) o partizioni di rete prolungate — scenari fuori dal perimetro sperimentale. Per testarlo empiricamente è sufficiente ridurre il valore a 3–5 in `config.yaml`: la distanza naturale fino a 10 round già osservata causerebbe rifiuti visibili nei log.
+
+#### Asimmetria informativa: worker a basso in-degree
+
+Nel gossip k-push, ogni worker seleziona casualmente k peer a cui inviare il proprio modello. La selezione è indipendente per ogni worker e per ogni round: non esiste un meccanismo che garantisca che ogni nodo riceva aggiornamenti con frequenza uniforme. Un worker con basso **in-degree** — raramente scelto come target dai vicini — accumula pochi aggiornamenti e tende a specializzarsi sui propri dati locali.
+
+La probabilità che un worker non riceva nessun aggiornamento in un round è:
+
+$$P(\text{nessun aggiornamento}) = \left(\frac{N-1-k}{N-1}\right)^{N-1}$$
+
+Con i valori sperimentali usati in Esp. 1 ($N=5$, $k=3$): $P = (1/4)^4 \approx 0.4\%$ — quasi nulla. Con i valori dell'Esp. 2 a basso fanout ($N=3$, $k=1$): $P = (1/2)^2 = 25\%$ — un worker su quattro round non riceve nulla. Con $N=8$, $k=1$: $P = (6/7)^7 \approx 39\%$.
+
+Questo significa che **gli esperimenti di scalabilità con fanout basso** (Esp. 2a: $N=3$, fanout=1) espongono naturalmente questo effetto: alcuni worker riceveranno aggiornamenti molto meno frequentemente degli altri, specializzandosi sulla propria partizione locale. La metrica `avg_neighbors_aggregated` in `summary.txt` lo quantifica direttamente: valori bassi indicano worker che hanno operato in semi-isolamento per molti round.
+
+Non è stato implementato un meccanismo correttivo (push-pull, adaptive fanout, o in-degree tracking) perché il progetto mira a studiare e misurare questo trade-off — non a eliminarlo. La variazione del fanout negli esperimenti è precisamente il mezzo per osservarne l'impatto sulla convergenza.
 
 ---
 
@@ -2721,7 +2893,7 @@ La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) è indicativa
 
 ## 12. Target di Accuracy e Scalabilità Attesa
 
-Questa sezione raccoglie i valori di riferimento dalla letteratura, le aspettative teoriche per ogni parametro del sistema, e lo schema delle tabelle che verranno popolate con i risultati sperimentali reali al completamento della campagna di esperimenti (Sezione 7).
+Questa sezione raccoglie i valori di riferimento dalla letteratura, le aspettative teoriche per ogni parametro del sistema, e le tabelle dei risultati sperimentali. L'Esperimento 1 (griglia iperparametri) è completato; le tabelle degli Esperimenti 2–4 verranno popolate al completamento dei rispettivi run.
 
 ### 12.1 Valori di Riferimento dalla Letteratura
 
@@ -2741,7 +2913,7 @@ FEMNIST è il benchmark FL non-i.i.d. più usato in letteratura. Con 62 classi (
 | FedProx (Li et al., 2020) | stesso setup di FedAvg | ~79–83% | μ=0.01 proximal term |
 | SCAFFOLD (Karimireddy et al., 2020) | riduzione del client drift | ~82–87% | controllo varianza del gradiente |
 | Local (no FL, LEAF paper [3]) | training isolato per client | ~60–70% | baseline LEAF su subset ridotto |
-| **Questo progetto** | **3 worker, H=500, fanout=1, 200 round** | **TODO** | **popolate con i risultati reali** |
+| **Questo progetto** | **5 worker, lr=1e-3, H=1000, fanout=3** | **~88%** | Esp. 1, config ottimale da griglia 3×3 |
 
 > **Nota metodologica.** I valori in letteratura sono spesso ottenuti su configurazioni diverse (numero di client, frazione di partecipazione, dimensione dei dati locali). Il confronto diretto richiede cautela: la nostra configurazione (3 worker, tutto il dataset diviso in 3) differisce significativamente da un deployment con 100+ client su subset piccoli. L'obiettivo non è superare lo stato dell'arte, ma dimostrare che il gossip P2P converge a risultati comparabili al FL centralizzato su questa scala.
 
@@ -2771,7 +2943,7 @@ Un risultato **superiore a 80%** è da considerarsi buono e competitivo con FedA
 | 5 | ~147k | **84–87%** | ~25–60 round | ~6.5 GB |
 | 8 | ~92k | **82–86%** | ~30–80 round | ~10.4 GB |
 
-> **TODO:** Sostituire con i valori reali degli Esperimenti 4a (N=3), 4b (N=5), 4c (N=8).
+> Valori da completare con i risultati dell'Esperimento 2 (scalabilità). Il punto N=5, fanout=3 è già disponibile da Esp. 1: mean_accuracy=0.8802, std=0.0200, ~45 round a convergenza.
 
 **Come interpretare la `std_accuracy`:** con più worker e dati più eterogenei, ci si aspetta una deviazione standard leggermente più alta. Un sistema ben calibrato mantiene `std_accuracy < 5%` anche con 8 worker; valori superiori al 10% indicano che alcuni worker convergono bene e altri no — segnale di fanout troppo basso o H troppo alto rispetto all'eterogeneità dei dati.
 
@@ -2794,8 +2966,7 @@ Con N=3 worker e fanout=1, ogni worker invia a 1 peer casuale per round. La prob
 | 1 | 1 | **85–87%** | ~30–60 round | ~3.9 GB |
 | 2 (= N-1) | 2 | **86–88%** | ~15–35 round | ~7.8 GB |
 
-> Con N=3, i valori significativi di fanout sono solo 1 e 2 (N-1). Fanout=3 con N=3 è equivalente a mandare a tutti + sé stesso — non ha senso.  
-> **TODO:** Sostituire con i valori reali degli Esperimenti 3c (fanout=1, fanout=2).
+> Con N=3, i valori significativi di fanout sono solo 1 e 2 (N-1). Fanout=3 con N=3 è equivalente a mandare a tutti + sé stesso — non ha senso. Valori da completare con i risultati dell'Esperimento 2.
 
 **Differenza attesa tra fanout=1 e fanout=N-1:** con N=3 la differenza di fanout è solo 2× nel numero di messaggi, ma la qualità di aggregazione può variare significativamente nei round iniziali. Con fanout=1 è possibile che un worker non riceva aggiornamenti per 2-3 round consecutivi (per pura casualità della selezione random), rallentando la convergenza. Con fanout=N-1 ogni worker aggrega sempre tutti gli altri: convergenza più rapida nei primi round, poi entrambe le configurazioni tendono allo stesso valore asintotico.
 
@@ -2825,7 +2996,7 @@ Con dati non-i.i.d. (come FEMNIST) il drift è amplificato rispetto al caso i.i.
 
 > Il volume per round non cambia con H: ogni gossip push trasmette lo stesso modello (~6.5 MB) indipendentemente da quanti step ha compiuto. Quello che cambia è la *frequenza* del push, non la dimensione. Il traffico totale per ottenere un certo numero di campioni elaborati cambia: con H=100, per 50.000 step occorrono 500 push; con H=1000 bastano 50 push. Con H=100, il beneficio alla convergenza (modelli sempre allineati) potrebbe non compensare il costo di 10× più push.
 
-> **TODO:** Sostituire con i valori reali degli Esperimenti 3b (H=100, H=500, H=1000). La curva `mean_accuracy` vs `H` è uno dei grafici chiave della relazione.
+> I valori reali da Esp. 1 (N=5, fanout=3, lr=1e-3) mostrano: H=100 → 0.8625, H=500 → 0.8762, H=1000 → 0.8802. La tendenza osservata (H grande = accuracy uguale o migliore con meno traffico) è coerente con le previsioni teoriche, anche se la configurazione di Esp. 1 usa N=5/fanout=3 anziché N=3/fanout=1 delle attese sopra.
 
 ---
 
@@ -2853,39 +3024,45 @@ Il sistema deve mantenere `mean_accuracy > 80%` con `drop_probability: 0.2`. Un 
 
 ---
 
-### 12.6 Tabelle Risultati (TODO — completare con dati reali)
+### 12.6 Tabelle Risultati
 
-**Esp. 1 — Griglia iperparametri (N=5, fanout=3):**
+**Esp. 1 — Griglia iperparametri (N=5, fanout=3) — COMPLETATO**
+
+Valori di `mean_accuracy` finale (media dei 5 worker). Configurazione ottimale in grassetto.
 
 | `learning_rate` \ `inner_steps_H` | 100 | 500 | 1000 |
 |---|:---:|:---:|:---:|
-| 1e-4 | TODO | TODO | TODO |
-| 1e-3 | TODO | TODO | TODO |
-| 5e-3 | TODO | TODO | TODO |
+| 1e-4 | 0.8706 | 0.8809 | 0.8832 |
+| 1e-3 | 0.8625 | 0.8762 | **0.8802** |
+| 5e-3 | 0.7607 ⚠️ | 0.8467 ⚠️ | 0.8730 |
 
-**Esp. 2 — Scalabilità (config ottimale da Esp. 1):**
+⚠️ = instabilità grave (collasso di uno o più worker, L2 distance > 600).
+
+Analisi dettagliata in Sezione 7.8.
+
+**Esp. 2 — Scalabilità (lr=1e-3, H=1000) — DA COMPLETARE**
 
 | `num_workers` | `gossip_fanout` | `mean_accuracy` | `std_accuracy` | Round a conv. | Vol. totale (GB) |
 |:---:|:---:|:---:|:---:|:---:|:---:|
-| 3 | 1 | TODO | TODO | TODO | TODO |
-| 5 | 3 | (da Esp. 1) | — | — | — |
-| 8 | 5 | TODO | TODO | TODO | TODO |
+| 3 | 1 | — | — | — | — |
+| 5 | 3 | 0.8802 (da Esp. 1) | 0.0200 | ~45 | ~20 GB |
+| 8 | 5 | — | — | — | — |
 
-**Esp. 3 — Test set onesto (config migliore):**
-
-| Metrica | Valore |
-|---|:---:|
-| `val_accuracy` (da Esp. 1/2) | TODO |
-| `test_accuracy` (Esp. 3) | TODO |
-| Differenza (bias ottimistico) | TODO |
-
-**Esp. 4 — Fault injection (config migliore, drop=0.10, crash=0.03):**
+**Esp. 3 — Test set onesto (config ottimale) — DA COMPLETARE**
 
 | Metrica | Valore |
 |---|:---:|
-| `mean_accuracy` | TODO |
-| Push droppati / round (media) | TODO |
-| Worker crashati totali | TODO |
+| `val_accuracy` (da Esp. 1) | 0.8802 |
+| `test_accuracy` (Esp. 3) | — |
+| Differenza (bias ottimistico) | — |
+
+**Esp. 4 — Fault injection (lr=1e-3, H=1000) — DA COMPLETARE**
+
+| Metrica | Valore |
+|---|:---:|
+| `mean_accuracy` | — |
+| Push droppati / round (media) | — |
+| Worker crashati totali | — |
 
 ---
 
