@@ -1109,11 +1109,30 @@ Questo produce due fasi implicite in ogni run:
 1. **Fase collaborativa** (tutti i worker attivi): convergenza rapida grazie al gossip completo, accuracy sale velocemente — tipicamente i primi 20–30 round.
 2. **Fase individuale** (worker rimasti): fine-tuning locale con gossip ridotto o assente, miglioramenti marginali o plateau — gli ultimi 10–20 round dei worker più longevi.
 
-Nei dati sperimentali, Worker 4 negli ultimi round con `neighbors=0` si stabilizzava intorno all'88–89% con piccole oscillazioni — segno di fine-tuning su un modello già ben inizializzato dai round collaborativi precedenti, non di degradazione.
+#### Comportamento in isolamento: dipendenza dal learning rate
+
+Il comportamento del worker durante la fase individuale non è uniforme: dipende fortemente dalla combinazione `learning_rate × inner_steps_H`, che determina lo spostamento netto dei pesi per Phase B.
+
+**Con lr=1e-4, H=100** (prodotto `lr × H = 0.01`): il worker isolato mostra un andamento corretto — val_accuracy migliora lentamente ma con continuità. Nei dati sperimentali, Worker 4 (Esp. 1, config lr=1e-4 H=100) è passato dall'87.0% al round 84 (primo round isolato) all'88.5% al round 152, con oscillazioni di ±0.5%. Il modello si specializza gradualmente sulla distribuzione locale e, poiché val set e train set provengono dallo stesso gruppo di scrittori, la specializzazione si traduce in un genuino miglioramento. Se lasciato proseguire oltre il round 152, l'andamento ascendente (non ancora in plateau) suggerirebbe un ulteriore recupero verso l'89–90%.
+
+**Con lr=1e-3, H=500** (prodotto `lr × H = 0.5`, 50 volte superiore): si osserva un anomalia di un singolo round nella fase isolata. Nei dati sperimentali, Worker 4 (Esp. 1, config lr=1e-3 H=500) ha mostrato al round 50 un crollo da 88.9% a 51.3%, recuperato completamente al round 51. Il meccanismo è il seguente:
+
+1. **AdamW accumula momentum** durante i round collaborativi, calibrato sulla direzione che minimizza la loss su una distribuzione mescolata (locale + gossip in arrivo).
+2. **Quando il gossip cessa**, quel momentum non viene più corretto da FedAvg. Il Phase B successivo porta i pesi oltre l'ottimo locale (*overshoot*) nella direzione accumulata — lo spostamento per Phase B è abbastanza grande (500 step a lr=1e-3) da superare il bacino del minimo.
+3. **BatchNorm amplifica l'effetto.** Il modello usa BatchNorm in tutti e tre i blocchi (BN2d×4, BN1d×1). Durante il training (Phase B), PyTorch BatchNorm normalizza usando le *batch statistics* calcolate sul batch corrente; durante la validazione (eval mode) usa le *running statistics* (media esponenziale). Quando il Phase B produce un overshoot nei conv filter, le running statistics si aggiornano verso la nuova distribuzione delle attivazioni — ma i parametri apprendibili γ e β si sono adattati alle batch statistics e non alle running statistics modificate. Al round successivo, la validazione in eval mode usa running statistics disallineate, producendo il crollo di accuracy.
+4. Il Phase B immediatamente successivo inverte l'overshoot (il momentum ora punta nella direzione opposta) e recovery completo avviene in un round.
+
+Il `train_loss_avg` non rivela l'anomalia perché è la *media* sui 500 step del Phase B: include i passi iniziali (modello ancora buono) e quelli finali (modello peggiorato), la media rimane ~1.13 in entrambi i casi.
+
+**Deduzioni:**
+
+- L'intuizione "un worker isolato non può peggiorare la propria val_accuracy, perché val e train vengono dalla stessa distribuzione" è **corretta** per learning rate piccoli. Con lr=1e-4 il comportamento è esattamente quello atteso: specializzazione lenta e miglioramento continuo.
+- Con lr grandi e H grandi, lo spostamento per Phase B è abbastanza ampio da generare oscillazioni intorno all'ottimo locale. L'oscillazione è transitoria (1 round) e non impatta il risultato finale (early stopping con patience=10 assorbe lo spike).
+- Il prodotto `lr × H` è il parametro che governa questa stabilità, non lr o H da soli. Due configurazioni con lo stesso prodotto dovrebbero mostrare comportamento simile nell'isolamento.
 
 > **Limitazione nota: training in isolamento dopo la fine della collaborazione.** Quando tutti gli altri worker hanno deregistrato, il worker rimasto ha `eligible_peers = []` ogni round: Phase C non invia nulla e Phase A è sempre vuota. Da quel momento il training è equivalente all'isolamento completo — esattamente la condizione che il FL vuole evitare. Il checkpoint finale salvato sarà un modello più specializzato sulla distribuzione locale rispetto all'ultimo modello collaborativo prodotto prima che gli altri uscissero.
 >
-> Un comportamento più corretto sarebbe interrompere il training quando non esistono più peer disponibili per un numero consecutivo di round, preservando il modello nel suo stato collaborativo migliore. Questo non è implementato: l'early stopping attuale misura solo la val loss locale, che può continuare a migliorare anche in isolamento — ma quel miglioramento riflette specializzazione locale, non convergenza verso il modello globale. È una limitazione dell'attuale criterio di arresto, risolvibile aggiungendo un controllo su `eligible_peers` nel loop principale.
+> Con lr piccoli (es. 1e-4), la specializzazione in isolamento è graduale e tende a migliorare la val_accuracy locale — ma questo miglioramento riflette adattamento alla distribuzione locale, non convergenza verso il modello globale collaborativo. Con lr grandi (es. 1e-3), il rischio di spike transitori aumenta, ma l'effetto è assorbito dall'early stopping. In entrambi i casi il comportamento più corretto sarebbe interrompere il training quando non esistono più peer disponibili per un numero consecutivo di round, preservando il modello nel suo stato collaborativo migliore. Questo non è implementato: l'early stopping attuale misura solo la val loss locale. È una limitazione risolvibile aggiungendo un controllo su `eligible_peers` nel loop principale.
 
 #### Raccomandazione per gli esperimenti
 
