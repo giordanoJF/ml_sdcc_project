@@ -109,7 +109,7 @@ def main():
     num_workers: int = cfg["network"]["num_workers"]
     grpc_port: int = cfg["network"]["grpc_port"]
     registry_port: int = cfg["network"]["registry_port"]
-    use_gpu: bool = cfg["network"].get("use_gpu", False)
+    use_gpu: bool = cfg["federated_learning"].get("use_gpu", False)
 
     mode = "GPU (Dockerfile.worker.gpu)" if use_gpu else "CPU (Dockerfile.worker)"
     print(f"Generating docker-compose.yml — {num_workers} workers, gRPC port {grpc_port}, mode={mode} ...")
