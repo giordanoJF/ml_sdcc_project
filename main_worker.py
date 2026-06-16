@@ -93,6 +93,30 @@ def fetch_peers(registry_url: str) -> list[str]:
         return []
 
 
+def wait_for_all_peers(
+    registry_url: str, total_workers: int, poll_interval: int = 5, max_wait: int = 300
+) -> list[str]:
+    """Block until all workers are registered, then return the full peer list.
+
+    Polls GET /peers every poll_interval seconds. Returns as soon as
+    len(peers) >= total_workers. If max_wait is reached, proceeds with
+    whoever has registered so far (logs a warning).
+    """
+    deadline = time.time() + max_wait
+    peers: list[str] = []
+    while time.time() < deadline:
+        peers = fetch_peers(registry_url)
+        if len(peers) >= total_workers:
+            logger.info(f"All {total_workers} workers online — peer cache ready")
+            return peers
+        logger.info(f"Waiting for peers: {len(peers)}/{total_workers} registered ...")
+        time.sleep(poll_interval)
+    logger.warning(
+        f"Startup timeout: only {len(peers)}/{total_workers} workers registered — proceeding anyway"
+    )
+    return peers
+
+
 def infinite_batches(loader):
     """Cycle over a DataLoader indefinitely to allow arbitrary H inner steps."""
     while True:
@@ -195,6 +219,9 @@ def main():
 
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
+
+    # --- Peer cache: populated once at startup, refreshed only on gRPC failure ---
+    peer_cache = wait_for_all_peers(registry_url, total_workers)
 
     # --- Thread 2: training loop ---
     train_iter = infinite_batches(train_loader)
@@ -321,9 +348,7 @@ def main():
             # check sees the correct value.
             shared_state["current_round"] = round_num
 
-            all_peers = fetch_peers(registry_url)
-            # Exclude self to avoid sending to ourselves
-            eligible_peers = [p for p in all_peers if p != my_address]
+            eligible_peers = [p for p in peer_cache if p != my_address]
             targets = (
                 random.sample(eligible_peers, min(gossip_fanout, len(eligible_peers)))
                 if eligible_peers else []
@@ -350,15 +375,14 @@ def main():
                 else:
                     failed_targets.append(target)
 
-            # Reactive re-query: if any gRPC push failed (not simulated drops),
-            # fetch a fresh peer list and attempt one replacement per failure.
-            # This covers the case where a peer crashed and deregistered between
-            # our initial fetch_peers() call and the push attempt.
-            # At most one extra HTTP call per round, only when failures occur.
+            # Cache refresh: if any gRPC push failed, refresh peer_cache from the
+            # registry and attempt one replacement per failure from the updated list.
+            # HTTP traffic to the registry is zero in healthy rounds; at most one
+            # call per round, only when a peer is unreachable.
             retried = 0
             if failed_targets:
-                fresh_peers = fetch_peers(registry_url)
-                replacements = [p for p in fresh_peers if p != my_address and p not in tried]
+                peer_cache = fetch_peers(registry_url)
+                replacements = [p for p in peer_cache if p != my_address and p not in tried]
                 for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
                     tried.add(replacement)
                     if random.random() < drop_prob:
