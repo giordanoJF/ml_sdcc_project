@@ -21,7 +21,7 @@ Output (printed to stdout):
     Convergence      : per-worker status (converged vs hit round limit), wall-clock time,
                        system-level convergence (time from first worker start to last end)
     Weight divergence: pairwise L2 distance between final model weights (if checkpoints found)
-    Test results     : per-worker test_accuracy (only when use_test_set: true)
+    Local test results: per-worker local_test_accuracy (only when local_test_set: true)
 
 Output (saved to disk):
     data/femnist/global_metrics.csv          — per-round aggregated stats (+ phase timings if present)

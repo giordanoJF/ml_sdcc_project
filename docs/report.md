@@ -488,7 +488,7 @@ Il vincolo più importante di questo componente è **l'assoluta assenza di logic
 
 #### Scelta tecnologica: Flask vs alternative
 
-La scelta di Flask rispetto ad alternative come FastAPI o un server gRPC è motivata dalla natura delle operazioni esposte. Il Registry riceve al massimo $N$ chiamate a `/register` all'avvio, $N$ chiamate a `/deregister` alla chiusura, e $N \times R$ chiamate a `/get_peers` durante il training (una per worker per round, con $R$ numero di round). Il carico è quindi **O(N × R)** richieste semplici, con payload JSON di poche decine di byte. In questo scenario Flask — con una singola dipendenza, nessuna configurazione e avvio in meno di un secondo — supera FastAPI per semplicità senza sacrificare le prestazioni.
+La scelta di Flask rispetto ad alternative come FastAPI o un server gRPC è motivata dalla natura delle operazioni esposte. Il Registry riceve al massimo $N$ chiamate a `/register` all'avvio, $N$ chiamate a `/deregister` alla chiusura, e $N$ chiamate a `/get_peers` durante il popolamento iniziale della cache (una per worker) più eventuali refresh reattivi su fallimento gRPC — al più una per worker per round con fallimenti. Nelle run senza crash il carico di discovery è quindi **O(N)** richieste totali, con payload JSON di poche decine di byte. In questo scenario Flask — con una singola dipendenza, nessuna configurazione e avvio in meno di un secondo — supera FastAPI per semplicità senza sacrificare le prestazioni.
 
 Un server gRPC per il Registry sarebbe stato più coerente con il resto del sistema ma avrebbe aggiunto complessità (generazione di un secondo file proto, gestione di due porte) senza alcun vantaggio funzionale.
 
@@ -1056,15 +1056,16 @@ Round N (early stopping):
   Phase A: FedAvg ✅  →  validate ✅  →  patience >= soglia  →  break
   Phase B: training H steps            ← NON eseguita
   Phase C: gossip push                 ← NON eseguita
-  finally: deregister + checkpoint + grpc_server.stop(grace=10)
+  finally: checkpoint save + deregister
+  post-finally: grpc_server.stop(grace=10)
 ```
 
 **Nessun gossip push finale.** Il worker esce senza inviare il proprio modello ai vicini nell'ultimo round. Il modello salvato nel checkpoint è il risultato della FedAvg del round N — non è stato ulteriormente allenato dalla Phase B. Inviarlo via gossip non porterebbe benefici ai riceventi: è un modello di sola aggregazione, privo del training locale del round corrente che ne raffinerebbe i pesi. I worker ancora attivi non perderanno questo contributo in modo significativo — nei round precedenti avevano già ricevuto le versioni allenate dei modelli di questo worker.
 
 Quando Thread 2 esce dal loop, la sequenza di shutdown è:
 
-1. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
-2. Il checkpoint del modello viene salvato su disco.
+1. Il blocco `finally` salva `model_final.pt` su disco.
+2. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
 3. `grpc_server.stop(grace=10)` ferma il server gRPC con un periodo di grazia di 10 secondi.
 4. Il processo termina e il container Docker si spegne.
 
@@ -1112,7 +1113,7 @@ Il fatto che la validation avvenga dopo la Phase A mitiga parzialmente il primo 
 
 Quando un worker raggiunge l'early stopping ed esce, il sistema non si interrompe ma **degrada gradualmente** su tre fronti collegati.
 
-**Fanout effettivo si riduce.** I worker rimanenti interrogano il registry ogni round e trovano meno peer disponibili. `min(gossip_fanout, len(eligible_peers))` scende automaticamente — nei run sperimentali si osservano round con `neighbors_aggregated=0` negli ultimi 8–10 round dei worker più longevi, quando tutti gli altri avevano già deregistrato.
+**Fanout effettivo si riduce.** Al round successivo all'uscita di un worker, i peer rimasti tentano di inviargli i pesi e ricevono un errore gRPC (`UNAVAILABLE`). Questo innesca il refresh della cache locale (`peer_cache = fetch_peers(registry_url)`): la lista aggiornata non include più il worker deregistrato. Nei round successivi, `min(gossip_fanout, len(eligible_peers))` scende automaticamente — nei run sperimentali si osservano round con `neighbors_aggregated=0` negli ultimi 8–10 round dei worker più longevi, quando tutti gli altri avevano già deregistrato.
 
 **Qualità dell'aggregazione diminuisce.** Con meno modelli in Phase A, la media pesa distribuzioni meno eterogenee. Il guadagno di generalizzazione per round si riduce: i worker rimanenti apprendono progressivamente solo dal proprio subset di dati, avvicinandosi al training isolato.
 
@@ -1222,7 +1223,8 @@ Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per 
 # 2. Pulisci i risultati precedenti
 rm -f data/femnist/worker_*/metrics.csv \
       data/femnist/worker_*/model_final.pt \
-      data/femnist/worker_*/test_result.json
+      data/femnist/worker_*/model_best.pt \
+      data/femnist/worker_*/local_test_result.json
 
 # 3. Lancia la run
 # IMPORTANTE — quando usare --build:
@@ -1241,7 +1243,7 @@ python scripts/save_experiment.py <nome>   # es: lr_1e-3, fanout_2, baseline
 docker compose down
 ```
 
-Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `test_result.json`, il `config.yaml` usato, e i log di ogni container Docker (`logs/<service>.log`). Il salvataggio dei log avviene tramite `docker compose logs` prima che i container vengano rimossi: Docker mantiene i log di un container finché il container non viene eliminato — anche se è crashato — quindi il file di log include l'output fino al momento del crash.
+Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `local_test_result.json` e `model_best.pt`, il `config.yaml` usato, e i log di ogni container Docker (`logs/<service>.log`). Il salvataggio dei log avviene tramite `docker compose logs` prima che i container vengano rimossi: Docker mantiene i log di un container finché il container non viene eliminato — anche se è crashato — quindi il file di log include l'output fino al momento del crash.
 
 **Cosa fa `docker compose down` e quando usarlo.** `docker compose down` ferma i container e li **rimuove** (lo stato "exited" viene eliminato insieme ai log Docker), rimuove le reti create dal compose, ma **non** rimuove le immagini Docker (rimangono in cache) né i file su disco (`data/femnist/worker_*/` rimane intatto). Va eseguito tra ogni run perché `config.yaml` è copiato nell'immagine al build time — non è montato come volume — quindi un run successivo con `config.yaml` modificato ma senza `docker compose down` + `--build` userebbe la config precedente baked nell'immagine.
 
@@ -2302,7 +2304,7 @@ deploy     →  [1] attende SSH+Docker su tutte le istanze
               [3] SCP partizioni dataset ai worker in parallelo
               [4] avvia registry container + attende healthcheck
               [5] avvia worker container in parallelo
-collect    →  SCP metrics.csv, test_result.json, model_final.pt da ogni worker
+collect    →  SCP metrics.csv, local_test_result.json, model_best.pt, model_final.pt da ogni worker
 status     →  mostra docker ps su ogni istanza
 logs <id>  →  docker logs -f worker_<id> o registry (via SSH interattivo)
 destroy    →  terraform destroy (elimina tutte le istanze)
@@ -2633,12 +2635,12 @@ Il test set è tenuto fuori da ogni decisione di training e hyperparameter selec
 | 3. Re-partiziona | Operatore | locale | `python scripts/split_dataset.py` | identico |
 | 4. Rigenera compose | Operatore | locale | `python scripts/generate_compose.py` | identico |
 | 5. Avvia training | Operatore | locale | `docker compose up --build` | `python scripts/aws_deploy.py deploy` |
-| 6. Training | Container × N | locale / N EC2 | automatico — al termine: `test_result.json` | identico |
+| 6. Training | Container × N | locale / N EC2 | automatico — al termine: `local_test_result.json` | identico |
 | 7. Collect | — | — | — | `python scripts/aws_deploy.py collect` |
 | 8. Aggrega | Operatore | locale | `python scripts/aggregate_metrics.py` *(stampa val + test accuracy)* | identico |
 | 9. Archivia | Operatore | locale | `python scripts/save_experiment.py final_with_test` | identico |
 
-`test_result.json` (scritto da ogni worker alla fine del training) e `test_accuracy` nell'output di `aggregate_metrics.py` sono la metrica definitiva da riportare — non influenzata da nessuna decisione di training o selezione degli iperparametri.
+`local_test_result.json` (scritto da ogni worker alla fine del training) e `local_test_accuracy` nell'output di `aggregate_metrics.py` sono la metrica definitiva da riportare — non influenzata da nessuna decisione di training o selezione degli iperparametri.
 
 ---
 
@@ -2669,8 +2671,9 @@ Ogni worker scrive `metrics.csv` in `/app/data/femnist/` dentro il container. Gr
 data/femnist/worker_0/metrics.csv
 data/femnist/worker_1/metrics.csv
 ...
-data/femnist/worker_0/model_final.pt   ← snapshot finale dei pesi (solo per weight divergence)
-data/femnist/worker_0/test_result.json ← solo se local_test_set: true
+data/femnist/worker_0/model_final.pt          ← snapshot finale dei pesi
+data/femnist/worker_0/model_best.pt           ← checkpoint con val_loss minima (per weight divergence)
+data/femnist/worker_0/local_test_result.json  ← solo se local_test_set: true
 ```
 
 **Raccolta e analisi metriche:**
@@ -2819,7 +2822,7 @@ Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra m
 | `deploy` [5/5] | `aws_deploy.py` | **EC2 worker × N** | avvia container worker su ogni EC2, con mount della propria partizione e IP privato come `MY_HOST` |
 | Training | Container worker (N) | **N EC2 distinte** | allena localmente, fa gossip gRPC tra EC2 via IP privati VPC |
 | Discovery | Container registry (1) | **EC2 registry** | gestisce peer list durante il training |
-| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv`, `model_final.pt`, `test_result.json` da ogni EC2 worker |
+| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv`, `model_best.pt`, `model_final.pt`, `local_test_result.json` da ogni EC2 worker |
 | Analisi | Operatore | **locale** | `aggregate_metrics.py`, `save_experiment.py` |
 | `destroy` | `aws_deploy.py` + Terraform | **locale → AWS** | termina tutte le istanze EC2, rimuove security group |
 
@@ -2917,11 +2920,11 @@ python scripts/save_experiment.py <nome>
 | **Per-worker summary** | accuracy finale e migliore, total training time (somma `round_duration_s`), breakdown medio per fase, latenza gRPC media |
 | **System convergence** | per ogni worker: *converged at round X* oppure *hit round limit* + wall-clock reale dal timestamp; poi: verdetto del sistema (*YES — all workers converged* o *PARTIAL*) e wall-clock totale del sistema (dal primo worker start all'ultimo worker end) |
 | **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker (se i `model_final.pt` sono presenti) |
-| **Test set results** | `test_accuracy` per worker, solo se `local_test_set: true` |
+| **Test set results** | `local_test_accuracy` per worker, solo se `local_test_set: true` |
 
 `global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
 
-`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro per il prossimo run. Va eseguito prima di `docker compose down`.
+`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/model_best.pt`, `worker_*/local_test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro per il prossimo run. Va eseguito prima di `docker compose down`.
 
 ### Confronto tra approccio 90/10 e 80/10/10
 
