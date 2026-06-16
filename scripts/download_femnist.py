@@ -11,7 +11,7 @@ Usage:
 
 Output:
     data/femnist/data/train/*.json
-    data/femnist/data/test/*.json
+    data/femnist/data/val/*.json
 """
 import argparse
 import os
@@ -124,9 +124,9 @@ def main():
     #               o solo in test — alcuni worker di split_dataset.py riceverebbero
     #               scrittori senza dati di training o senza validation.
     #
-    # Nota: LEAF chiama questa cartella "test/", ma split_dataset.py la rinomina
-    # "val/" nelle cartelle worker per riflettere l'uso reale (validation set per
-    # early stopping), non un test set tenuto fuori dal training.
+    # Nota: LEAF chiama questa cartella "test/", ma noi la copiamo come "val/"
+    # subito al passo 4 per riflettere l'uso reale (validation set per early
+    # stopping), non un test set tenuto fuori dal training.
     #
     # Altre flag:
     #   --sf  → frazione del dataset da tenere (1.0 = completo, 0.05 = debug veloce)
@@ -148,12 +148,14 @@ def main():
     # Step 4 — Copy only train/ and test/ JSON files into the project's data directory.
     # LEAF produces several intermediate directories (raw images, pkl files, sampled
     # data, etc.) that are not needed by the workers and would waste gigabytes of disk.
+    # LEAF calls this split "test/" but we rename it to "val/" immediately since it
+    # is used as validation data by the workers, not as a held-out test set.
     if os.path.exists(DEST_DIR):
         shutil.rmtree(DEST_DIR)
     os.makedirs(DEST_DIR)
     src = os.path.join(femnist_dir, "data")
-    for split in ("train", "test"):
-        shutil.copytree(os.path.join(src, split), os.path.join(DEST_DIR, split))
+    shutil.copytree(os.path.join(src, "train"), os.path.join(DEST_DIR, "train"))
+    shutil.copytree(os.path.join(src, "test"), os.path.join(DEST_DIR, "val"))
 
     # Step 5 — Remove the LEAF repository: no longer needed after preprocessing.
     shutil.rmtree(LEAF_DIR)
