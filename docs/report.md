@@ -151,7 +151,7 @@ I campi hanno il seguente significato:
 
 Il training set completo è distribuito su **36 file JSON**; ogni file copre fino a 100 writer.
 
-**Non esistono cartelle per scrittore.** L'output di `download_femnist.py` è semplicemente `data/femnist/data/train/` e `data/femnist/data/test/` — due cartelle piatte con file JSON. Non c'è una sottocartella per `f1967_21` o per nessun altro scrittore. La suddivisione per scrittore non sparisce: è preservata *dentro* i JSON nella chiave `user_data`, dove ogni writer_id mantiene le proprie immagini separate. È questa struttura che `split_dataset.py` legge per distribuire scrittori ai worker: estrae la lista `users`, prende una fetta contigua per ogni worker, e scrive solo i writer_id di quella fetta nella cartella del worker corrispondente.
+**Non esistono cartelle per scrittore.** L'output di `download_femnist.py` è semplicemente `data/femnist/data/train/` e `data/femnist/data/val/` — due cartelle piatte con file JSON (LEAF produce `test/`, rinominata in `val/` al momento della copia). Non c'è una sottocartella per `f1967_21` o per nessun altro scrittore. La suddivisione per scrittore non sparisce: è preservata *dentro* i JSON nella chiave `user_data`, dove ogni writer_id mantiene le proprie immagini separate. È questa struttura che `split_dataset.py` legge per distribuire scrittori ai worker: estrae la lista `users`, prende una fetta contigua per ogni worker, e scrive solo i writer_id di quella fetta nella cartella del worker corrispondente.
 
 #### Trasformazione degli oggetti attraverso la pipeline
 
@@ -613,19 +613,19 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 3. **Patch `get_data.sh` — sostituzione `unzip`** *(modifica a codice di terze parti — vedi nota sotto)*  
    `get_data.sh` scarica prima entrambi i file (`by_class.zip` ~984 MB, `by_write.zip` ~542 MB) ed esegue poi `unzip <file>` per estrarli (senza flag `-q`: l'estrazione è silenziosa). `unzip` non è preinstallato di default in molte distribuzioni Linux e in ambienti WSL. La patch sostituisce ogni occorrenza di `unzip <file>` con `python3 -c "import zipfile; zipfile.ZipFile('<file>').extractall('.')"`, che usa la libreria standard Python — sempre disponibile — e produce output identico. L'estrazione avviene in silenzio (nessun log di avanzamento): è normale che lo script rimanga fermo per 5–10 minuti durante questo passo.
 4. Installazione delle dipendenze di preprocessing di LEAF (`tensorflow-cpu`, `Pillow`, `numpy`) nell'ambiente Python corrente.
-5. Esecuzione di `preprocess.sh` con split non-i.i.d. per scrittore, 90% train / 10% test.
-6. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`. Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
+5. Esecuzione di `preprocess.sh` con split non-i.i.d. per scrittore. Il flag `--tf` dipende da `local_test_set` in `config.yaml`: `0.9` (default — 90% train / 10% per scrittore) o `0.8` (con `local_test_set: true` — 80% / 20%, poi diviso in val e local\_test da `split_dataset.py`). LEAF chiama la cartella di output `test/`; la rinomina avviene al passo seguente.
+6. Copia **selettiva** di sole `train/` e `test/` in `data/femnist/data/`, rinominando `test/` in `val/` al momento della copia (`shutil.copytree(src/test, dest/val)`). Le directory intermedie prodotte da LEAF (immagini raw EMNIST, file `.pkl`, dati campionati) non vengono copiate: occuperebbero gigabyte inutili poiché non servono al training. Il dataset finale pesa ~2–4 GB.
 7. Rimozione automatica dell'intera directory `leaf/` (~20 GB). Una volta che `data/femnist/data/` esiste, il repository LEAF non serve più — se necessario verrà riclonato automaticamente da GitHub alla prossima esecuzione dello script.
 
 > **Nota sulle modifiche a codice LEAF di terze parti.**  
 > LEAF (Caldas et al., 2018) è un repository accademico non più attivamente mantenuto per la compatibilità con Python e librerie di sistema moderne. Le due patch sopra non alterano l'algoritmo di preprocessing né la struttura dei dati prodotti — modificano esclusivamente chiamate di sistema o di libreria diventate obsolete o non portabili. Le patch vengono applicate programmaticamente da `download_femnist.py` alla copia locale clonata, e scompaiono insieme all'intera directory `leaf/` al passo 7: non è necessario mantenere un fork. Ad ogni nuova esecuzione di `download_femnist.py`, LEAF viene riclonato e riprotato da zero.
 
-**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da `use_test_set` in `config.yaml`: con `false` (default) scrive `data/femnist/worker_{i}/{train,val}/data.json` rinominando la `test/` di LEAF in `val/`; con `true` scrive anche `data/femnist/worker_{i}/test/data.json` dividendo il 20% di LEAF al 50/50 per scrittore (10% val + 10% test). Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
+**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da due flag in `config.yaml`. `local_test_set` (default `false`): con `false` scrive `data/femnist/worker_{i}/{train,val}/data.json` (90/10 per scrittore); con `true` scrive anche `worker_{i}/local_test/data.json`, dividendo il 20% LEAF al 50/50 per scrittore (10% val + 10% local\_test). `global_test_set` (default `false`): se abilitato, ritaglia `global_test_fraction` degli scrittori prima di qualunque assegnazione ai worker; quei writer non compaiono mai in nessuna partizione worker. I loro campioni da `train/` e da `val/` vengono accumulati in un `global_buffer` in memoria e scritti una sola volta in `data/femnist/global_test/data.json` — il buffer evita chiavi JSON duplicate che si produrrebbero scrivendo due passate sullo stesso file (LEAF mette gli stessi scrittori sia in `train/` che in `val/`). Al termine, lo script rimuove `data/femnist/data/` per liberare spazio su disco — rilevante su AWS Learner Lab dove lo storage è limitato. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
 - **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON, senza caricare i pixel. Produce la lista globale ordinata di tutti i writer, calcola la mappa `writer_id → worker_index` e raggruppa gli ID per worker. Consumo RAM: trascurabile (solo stringhe).
 - **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
 
-Lo script rimuove automaticamente le directory `worker_*` esistenti all'avvio, rendendo ogni esecuzione idempotente: se interrotto a metà, basta rilanciarla da capo senza rischio di dati inconsistenti. Il sorgente `data/femnist/data/` non viene mai modificato.
+Lo script rimuove automaticamente le directory `worker_*` esistenti all'avvio, rendendo ogni esecuzione idempotente: se interrotto a metà, basta rilanciarla da capo senza rischio di dati inconsistenti. Al termine dell'elaborazione, lo script rimuove anche `data/femnist/data/`: la directory sorgente non è più necessaria una volta che le slice per-worker sono state scritte su disco.
 
 La motivazione di eseguire entrambi gli step su host anziché dentro i container è fondamentale per la correttezza dello scenario federato: ogni container riceve in mount **esclusivamente la propria porzione di dati**, senza possibilità di accedere a quelli degli altri worker. Questo rispecchia fedelmente la realtà del Federated Learning, dove ogni dispositivo ha accesso fisico solo ai propri dati locali — non è necessario alcun meccanismo software per isolare le partizioni, è l'architettura stessa del filesystem a garantirlo.
 
@@ -673,7 +673,7 @@ I dati di train, val e test sono caricati **una sola volta** all'avvio del worke
 
 - **Train**: stessi campioni per tutti i round. Il `DataLoader` ha `shuffle=True`, quindi l'ordine dei batch cambia ad ogni epoch, ma il pool di immagini è sempre quello della partizione assegnata a quel worker. L'iteratore infinito garantisce esattamente $H$ step per round indipendentemente dalla dimensione della partizione.
 - **Val**: stessi campioni ogni round, stesso ordine (`shuffle=False`). La val loss al round $r$ è calcolata sulle stesse immagini del round 1 — l'unica variabile è il modello, che nel frattempo ha aggiornato i pesi.
-- **Test** (se `use_test_set: true`): stessi campioni, valutati una sola volta alla fine del training.
+- **Test** (se `local_test_set: true`): stessi campioni, valutati una sola volta alla fine del training.
 
 Questa immutabilità è un requisito, non una limitazione. Se i dati di validation cambiassero tra round, le val loss di round diversi non sarebbero comparabili e l'early stopping — che decide di fermarsi confrontando la val loss attuale con quella dei round precedenti — non avrebbe senso. La stabilità del set di valutazione è ciò che rende il confronto inter-round significativo.
 
@@ -747,11 +747,11 @@ Un secondo vantaggio di AdamW in FL è la velocità di recovery post-aggregazion
 
 #### Fase C — Gossip Push
 
-**Meccanismo.** Prima dell'invio, `shared_state["current_round"]` viene aggiornato al valore del round corrente, rendendolo visibile a Thread 1 per i successivi controlli di staleness. Il worker interroga il Discovery Server tramite `GET /peers`, esclude il proprio indirizzo dalla lista, e seleziona casualmente `min(gossip_fanout, len(eligible_peers))` vicini. Per ciascun target viene applicata la logica di fault injection (Sezione 8), poi viene invocato `send_model()`.
+**Meccanismo.** Prima dell'invio, `shared_state["current_round"]` viene aggiornato al valore del round corrente, rendendolo visibile a Thread 1 per i successivi controlli di staleness. Il worker legge la propria cache locale dei peer (`peer_cache`), esclude il proprio indirizzo, e seleziona casualmente `min(gossip_fanout, len(eligible_peers))` vicini. Per ciascun target viene applicata la logica di fault injection (Sezione 8), poi viene invocato `send_model()`.
 
-**Frequenza di interrogazione del registry.** Il registry viene interrogato **una volta per round**, all'inizio della Fase C. Questa scelta è coerente con il requisito di minimizzare il traffico di rete: con H=500 inner steps un round dura tipicamente diversi minuti, quindi aggiornare la lista peer più spesso produrrebbe overhead HTTP senza benefici concreti sulla freschezza. Interrogare il registry meno spesso (es. ogni K round) ridurrebbe ulteriormente il traffico al costo di una visione più stale della topologia. Il trade-off è bilanciato al valore attuale: un'interrogazione per round mantiene la lista allineata con i cambiamenti topologici (worker che si registrano o deregistrano) senza generare traffico aggiuntivo apprezzabile rispetto ai push gRPC che domina il volume totale.
+**Cache locale dei peer.** Invece di interrogare il Discovery Server ad ogni round, ogni worker mantiene una **cache locale** della lista peer, popolata una sola volta all'avvio tramite `wait_for_all_peers()`. Questa funzione fa polling su `GET /peers` ogni 5 secondi finché `len(peers) >= num_workers`, garantendo che il training loop non parta prima che tutti i nodi siano online e registrati — eliminando race condition di avvio. Il timeout massimo è 5 minuti; se scaduto, il worker parte con i peer già disponibili (con warning nel log). Nelle run senza fallimenti — il caso normale — la Fase C non genera **nessun** traffico HTTP verso il registry: la selezione dei target opera interamente dalla cache. Il traffico di discovery si riduce da $N_{\text{rounds}}$ chiamate per worker a una singola chiamata iniziale, più eventuali refresh reattivi su fallimento (descritti sotto).
 
-**Re-query reattivo dopo fallimento gRPC.** Un push fallito (`UNAVAILABLE` o `DEADLINE_EXCEEDED`) è un segnale che il peer potrebbe essere crashato e deregistrato tra la chiamata iniziale a `GET /peers` e il tentativo di push. Il meccanismo funziona in due fasi distinte.
+**Refresh della cache su fallimento gRPC.** Un push fallito (`UNAVAILABLE` o `DEADLINE_EXCEEDED`) segnala che il peer potrebbe essersi spento e deregistrato dopo il popolamento iniziale della cache. Il meccanismo funziona in due fasi distinte.
 
 *Fase normale:* il worker campiona `k` peer casuali, tenta l'invio a ciascuno, e accumula in `failed_targets` i peer che hanno restituito `RpcError`. Il set `tried` viene popolato con tutti i target originali fin dall'inizio, indipendentemente dall'esito.
 
@@ -759,8 +759,8 @@ Un secondo vantaggio di AdamW in FL è la velocità di recovery post-aggregazion
 
 ```python
 if failed_targets:
-    fresh_peers = fetch_peers(registry_url)
-    replacements = [p for p in fresh_peers if p != my_address and p not in tried]
+    peer_cache = fetch_peers(registry_url)  # refresh cache
+    replacements = [p for p in peer_cache if p != my_address and p not in tried]
     for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
         tried.add(replacement)
         ...
@@ -775,14 +775,14 @@ A → successo
 B → RpcError     failed_targets = [B]
 C → successo
 
-fresh_peers = [A, B, D, E]        ← B nel frattempo potrebbe essersi deregistrato
+peer_cache = [A, B, D, E]         ← B nel frattempo potrebbe essersi deregistrato (cache aggiornata)
 replacements = [D, E]              ← A e B esclusi da tried
 campionati = [D]                   ← min(1 fallimento, 2 disponibili) = 1 sostituto
 
 D → successo    sent_count += 1
 ```
 
-Il costo totale è **al massimo una HTTP call extra per round**, emessa solo in presenza di fallimenti reali (non drop simulati, che sono intenzionali). Se anche i sostituti falliscono non c'è un secondo livello di re-query: il round prosegue con i push riusciti. Il log di fine Fase C riporta `failed=N, retried=M` per osservabilità diretta. Il meccanismo copre il caso più comune (crash con deregistrazione pulita via `finally` o signal handler); il caso di hard crash SIGKILL è documentato come known limitation in Sezione 8.4.
+Il costo totale è **al massimo una HTTP call extra per round**, emessa solo in presenza di fallimenti reali (non drop simulati, che sono intenzionali). Il refresh aggiorna `peer_cache` in place: i round successivi useranno la lista fresca. Se anche i sostituti falliscono non c'è un secondo livello di refresh: il round prosegue con i push riusciti. Il log di fine Fase C riporta `failed=N, retried=M` per osservabilità diretta. Il meccanismo copre il caso più comune (crash con deregistrazione pulita via `finally` o signal handler); i casi di hard crash SIGKILL e crash ungraceful sono documentati come known limitation in Sezioni 8.4 e 8.6.
 
 **Snapshot unico dei pesi.** Il modello viene snapshotted una volta — `weights_snapshot = model.state_dict()` — prima del loop sui target. Tutti i vicini ricevono la stessa versione del modello. Questo evita che modifiche al modello durante l'invio (impossibili in questo design, ma buona pratica) producano incoerenze.
 
@@ -1229,7 +1229,7 @@ rm -f data/femnist/worker_*/metrics.csv \
 #   Qualsiasi modifica a config.yaml o a file .py → sempre --build
 #   (config.yaml è copiato nell'immagine durante il build, non montato)
 #   Stesso codice e stessa config → --build è opzionale (l'immagine esistente è riusata)
-#   Cambio di num_workers o use_test_set → ri-eseguire anche split_dataset.py
+#   Cambio di num_workers o local_test_set → ri-eseguire anche split_dataset.py
 #   e generate_compose.py prima del --build
 docker compose up --build
 
@@ -1283,7 +1283,7 @@ La configurazione migliore trovata sul 5% viene rieseguita su `--sf 1.0` per ver
 Se si vuole una stima non influenzata dalle decisioni di early stopping:
 
 ```bash
-# Imposta use_test_set: true in config.yaml
+# Imposta local_test_set: true in config.yaml
 python scripts/download_femnist.py             # re-download necessario (--tf diverso)
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
@@ -1292,7 +1292,7 @@ python scripts/save_experiment.py best_config_with_test
 # → riporta val_accuracy (early stopping) + test_accuracy (stima onesta)
 ```
 
-**Nota importante sul confronto tra Run A e Run B.** La Run B con `use_test_set: true` allena il modello su **80% dei dati** invece del 90% della Run A. Questo significa che la `test_accuracy` di Run B sarà probabilmente leggermente più bassa della `val_accuracy` di Run A per due motivi sovrapposti: (1) meno dati di training, effetto reale e non eliminabile; (2) assenza del bias ottimistico, che è quello che si vuole misurare. Non è possibile separare i due contributi con precisione.
+**Nota importante sul confronto tra Run A e Run B.** La Run B con `local_test_set: true` allena il modello su **80% dei dati** invece del 90% della Run A. Questo significa che la `test_accuracy` di Run B sarà probabilmente leggermente più bassa della `val_accuracy` di Run A per due motivi sovrapposti: (1) meno dati di training, effetto reale e non eliminabile; (2) assenza del bias ottimistico, che è quello che si vuole misurare. Non è possibile separare i due contributi con precisione.
 
 Ciò che Run B garantisce comunque: la `test_accuracy` è una stima onesta della generalizzazione di quella specifica configurazione con 80% di training data. Se la differenza con la `val_accuracy` di Run A è piccola, il bias era trascurabile; se è grande, parte della differenza è bias e parte è l'effetto del training set più piccolo. Per l'obiettivo di questo progetto — validare la convergenza del sistema FL, non pubblicare un benchmark ML — questa ambiguità è accettabile.
 
@@ -1530,7 +1530,7 @@ Fase 2 — Scalabilità  [2 run]
   └── Obiettivo: scegliere la configurazione complessiva (lr, H, N, fanout) migliore
 
 Fase 3 — Valutazione Onesta con Test Set  [1 run]
-  └── Esp. 3: config migliore da Fase 2, use_test_set=true (80/10/10)
+  └── Esp. 3: config migliore da Fase 2, local_test_set=true (80/10/10)
   └── Obiettivo: stima non biased della generalizzazione
 
 Fase 4 — Fault Injection  [1 run]
@@ -1667,7 +1667,7 @@ docker compose down
 **Prerequisito:** questo esperimento richiede il re-download del dataset con `--tf 0.8` (split 80/10/10 invece di 90/10). Senza re-download il partizionamento sarebbe silenziosamente errato (Sezione 11.3).
 
 ```bash
-# 1. Aggiornare config.yaml: use_test_set: true + configurazione ottimale da Esp. 3+4
+# 1. Aggiornare config.yaml: local_test_set: true + configurazione ottimale da Esp. 3+4
 # 2. Re-download obbligatorio (--tf cambia)
 python scripts/download_femnist.py
 python scripts/split_dataset.py
@@ -1843,7 +1843,7 @@ except grpc.RpcError as e:
     return False
 ```
 
-Il training loop prosegue verso i vicini successivi: il crash di un nodo non interrompe il round degli altri.
+Il training loop prosegue verso i vicini successivi: il crash di un nodo non interrompe il round degli altri. La presenza di `failed_targets` non vuota trigghera il refresh della cache locale (`peer_cache = fetch_peers(registry_url)`): se il crash era graceful il nodo è già deregistrato e la lista fresca non lo contiene più; se il crash era ungraceful il nodo potrebbe ancora comparire nel registry — questo caso è documentato come limitazione nota in Sezione 8.6.
 
 ### 8.3 gRPC Timeout
 
@@ -1904,9 +1904,9 @@ Entrambi chiamano `sys.exit(0)`, che solleva `SystemExit` e attraversa il blocco
 Se il container viene terminato con `docker kill` o dall'OOM killer del kernel, il processo riceve SIGKILL e termina istantaneamente senza eseguire alcun codice Python. In questo caso:
 - Il worker rimane nel registry fino al successivo riavvio (entry stale)
 - Gli altri worker continueranno a tentare push verso di esso, ricevendo `UNAVAILABLE`
-- Il meccanismo di re-query reattivo (Sezione 4.2) attiva automaticamente la ricerca di peer sostitutivi
+- Il meccanismo di refresh della cache (Sezione 4.2) attiva automaticamente la ricerca di peer sostitutivi
 
-Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel registry: i worker inviano periodicamente un segnale di vita, e il registry rimuove automaticamente chi non si fa vivo da T secondi. Questo è il pattern adottato in protocolli di membership production-grade come SWIM. Per il perimetro di questo progetto, dove i crash SIGKILL non fanno parte del modello di fault injection, il meccanismo di re-query reattivo costituisce una mitigazione sufficiente.
+Una soluzione completa richiederebbe un meccanismo di **heartbeat con TTL** nel registry: i worker inviano periodicamente un segnale di vita, e il registry rimuove automaticamente chi non si fa vivo da T secondi. Questo è il pattern adottato in protocolli di membership production-grade come SWIM. L'heartbeat è documentato come known limitation in Sezione 8.6; per il perimetro di questo progetto, dove i crash SIGKILL non fanno parte del modello di fault injection, il meccanismo di refresh della cache costituisce una mitigazione sufficiente.
 
 #### Comportamento del sistema alla perdita di un worker
 
@@ -1923,7 +1923,7 @@ La tabella seguente riassume tutti gli scenari di terminazione e il loro impatto
 
 **Degradazione graduale, non catastrofica.** Con 3 worker e `gossip_fanout=2`, la perdita di uno riduce il fanout disponibile a 1 — ogni worker ha un solo peer a cui inviare. La convergenza rallenta ma il training prosegue. Con 2 worker rimasti, ogni worker riceve aggiornamenti da 1 vicino per round invece che da 2: le aggregazioni sono meno ricche ma il sistema non si ferma. Questo comportamento di *graceful degradation* è una proprietà fondamentale dell'architettura P2P — non esiste un coordinatore centrale la cui perdita blocchi l'intero sistema.
 
-**Caso SIGKILL: costo per round.** Se un worker muore senza deregistrarsi, ogni round gli altri worker sprecano `grpc_timeout_seconds` (5s) tentando di raggiungerlo. Con 3 worker e `gossip_fanout=2`, se uno è morto via SIGKILL: ogni round i due superstiti tentano il push, uno fallisce con timeout dopo 5s, attiva il re-query reattivo, ottiene la stessa lista stale, probabilmente fallisce di nuovo. Il costo è ~10s extra per round per worker — non bloccante ma rilevante. La soluzione completa (heartbeat con TTL nel registry) è documentata come known limitation; per il modello di fault injection di questo progetto, dove i crash avvengono via `sys.exit(1)` con deregistrazione pulita, il caso SIGKILL non è nel perimetro degli esperimenti.
+**Caso SIGKILL: costo per round.** Se un worker muore senza deregistrarsi, ogni round gli altri worker sprecano `grpc_timeout_seconds` (5s) tentando di raggiungerlo. Con 3 worker e `gossip_fanout=2`, se uno è morto via SIGKILL: ogni round i due superstiti tentano il push, uno fallisce con timeout dopo 5s, attiva il refresh della cache, ottiene la stessa lista stale, probabilmente fallisce di nuovo. Il costo è ~10s extra per round per worker — non bloccante ma rilevante. La soluzione completa (heartbeat con TTL nel registry) è documentata come known limitation in Sezione 8.6; per il modello di fault injection di questo progetto, dove i crash avvengono via `sys.exit(1)` con deregistrazione pulita, il caso SIGKILL non è nel perimetro degli esperimenti.
 
 ### 8.5 Semantiche di Consegna dei Messaggi
 
@@ -1985,7 +1985,7 @@ else:
     failed_targets.append(target)
 ```
 
-Il meccanismo di re-query reattivo (Sezione 4.2) cerca un **peer sostitutivo**, non riprova lo stesso destinatario. La semantica è **at-most-once per peer**.
+Il meccanismo di refresh della cache (Sezione 4.2) cerca un **peer sostitutivo**, non riprova lo stesso destinatario. La semantica è **at-most-once per peer**.
 
 Il caso limite che giustifica questo nome è il seguente: il server riceve il messaggio, lo accumula correttamente, poi la connessione TCP cade prima che l'`Ack` raggiunga il sender. Il sender riceve `RpcError` e marca la consegna come fallita — ma il messaggio era già stato processato. Senza retry, il messaggio risulta consegnato zero volte dal punto di vista del sender ma una volta dal punto di vista del receiver. Questo è esattamente at-most-once: il sender non riprova, quindi il messaggio è processato **al più una volta** (zero in caso di errore, uno in caso di successo). Per garantire almeno-una-volta servirebbe un retry, ma come discusso nella sezione "Cosa richiederebbe exactly-once", questo introdurrebbe duplicati senza deduplicazione.
 
@@ -2032,7 +2032,7 @@ def deregister_worker(registry_url: str, worker_id: str):
         pass  # non-critical
 ```
 
-La deregistrazione è best-effort: se fallisce, il registry mantiene un'entry stale fino al prossimo riavvio. Gli altri worker riceveranno `UNAVAILABLE` dal gRPC e il meccanismo di re-query reattivo (Sezione 4.2) troverà peer alternativi. Non giustifica un retry perché l'effetto di un fallimento è limitato e temporaneo.
+La deregistrazione è best-effort: se fallisce, il registry mantiene un'entry stale fino al prossimo riavvio. Gli altri worker riceveranno `UNAVAILABLE` dal gRPC e il meccanismo di refresh della cache (Sezione 4.2) troverà peer alternativi. Non giustifica un retry perché l'effetto di un fallimento è limitato e temporaneo.
 
 #### Perché at-most-once è la scelta corretta per il gossip push
 
@@ -2076,6 +2076,16 @@ Con i valori sperimentali usati in Esp. 1 ($N=5$, $k=3$): $P = (1/4)^4 \approx 0
 Questo significa che **gli esperimenti di scalabilità con fanout basso** (Esp. 2a: $N=3$, fanout=1) espongono naturalmente questo effetto: alcuni worker riceveranno aggiornamenti molto meno frequentemente degli altri, specializzandosi sulla propria partizione locale. La metrica `avg_neighbors_aggregated` in `summary.txt` lo quantifica direttamente: valori bassi indicano worker che hanno operato in semi-isolamento per molti round.
 
 Non è stato implementato un meccanismo correttivo (push-pull, adaptive fanout, o in-degree tracking) perché il progetto mira a studiare e misurare questo trade-off — non a eliminarlo. La variazione del fanout negli esperimenti è precisamente il mezzo per osservarne l'impatto sulla convergenza.
+
+#### Ungraceful crash e assenza di heartbeat
+
+Se un worker termina senza eseguire `deregister_worker()` — tipicamente per `SIGKILL`, OOM killer, o crash del demone Docker — il registry non viene notificato e continua a listare l'indirizzo del nodo non più raggiungibile. Gli altri worker, alla prima call gRPC fallita verso quel peer, aggiornano `peer_cache` tramite `GET /peers`, ma il refresh restituisce ancora l'indirizzo del nodo crashato: il registry non sa che è morto.
+
+Il meccanismo standard per rilevare crash ungraceful è un **heartbeat**: ogni worker invia periodicamente un segnale di liveness al registry, che rimuove i worker che non lo inviano entro un TTL configurato. Questa funzionalità è **intenzionalmente assente**: il progetto ha come vincolo esplicito la minimizzazione del traffico di rete, e un heartbeat genererebbe $N \times f$ chiamate HTTP aggiuntive per minuto (con $f$ = frequenza del battito), a fronte di un caso d'uso — il crash ungraceful — che è fuori dal perimetro sperimentale.
+
+**Impatto pratico.** In uno scenario di crash ungraceful, gli altri worker sprecano uno slot di gossip ogni round in cui estraggono il peer morto dalla cache: il gRPC fallisce, la cache viene aggiornata (ma il peer morto ricompare), si tenta un sostituto disponibile. Il training prosegue normalmente con i restanti worker. Il costo netto è una call gRPC fallita più una HTTP call per round verso il registry, per tutta la durata del training.
+
+**Soluzione a minimo impatto, se necessario.** L'approccio meno invasivo è un re-register periodico sull'endpoint `/register` esistente (TTL implicito): ogni worker ri-chiama `POST /register` ogni $T$ secondi; il registry rimuove i worker il cui ultimo timestamp supera il TTL. Con $T=30\,\text{s}$ e $N=4$ worker, il traffico aggiuntivo è 8 call HTTP/minuto — basso ma non nullo. Questo approccio non richiede un nuovo endpoint né un thread di monitoring nel registry.
 
 ---
 
@@ -2530,7 +2540,7 @@ Editare `config.yaml`:
 
 ```bash
 # Eseguito sulla macchina locale — scarica FEMNIST da LEAF (~900 MB immagini)
-# e produce data/femnist/data/train/*.json e data/femnist/data/test/*.json
+# e produce data/femnist/data/train/*.json e data/femnist/data/val/*.json
 python scripts/download_femnist.py
 # Con --sf 0.05 per verifiche rapide di installazione (non per risultati da riportare)
 ```
@@ -2567,13 +2577,13 @@ La campagna sperimentale si articola in **tre fasi annidate**. La tabella seguen
 |---|:---:|:---:|:---:|
 | Solo parametri ML (`lr`, `H`, `fanout`, `batch_size`, ecc.) | no | no | no |
 | `num_workers` | no | **sì** | **sì** |
-| `use_test_set` | **sì** | **sì** | **sì** |
+| `local_test_set` | **sì** | **sì** | **sì** |
 
 > **Multi-instance EC2**: ogni variazione di `num_workers` richiede anche `aws_deploy.py destroy` → `provision` per ricreare le istanze nel numero corretto prima di `deploy`.
 
 ---
 
-**Fase 1 — Ricerca iperparametri** (`num_workers` fisso, es. 3; `use_test_set: false`)
+**Fase 1 — Ricerca iperparametri** (`num_workers` fisso, es. 3; `local_test_set: false`)
 
 Ripetere per ogni combinazione di iperparametri (griglia su `lr`, `gossip_fanout`, `inner_steps_H`, ecc.):
 
@@ -2593,7 +2603,7 @@ Ripetere per ogni combinazione di iperparametri (griglia su `lr`, `gossip_fanout
 
 ---
 
-**Fase 2 — Studio di scalabilità** (config ottimale; `num_workers` varia 3 → 5 → 8; `use_test_set: false`)
+**Fase 2 — Studio di scalabilità** (config ottimale; `num_workers` varia 3 → 5 → 8; `local_test_set: false`)
 
 Una volta individuata la configurazione migliore dalla Fase 1, ripetere per ciascun valore di `num_workers`:
 
@@ -2618,7 +2628,7 @@ Il test set è tenuto fuori da ogni decisione di training e hyperparameter selec
 
 | Passo | Chi | Dove | Locale / Singola EC2 | Multi-instance EC2 |
 |---|---|---|---|---|
-| 1. Abilita test set | Operatore | locale | `config.yaml`: `use_test_set: true` | identico |
+| 1. Abilita test set | Operatore | locale | `config.yaml`: `local_test_set: true` | identico |
 | 2. Re-download | Operatore | locale | `python scripts/download_femnist.py` *(cambia `--tf` LEAF: 0.9 → 0.8)* | identico |
 | 3. Re-partiziona | Operatore | locale | `python scripts/split_dataset.py` | identico |
 | 4. Rigenera compose | Operatore | locale | `python scripts/generate_compose.py` | identico |
@@ -2660,7 +2670,7 @@ data/femnist/worker_0/metrics.csv
 data/femnist/worker_1/metrics.csv
 ...
 data/femnist/worker_0/model_final.pt   ← snapshot finale dei pesi (solo per weight divergence)
-data/femnist/worker_0/test_result.json ← solo se use_test_set: true
+data/femnist/worker_0/test_result.json ← solo se local_test_set: true
 ```
 
 **Raccolta e analisi metriche:**
@@ -2907,7 +2917,7 @@ python scripts/save_experiment.py <nome>
 | **Per-worker summary** | accuracy finale e migliore, total training time (somma `round_duration_s`), breakdown medio per fase, latenza gRPC media |
 | **System convergence** | per ogni worker: *converged at round X* oppure *hit round limit* + wall-clock reale dal timestamp; poi: verdetto del sistema (*YES — all workers converged* o *PARTIAL*) e wall-clock totale del sistema (dal primo worker start all'ultimo worker end) |
 | **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker (se i `model_final.pt` sono presenti) |
-| **Test set results** | `test_accuracy` per worker, solo se `use_test_set: true` |
+| **Test set results** | `test_accuracy` per worker, solo se `local_test_set: true` |
 
 `global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
 
@@ -2915,27 +2925,27 @@ python scripts/save_experiment.py <nome>
 
 ### Confronto tra approccio 90/10 e 80/10/10
 
-Per quantificare il bias ottimistico introdotto dall'assenza di un test set separato, eseguire due run con la stessa configurazione di iperparametri cambiando solo `use_test_set`:
+Per quantificare il bias ottimistico introdotto dall'assenza di un test set separato, eseguire due run con la stessa configurazione di iperparametri cambiando solo `local_test_set`:
 
 ```bash
 # Run A — solo val (approccio di default)
-# config.yaml: use_test_set: false
+# config.yaml: local_test_set: false
 python scripts/download_femnist.py   # dataset completo
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy
 
 # Run B — con test set indipendente
-# config.yaml: use_test_set: true
+# config.yaml: local_test_set: true
 python scripts/download_femnist.py   # re-download necessario — vedi nota sotto
 python scripts/split_dataset.py && python scripts/generate_compose.py
 docker compose up --build
 python scripts/aggregate_metrics.py  # riporta val_accuracy + test_accuracy
 ```
 
-**Perché il re-download è obbligatorio quando si cambia `use_test_set`.** Il rapporto train/test non è un parametro di `split_dataset.py` ma di LEAF stesso: `download_femnist.py` invoca lo script LEAF con `--tf 0.9` (con `use_test_set: false`) o `--tf 0.8` (con `use_test_set: true`), e LEAF bake il rapporto dentro i file JSON prodotti — ogni writer ha già le proprie immagini pre-assegnate a `train/` o `test/` nel momento in cui i JSON vengono scritti su disco. Con `--tf 0.9`, la cartella `data/femnist/data/test/` contiene esattamente il 10% dei campioni di ogni writer; con `--tf 0.8`, ne contiene il 20%. `split_dataset.py` con `use_test_set: true` divide questa seconda cartella al 50/50 per scrittore per ottenere 10% val + 10% test. Se si cambia `use_test_set` senza re-download, `split_dataset.py` opererebbe su una cartella `test/` costruita con il rapporto sbagliato: i JSON su disco non rifletterebbero la proporzione richiesta, e il risultato sarebbe silenziosamente errato (es. 5% val + 5% test invece di 10% + 10%).
+**Perché il re-download è obbligatorio quando si cambia `local_test_set`.** Il rapporto train/val non è un parametro di `split_dataset.py` ma di LEAF stesso: `download_femnist.py` invoca lo script LEAF con `--tf 0.9` (con `local_test_set: false`) o `--tf 0.8` (con `local_test_set: true`), e LEAF bake il rapporto dentro i file JSON prodotti — ogni writer ha già le proprie immagini pre-assegnate a `train/` o `test/` nel momento in cui i JSON vengono scritti su disco. `download_femnist.py` copia poi `test/` come `val/` in `data/femnist/data/`. Con `--tf 0.9`, `data/femnist/data/val/` contiene esattamente il 10% dei campioni di ogni writer; con `--tf 0.8`, ne contiene il 20%. `split_dataset.py` con `local_test_set: true` divide questa seconda cartella al 50/50 per scrittore per ottenere 10% val + 10% local\_test. Se si cambia `local_test_set` senza re-download, `split_dataset.py` opererebbe su una cartella `val/` costruita con il rapporto sbagliato: i JSON su disco non rifletterebbero la proporzione richiesta, e il risultato sarebbe silenziosamente errato (es. 5% val + 5% local\_test invece di 10% + 10%).
 
-**Motivazione ML.** Il re-download non è solo un dettaglio implementativo: riflette un principio fondamentale della valutazione in ML. Con `use_test_set: false` il sistema usa lo stesso 10% di LEAF per due scopi distinti — early stopping round per round e confronto finale tra configurazioni — introducendo un doppio bias ottimistico. Aggiungere un test set separato richiede necessariamente di sottrarre dati al training (da 90% a 80%): non esiste un modo per avere un test set indipendente senza ridurre i dati di addestramento, perché i campioni totali sono fissi. Il trade-off è inevitabile: più dati al training → metriche finali più ottimistiche (bias non eliminato); meno dati al training → metriche finali più oneste ma modello potenzialmente meno capace. Il re-download rende questo trade-off esplicito e controllato, invece di lasciarlo implicito nella scelta di `use_test_set`.
+**Motivazione ML.** Il re-download non è solo un dettaglio implementativo: riflette un principio fondamentale della valutazione in ML. Con `local_test_set: false` il sistema usa lo stesso 10% di LEAF per due scopi distinti — early stopping round per round e confronto finale tra configurazioni — introducendo un doppio bias ottimistico. Aggiungere un test set separato richiede necessariamente di sottrarre dati al training (da 90% a 80%): non esiste un modo per avere un test set indipendente senza ridurre i dati di addestramento, perché i campioni totali sono fissi. Il trade-off è inevitabile: più dati al training → metriche finali più ottimistiche (bias non eliminato); meno dati al training → metriche finali più oneste ma modello potenzialmente meno capace. Il re-download rende questo trade-off esplicito e controllato, invece di lasciarlo implicito nella scelta di `local_test_set`.
 
 La differenza tra `val_accuracy` (Run A) e `test_accuracy` (Run B) è indicativa del bias ottimistico, ma non lo misura con precisione: Run B allena su **80% dei dati** invece del 90% di Run A, quindi la `test_accuracy` sarà probabilmente più bassa per due motivi sovrapposti — meno dati di training (effetto reale) e assenza del bias ottimistico (effetto che si vuole isolare). I due contributi non sono separabili. Ciò che Run B garantisce è che la `test_accuracy` è una stima onesta della generalizzazione di quella configurazione su dati mai visti in nessuna decisione di training.
 
@@ -3149,7 +3159,7 @@ La tabella distingue i parametri fissi (identici in tutti i run) da quelli esplo
 | `num_workers` | **3**, 5, 8 | 3 | 3 |
 | `drop_probability` | **0.0**, 0.2, 0.5 | 0.0 | 4 |
 | `crash_probability` | **0.0**, 0.05 | 0.0 | 4 |
-| `use_test_set` | false, **true** | false | 5 |
+| `local_test_set` | false, **true** | false | 5 |
 | `learning_rate` *(opz.)* | **0.001**, 0.0001 | 0.001 | — |
 
 ### 13.2 Struttura degli Esperimenti: Pseudocodice
@@ -3199,7 +3209,7 @@ run C1: N=3, fanout=best_fanout, H=best_H, crash_probability=0.05
 # ── FASE 5 — Valutazione finale unbiased ─────────────────────────────────────
 # Prerequisito: download_femnist.py (flag --tf diverso a LEAF) + split_dataset.py.
 # Dipende da: tutti i run precedenti (usa la config migliore trovata).
-run T0: N=3, gossip=True, fanout=best_fanout, H=best_H, use_test_set=True
+run T0: N=3, gossip=True, fanout=best_fanout, H=best_H, local_test_set=True
 
 # ── OPZIONALE — Tuning learning rate ─────────────────────────────────────────
 # Indipendente: si può fare in qualsiasi momento nel Blocco A.
@@ -3220,7 +3230,7 @@ run L1: N=3, gossip=True, fanout=1, H=500, lr=0.0001
 | D1 | `fault_drop20` | `drop_probability` | 0.2 | F1, H1, H2 | no |
 | D2 | `fault_drop50` | `drop_probability` | 0.5 | F1, H1, H2 | no |
 | C1 | `fault_crash5` | `crash_probability` | 0.05 | F1, H1, H2 | no |
-| T0 | `final_test_eval` | `use_test_set` | true | tutti | **sì** |
+| T0 | `final_test_eval` | `local_test_set` | true | tutti | **sì** |
 | L1 | `lr_1e4` *(opz.)* | `learning_rate` | 0.0001 | — | no |
 
 *I run con "Risplit? = sì" richiedono di aggiornare `config.yaml` e rieseguire `split_dataset.py` + `generate_compose.py` prima del `docker compose up`.*
@@ -3249,7 +3259,7 @@ run L1: N=3, gossip=True, fanout=1, H=500, lr=0.0001
                     │  tutti i run completati
                     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  BLOCCO D — valutazione finale (risplit con use_test_set)   │
+│  BLOCCO D — valutazione finale (risplit con local_test_set)   │
 │                                                             │
 │  T0                                                         │
 └─────────────────────────────────────────────────────────────┘
