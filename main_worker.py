@@ -23,7 +23,7 @@ import requests
 import torch
 import yaml
 
-from core.dataset import load_partition
+from core.dataset import load_global_test, load_partition
 from core.metrics import MetricsWriter
 from core.model import FEMNISTModel
 from core.trainer import train_step, validate
@@ -145,14 +145,19 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Starting on {my_address} | device={device} | total_workers={total_workers}")
 
+    global_test_dir = ml_cfg.get("global_test_dir", "/app/data/femnist/global_test")
+
     # --- Dataset: load this worker's pre-split partition ---
-    train_loader, val_loader, test_loader, local_samples = load_partition(data_dir, batch_size)
+    train_loader, val_loader, local_test_loader, local_samples = load_partition(data_dir, batch_size)
     # local_samples: number of training examples owned by THIS worker.
     # Kept constant for the entire run; used to weight our contribution in FedAvg.
-    if test_loader is not None:
-        logger.info(f"Loaded {local_samples} local training samples (80/10/10 mode — test set available)")
-    else:
-        logger.info(f"Loaded {local_samples} local training samples (90/10 mode — no test set)")
+    mode = "80/10/10 train/val/local_test" if local_test_loader is not None else "90/10 train/val"
+    logger.info(f"Loaded {local_samples} local training samples ({mode})")
+
+    # --- Global test set: shared across all workers, never in any worker's partition ---
+    global_test_loader = load_global_test(global_test_dir, batch_size)
+    if global_test_loader is not None:
+        logger.info(f"Global test set loaded from {global_test_dir} ({len(global_test_loader.dataset)} samples)")
 
     # --- Model and optimizer ---
     model = FEMNISTModel(dropout_conv=dropout_conv, dropout_fc=dropout_fc).to(device)
@@ -245,11 +250,24 @@ def main():
             # Validate after aggregation to track convergence for early stopping
             val_loss, val_acc = validate(model, val_loader, device)
             logger.info(f"Validation — loss={val_loss:.4f}, accuracy={val_acc:.2%}")
+
+            # Global test: forward pass only, no gradient, no influence on training
+            global_test_acc: float | None = None
+            if global_test_loader is not None:
+                _, global_test_acc = validate(model, global_test_loader, device)
+                logger.info(f"Global test — accuracy={global_test_acc:.2%}")
+
             phase_a_s = time.time() - t_phase_a
 
             if val_loss < best_val_loss - 1e-4:
                 best_val_loss = val_loss
                 patience_counter = 0
+                best_path = os.path.join(data_dir, "model_best.pt")
+                try:
+                    torch.save(model.state_dict(), best_path)
+                    logger.info(f"Best model saved → {best_path} (val_loss={val_loss:.4f})")
+                except Exception as exc:
+                    logger.warning(f"Could not save best model: {exc}")
             else:
                 patience_counter += 1
                 logger.info(f"Early stopping patience: {patience_counter}/{patience}")
@@ -380,6 +398,7 @@ def main():
                     grpc_mean_latency_s=grpc_mean_latency_s,
                     neighbors_aggregated=neighbors_aggregated,
                     peers_contacted=sent_count,
+                    global_test_accuracy=global_test_acc,
                 )
 
     finally:
@@ -397,20 +416,21 @@ def main():
         # sys.exit(0) by the signal handlers above. Only SIGKILL bypasses this block.
         deregister_worker(registry_url, worker_id)
 
-    # Final test set evaluation — run once after training, never used for any
-    # training decision (not early stopping, not hyperparameter selection).
-    # Only present when use_test_set: true in config.yaml (80/10/10 mode).
-    if test_loader is not None:
-        test_loss, test_acc = validate(model, test_loader, device)
-        logger.info(f"Test set evaluation — loss={test_loss:.4f}, accuracy={test_acc:.2%}")
-        result_path = os.path.join(data_dir, "test_result.json")
+    # Local test set evaluation — run once after training, never for any training decision.
+    # Only present when local_test_set: true in config.yaml (80/10/10 per-worker mode).
+    # Measures generalisation on the same writers this worker trained on, but on samples
+    # held out from gradient updates entirely.
+    if local_test_loader is not None:
+        local_test_loss, local_test_acc = validate(model, local_test_loader, device)
+        logger.info(f"Local test set — loss={local_test_loss:.4f}, accuracy={local_test_acc:.2%}")
+        result_path = os.path.join(data_dir, "local_test_result.json")
         with open(result_path, "w") as f:
             json.dump({
                 "worker_id": worker_id,
-                "test_loss": round(test_loss, 6),
-                "test_accuracy": round(test_acc, 6),
+                "local_test_loss": round(local_test_loss, 6),
+                "local_test_accuracy": round(local_test_acc, 6),
             }, f)
-        logger.info(f"Test result saved → {result_path}")
+        logger.info(f"Local test result saved → {result_path}")
 
     # Give in-flight RPCs up to 10 s to complete (covers peers that fetched our
     # address just before we deregistered), then exit. After deregistration no

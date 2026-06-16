@@ -20,6 +20,7 @@ FIELDS = [
     "train_loss_avg",
     "val_loss",
     "val_accuracy",
+    "global_test_accuracy",  # accuracy on shared global test set (empty if global_test_set: false)
     "round_duration_s",
     "phase_a_s",             # FedAvg aggregation + validation (Phase A)
     "phase_b_s",             # local training for H steps (Phase B)
@@ -36,7 +37,6 @@ class MetricsWriter:
     def __init__(self, output_path: str, worker_id: str):
         self.path = output_path
         self.worker_id = worker_id
-        # Write header only if the file does not already exist (supports resume).
         if not os.path.exists(output_path):
             with open(output_path, "w", newline="") as f:
                 csv.DictWriter(f, fieldnames=FIELDS).writeheader()
@@ -54,6 +54,7 @@ class MetricsWriter:
         grpc_mean_latency_s: float,
         neighbors_aggregated: int,
         peers_contacted: int,
+        global_test_accuracy: float | None = None,
     ) -> None:
         row = {
             "worker_id": self.worker_id,
@@ -62,6 +63,7 @@ class MetricsWriter:
             "train_loss_avg": round(train_loss_avg, 6),
             "val_loss": round(val_loss, 6),
             "val_accuracy": round(val_accuracy, 6),
+            "global_test_accuracy": round(global_test_accuracy, 6) if global_test_accuracy is not None else "",
             "round_duration_s": round(round_duration_s, 3),
             "phase_a_s": round(phase_a_s, 4),
             "phase_b_s": round(phase_b_s, 4),

@@ -40,7 +40,7 @@ import statistics
 import yaml
 
 
-def _plot_results(global_rows, worker_rows, data_root, has_timing):
+def _plot_results(global_rows, worker_rows, data_root, has_timing, has_global_test=False):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -126,6 +126,41 @@ def _plot_results(global_rows, worker_rows, data_root, has_timing):
         plt.close(fig)
         print(f"Plot saved: {path}")
 
+    # --- global test accuracy over rounds (functional convergence) ---
+    if has_global_test:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        gt_rounds = [r["round"] for r in global_rows if r.get("mean_global_test_accuracy") is not None]
+        gt_means = [r["mean_global_test_accuracy"] for r in global_rows if r.get("mean_global_test_accuracy") is not None]
+        gt_stds = [r.get("std_global_test_accuracy", 0.0) for r in global_rows if r.get("mean_global_test_accuracy") is not None]
+
+        if gt_rounds:
+            ax.plot(gt_rounds, gt_means, label="mean global test accuracy", linewidth=2, color="darkorange")
+            ax.fill_between(
+                gt_rounds,
+                [m - s for m, s in zip(gt_means, gt_stds)],
+                [m + s for m, s in zip(gt_means, gt_stds)],
+                alpha=0.2, color="darkorange", label="±1 std",
+            )
+
+        for wid, rows in sorted(worker_rows.items()):
+            rows_s = sorted(rows, key=lambda r: int(r["round"]))
+            wgt_rounds = [int(r["round"]) for r in rows_s if r.get("global_test_accuracy", "") != ""]
+            wgt_accs = [float(r["global_test_accuracy"]) for r in rows_s if r.get("global_test_accuracy", "") != ""]
+            if wgt_rounds:
+                ax.plot(wgt_rounds, wgt_accs, alpha=0.55, linestyle="--", label=f"worker {wid}")
+
+        ax.set_xlabel("Round")
+        ax.set_ylabel("Global Test Accuracy")
+        ax.set_title("Functional Convergence — Global Test Accuracy over Rounds\n"
+                     "(writers never seen by any worker — same set for all workers)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        path = os.path.join(data_root, "global_test_accuracy.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Plot saved: {path}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -182,8 +217,12 @@ def main():
         r = int(row["round"])
         rounds.setdefault(r, []).append(row)
 
-    # Detect whether timing columns are present (absent in CSV files from older runs)
+    # Detect optional columns (absent in CSV files from older runs or disabled flags)
     has_timing = "phase_a_s" in (all_rows[0] if all_rows else {})
+    has_global_test = (
+        "global_test_accuracy" in (all_rows[0] if all_rows else {})
+        and any(r.get("global_test_accuracy", "") != "" for r in all_rows)
+    )
 
     # ---------------------------------------------------------------------------
     # Per-round global statistics
@@ -219,6 +258,15 @@ def main():
             "mean_val_loss": round(mean_loss, 6),
             "workers_reporting": n_workers,
         }
+
+        if has_global_test:
+            gt_accs = [float(e["global_test_accuracy"]) for e in entries
+                       if e.get("global_test_accuracy", "") != ""]
+            if gt_accs:
+                mean_gt = statistics.mean(gt_accs)
+                std_gt = statistics.stdev(gt_accs) if len(gt_accs) > 1 else 0.0
+                row_data["mean_global_test_accuracy"] = round(mean_gt, 6)
+                row_data["std_global_test_accuracy"] = round(std_gt, 6)
 
         if has_timing:
             mean_pa = statistics.mean(float(e.get("phase_a_s", 0)) for e in entries)
@@ -259,10 +307,12 @@ def main():
     print("-" * 75)
 
     summary_lines = []
+    all_best_accs = []
     for wid, rows in sorted(worker_rows.items()):
         rows_sorted = sorted(rows, key=lambda r: int(r["round"]))
         final_acc = float(rows_sorted[-1]["val_accuracy"])
         best_acc = max(float(r["val_accuracy"]) for r in rows_sorted)
+        all_best_accs.append(best_acc)
         avg_peers = statistics.mean(float(r["peers_contacted"]) for r in rows_sorted)
         avg_nbrs = statistics.mean(float(r["neighbors_aggregated"]) for r in rows_sorted)
         n_rounds = len(rows_sorted)
@@ -295,6 +345,12 @@ def main():
             summary_lines.append(timing_line)
 
     print("-" * 75)
+
+    mean_best = statistics.mean(all_best_accs)
+    std_best = statistics.stdev(all_best_accs) if len(all_best_accs) > 1 else 0.0
+    print(f"\n  *** mean_best_val_accuracy = {mean_best:.4f}  (std={std_best:.4f}) ***")
+    print("  Use this metric to compare configurations across runs.")
+    summary_lines.append(f"\nmean_best_val_accuracy = {mean_best:.4f}  std={std_best:.4f}")
     print()
 
     # Communication volume estimate: each sent message ≈ model_size_bytes
@@ -391,6 +447,8 @@ def main():
     global_csv_path = os.path.join(args.data_root, "global_metrics.csv")
     global_fields = ["round", "mean_accuracy", "std_accuracy", "min_accuracy",
                      "max_accuracy", "mean_val_loss", "workers_reporting"]
+    if has_global_test:
+        global_fields += ["mean_global_test_accuracy", "std_global_test_accuracy"]
     if has_timing:
         global_fields += ["mean_phase_a_s", "mean_phase_b_s", "mean_phase_c_s"]
     with open(global_csv_path, "w", newline="") as f:
@@ -402,11 +460,13 @@ def main():
     # ---------------------------------------------------------------------------
     # Weight divergence (requires final checkpoints — optional)
     # ---------------------------------------------------------------------------
-    checkpoint_paths = sorted(glob.glob(
-        os.path.join(args.data_root, "worker_*", "model_final.pt")
-    ))
+    checkpoint_paths = sorted(
+        glob.glob(os.path.join(args.data_root, "worker_*", "model_best.pt"))
+        or glob.glob(os.path.join(args.data_root, "worker_*", "model_final.pt"))
+    )
+    checkpoint_label = "model_best.pt" if "model_best" in (checkpoint_paths[0] if checkpoint_paths else "") else "model_final.pt"
     if len(checkpoint_paths) >= 2:
-        print("\nModel weight divergence (pairwise L2 distance of final weights):")
+        print(f"\nModel weight divergence (pairwise L2 distance — {checkpoint_label}):")
         print("-" * 55)
         try:
             import torch
@@ -443,28 +503,84 @@ def main():
     print()
 
     # ---------------------------------------------------------------------------
-    # Test set results (present only when use_test_set: true in config.yaml)
+    # Global test set convergence analysis (present only when global_test_set: true)
     # ---------------------------------------------------------------------------
-    test_result_paths = sorted(glob.glob(
-        os.path.join(args.data_root, "worker_*", "test_result.json")
+    # The global test set contains writers never assigned to any worker. Evaluating
+    # all workers on the same data at each round reveals functional convergence:
+    # if workers reach the same accuracy on unseen writers, the gossip protocol has
+    # driven them to the same functional solution — not just nearby parameters.
+    # ---------------------------------------------------------------------------
+    if has_global_test:
+        print("Global test set — functional convergence analysis:")
+        print("-" * 65)
+        print("  (writers never seen by any worker — shared evaluation set)")
+        print()
+
+        gt_final: dict[str, float] = {}
+        for wid, rows in sorted(worker_rows.items()):
+            rows_sorted = sorted(rows, key=lambda r: int(r["round"]))
+            gt_vals = [float(r["global_test_accuracy"]) for r in rows_sorted
+                       if r.get("global_test_accuracy", "") != ""]
+            if gt_vals:
+                final_gt = gt_vals[-1]
+                best_gt = max(gt_vals)
+                gt_final[wid] = final_gt
+                line = (f"  Worker {wid:>2}: final_global_test={final_gt:.4f}  "
+                        f"best_global_test={best_gt:.4f}")
+                print(line)
+                summary_lines.append(line)
+
+        if len(gt_final) > 1:
+            vals = list(gt_final.values())
+            mean_gt = statistics.mean(vals)
+            std_gt = statistics.stdev(vals)
+            spread = max(vals) - min(vals)
+            print(f"\n  Mean global test accuracy : {mean_gt:.4f}")
+            print(f"  Std across workers        : {std_gt:.4f}")
+            print(f"  Max spread (max - min)    : {spread:.4f}")
+            print()
+            if spread < 0.02:
+                verdict = "STRONG functional convergence (spread < 2%)"
+            elif spread < 0.05:
+                verdict = "MODERATE functional convergence (spread 2–5%)"
+            else:
+                verdict = "WEAK functional convergence (spread > 5%) — models still diverge"
+            print(f"  Verdict: {verdict}")
+            summary_lines.append(
+                f"\nGlobal test — mean={mean_gt:.4f}, std={std_gt:.4f}, spread={spread:.4f}\n"
+                f"Verdict: {verdict}"
+            )
+        print("-" * 65)
+        print()
+
+    # ---------------------------------------------------------------------------
+    # Local test set results (present only when local_test_set: true in config.yaml)
+    # ---------------------------------------------------------------------------
+    # Local test writers belong to the same worker partition but were held out from
+    # gradient updates. Measures generalisation on the worker's own writer population.
+    # ---------------------------------------------------------------------------
+    local_test_result_paths = sorted(glob.glob(
+        os.path.join(args.data_root, "worker_*", "local_test_result.json")
     ))
-    if test_result_paths:
-        print("Test set results (unbiased — evaluated once after training):")
-        print("-" * 55)
-        test_accs = []
-        for path in test_result_paths:
+    if local_test_result_paths:
+        print("Local test set results (per-worker, evaluated once after training):")
+        print("-" * 65)
+        print("  (writers from the same worker partition, held out from gradient updates)")
+        local_test_accs = []
+        for path in local_test_result_paths:
             with open(path) as f:
                 r = json.load(f)
-            print(f"  Worker {r['worker_id']:>2}: test_accuracy={r['test_accuracy']:.4f}  test_loss={r['test_loss']:.4f}")
-            test_accs.append(r["test_accuracy"])
+            print(f"  Worker {r['worker_id']:>2}: local_test_accuracy={r['local_test_accuracy']:.4f}  "
+                  f"local_test_loss={r['local_test_loss']:.4f}")
+            local_test_accs.append(r["local_test_accuracy"])
             summary_lines.append(
-                f"  Worker {r['worker_id']}: test_accuracy={r['test_accuracy']:.4f}  test_loss={r['test_loss']:.4f}"
+                f"  Worker {r['worker_id']}: local_test_accuracy={r['local_test_accuracy']:.4f}"
             )
-        mean_test = statistics.mean(test_accs)
-        std_test = statistics.stdev(test_accs) if len(test_accs) > 1 else 0.0
-        print(f"\n  Mean test accuracy: {mean_test:.4f}  (std={std_test:.4f})")
-        summary_lines.append(f"\nMean test accuracy: {mean_test:.4f}  std={std_test:.4f}")
-        print("-" * 55)
+        mean_lt = statistics.mean(local_test_accs)
+        std_lt = statistics.stdev(local_test_accs) if len(local_test_accs) > 1 else 0.0
+        print(f"\n  Mean local test accuracy: {mean_lt:.4f}  (std={std_lt:.4f})")
+        summary_lines.append(f"\nMean local test accuracy: {mean_lt:.4f}  std={std_lt:.4f}")
+        print("-" * 65)
         print()
 
     # ---------------------------------------------------------------------------
@@ -481,7 +597,7 @@ def main():
 
     if args.plot:
         print()
-        _plot_results(global_rows, worker_rows, args.data_root, has_timing)
+        _plot_results(global_rows, worker_rows, args.data_root, has_timing, has_global_test)
 
 
 if __name__ == "__main__":
