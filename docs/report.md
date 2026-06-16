@@ -1080,6 +1080,20 @@ In ML centralizzato, l'early stopping nasce per rilevare l'**overfitting**: quan
 
 Nel nostro sistema la stessa meccanica si applica a livello di round: se la val loss locale non migliora di almeno $10^{-4}$ per `early_stopping_patience` round **consecutivi** (non totali — il contatore si azzera ad ogni miglioramento), il worker ferma il proprio training. L'unità temporale è il round invece dell'epoca.
 
+#### Round vs epoca come unità di misura dell'early stopping
+
+In ML centralizzato l'unità naturale è l'**epoca** — un passaggio completo sul dataset di training. Dopo ogni epoca il modello ha visto tutti i campioni una volta, il gradiente medio è stimato sull'intera distribuzione, e la val loss fornisce un segnale stabile e comparabile tra epoche successive.
+
+Nel nostro sistema l'unità naturale è il **round** (Phase A + B + C), non l'epoca. La scelta è motivata da tre ragioni:
+
+1. **Il round è l'unità atomica del sistema FL.** FedAvg, gossip e validazione avvengono a cadenza di round. All'interno di Phase B il modello è in uno stato di specializzazione locale parziale (modello di tipo $M^B$) — non è ancora stato reintegrato nella rete. Misurare la val loss a metà di un Phase B produrrebbe un segnale che riflette la traiettoria locale, non la qualità del modello collaborativo. Il segnale significativo è quello su $M^A$ (dopo FedAvg), che è esattamente ciò che viene misurato.
+
+2. **Le epoche non hanno confini netti nel training loop.** L'iteratore `infinite_batches` attraversa il dataset in modo continuo tra round successivi; il confine di epoca può cadere a metà di un Phase B senza che il training loop se ne accorga. Con Worker 0 (~210k campioni, batch_size=32, H=500) un'epoca completa corrisponde a circa 13 round — non esiste un momento naturale di "fine epoca" tra un round e il successivo. Usare l'epoca come unità di early stopping richiederebbe di tracciare i confini di epoca dentro `infinite_batches` e sincronizzarli con il loop dei round, aggiungendo complessità senza alcun beneficio: ciò che conta è la val loss dopo FedAvg, non il numero di volte che il dataset è stato attraversato.
+
+3. **Il rumore della val loss è più alto per round che per epoca.** In ML classico, la val loss per epoca è relativamente smooth perché il modello aggiorna i pesi gradualmente su tutto il dataset prima di essere valutato. Qui, la FedAvg di Phase A può causare uno spike brusco nella val loss anche quando il sistema sta convergendo — il modello riceve pesi da worker con distribuzioni diverse e impiega qualche round di Phase B per riadattarsi (documentato in Sezione 5.5 al punto 3). Per questo `patience=10` round è una scelta conservativa rispetto ai 3–5 tipici del ML classico: serve più margine per filtrare il rumore post-aggregazione senza fermare prematuramente il training durante una normale fase di recovery.
+
+Questa scelta è **metodologicamente corretta**: l'early stopping per round è lo standard nella letteratura FL (DiLoCo, FedAvg originale, FedProx) perché il round è l'unità in cui il sistema compie un'iterazione completa di training collaborativo — esattamente come l'epoca è l'unità in cui il sistema centralizzato compie un'iterazione completa sul dataset.
+
 #### Differenza semantica rispetto all'early stopping centralizzato
 
 In ML centralizzato, l'early stopping misura la loss sul validation set **globale**: se peggiora, il modello sta overfittando l'intero dataset di training. La decisione è globale e coordinata.
@@ -1334,22 +1348,24 @@ La riga viene scritta **dopo** le fasi A, B e C, incluse le durate di rete. La `
 
 ### 6.3 Aggregazione Globale Post-Esperimento
 
-`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, gli snapshot finali `worker_*/model_final.pt`. Produce:
+`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, i checkpoint `worker_*/model_best.pt` (con fallback su `model_final.pt`). Produce:
 
 **1. Tabella per round** — per ogni round, aggrega le metriche di tutti i worker attivi:
 
 | Colonna | Significato |
 |---|---|
-| `mean_accuracy` | Accuracy media tra tutti i worker — indicatore della qualità del modello globale |
+| `mean_best_val_accuracy` | Media della `best_val_accuracy` per worker — metrica principale per confrontare configurazioni |
 | `std_accuracy` | Deviazione standard dell'accuracy — misura di convergenza tra worker |
 | `min_accuracy` / `max_accuracy` | Worker peggiore/migliore — identifica outlier |
 | `workers_reporting` | Quanti worker erano ancora attivi (non early-stopped) in quel round |
 
 **2. Riassunto per worker** — rounds completati, accuracy finale, accuracy migliore, media di peer contattati, media di vicini aggregati.
 
-**3. Divergenza dei pesi (weight divergence)** — se gli snapshot finali `model_final.pt` sono presenti, lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia.
+**3. Divergenza dei pesi (weight divergence)** — se i checkpoint `model_best.pt` sono presenti (con fallback su `model_final.pt`), lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia.
 
-> **Nota su `model_final.pt`:** non è un checkpoint di ripristino — non salva lo stato dell'optimizer né il round corrente, quindi non permette di riprendere il training. È uno snapshot una-tantum dei pesi del modello salvato nel blocco `finally` alla fine del training (o in caso di terminazione pulita). Il suo unico scopo è questo calcolo di divergenza.
+> **`model_best.pt` vs `model_final.pt`:** `model_best.pt` viene salvato ogni volta che la val loss migliora — è il modello al round con la migliore generalizzazione. `model_final.pt` viene salvato alla fine del training (blocco `finally`) ed è il modello all'ultimo round, potenzialmente leggermente degradato rispetto al picco a causa dei round di patience. Per la divergenza dei pesi si preferisce `model_best.pt` perché rappresenta il modello che si userebbe in produzione. Nessuno dei due è un checkpoint di ripristino (non include stato dell'optimizer né round corrente).
+>
+> **Trade-off spazio/prestazioni.** Salvare `model_best.pt` ad ogni miglioramento introduce scritture su disco aggiuntive durante il training. Con un modello da ~7 MB e tipicamente 10–30 aggiornamenti per run il costo è trascurabile in locale; su EC2 con EBS il costo è ugualmente minimo (~7 MB × N scritture, ampiamente sotto i GB allocati). Il beneficio — avere sempre il modello al picco di qualità disponibile per l'analisi — giustifica abbondantemente il costo. In scenari con modelli molto grandi o storage molto limitato si potrebbe salvare solo `model_final.pt` commentando il blocco di salvataggio in `main_worker.py`.
 
 $$d(w_i, w_j) = \|w_i - w_j\|_2$$
 
@@ -1367,16 +1383,20 @@ L'accuracy finale e la sua varianza tra worker rispondono a questa domanda — c
 
 > **Limitazione: val set eterogenei tra worker.** Ogni worker valida sul proprio val set locale, che proviene dalla sua partizione di scrittori. Confrontare l'accuracy di Worker 0 (89%) con quella di Worker 2 (85%) non è direttamente interpretabile: la differenza potrebbe essere dovuta al modello (Worker 2 ha convergito peggio) oppure ai dati (Worker 2 ha scrittori con grafia intrinsecamente più difficile). Non si può distinguere le due cause con i val set attuali.
 >
-> Il val set locale è lo strumento corretto per l'**early stopping** (confronto round-over-round sullo stesso worker, stessa distribuzione — l'unica variabile è il modello) ma non per il **confronto cross-worker** della qualità del modello. Per questo servirebbe un **global test set**: un sottoinsieme di dati da scrittori di tutte le partizioni, identico per tutti i worker, valutato una sola volta a fine training.
->
-> **Perché non è stato implementato.** Un global test set richiederebbe di riservare dati da ogni partizione prima del training, riducendo i campioni disponibili per tutti i run — non solo per l'Esperimento 3, ma per l'intera griglia. Il costo in dati di training sarebbe pagato 9 volte (una per ogni run dell'Esp. 1) per rispondere a una domanda — "i worker hanno modelli di qualità simile?" — che la L2 distance risponde già in modo più diretto e senza costi.
->
-> **Perché la combinazione attuale è sufficiente.** Gli obiettivi di valutazione del progetto si dividono in tre domande distinte, ciascuna già coperta da una metrica esistente:
-> 1. *I worker hanno convergito allo stesso modello?* → **L2 distance** tra i pesi finali. Misura la distanza nello spazio dei pesi indipendentemente dalla difficoltà dei dati. È la metrica più onesta per questo scopo.
-> 2. *Quale configurazione (lr, H) funziona meglio?* → **val accuracy per confronto tra run**. Anche se non comparabile tra worker diversi dello stesso run, è comparabile tra run diversi con la stessa configurazione di worker: il bias di difficoltà delle partizioni è sistematico e identico in tutti i run della griglia, quindi si cancella nel confronto. La configurazione che vince è quella che produce i modelli migliori su quelle stesse partizioni.
-> 3. *Quanto generalizza il modello ottimale su dati mai visti?* → **test set per-worker in Esp. 3** (`use_test_set: true`), che dà una stima onesta senza il bias dell'early stopping. Il costo in training data (80% invece di 90%) viene pagato una sola volta sulla configurazione già selezionata.
->
-> Il global test set aggiungerebbe rigore accademico ma non risponde a nessuna delle tre domande in modo sostanzialmente migliore rispetto agli strumenti già disponibili, a fronte di un costo in dati di training pagato su ogni run dell'intera campagna sperimentale.
+> Il val set locale è lo strumento corretto per l'**early stopping** (confronto round-over-round sullo stesso worker, stessa distribuzione — l'unica variabile è il modello) ma non per il **confronto cross-worker** della qualità del modello. Per questo è stato implementato un **global test set**: un sottoinsieme di scrittori riservati prima di qualsiasi split per-worker, identico per tutti i worker, valutato ad ogni round senza mai influenzare il training.
+
+**Local test set vs Global test set.** Il sistema supporta due modalità di test set indipendenti, con significati distinti:
+
+- **Local test set** (`local_test_set: true`): split 80/10/10 per worker. Il 10% di test appartiene agli **stessi scrittori** del worker (tenuto fuori dagli aggiornamenti dei gradienti). Risponde alla domanda: *il modello generalizza bene sui propri scrittori, al di là dei campioni usati per l'early stopping?* La riservatezza FL è intatta: nessun dato esce dal worker.
+
+- **Global test set** (`global_test_set: true`): una frazione (`global_test_fraction`, default 10%) degli scrittori LEAF viene estratta **prima** di assegnare i dati a qualsiasi worker. Questi scrittori non compaiono in nessun `train/`, `val/`, o `local_test/` di nessun worker — appartengono esclusivamente all'operatore/sperimentatore. Risponde alla domanda: *il gossip ha portato i worker a convergere verso la stessa funzione su input mai visti da nessuno?* Tutti i worker valutano lo stesso set ogni round, producendo curve di accuracy sorapposte: se convergono, il sistema ha raggiunto convergenza funzionale — non solo prossimità dei pesi (L2 distance).
+
+**Confidenzialità FL nel global test set.** La privacy in FL riguarda i dati di training dei partecipanti. Il global test set è separato da tutti i dati dei worker per costruzione: quegli scrittori non vengono mai assegnati a nessun partecipante, quindi non c'è nulla da proteggere. In un deployment reale, il global test set risiederebbe sul server dell'operatore e i worker si limiterebbero a inviare le predizioni — struttura analoga a quella che `aggregate_metrics.py` realizza leggendo i file CSV dal host.
+
+**I tre livelli di valutazione** rimangono distinti:
+> 1. *I worker hanno convergito allo stesso modello (pesi)?* → **L2 distance** pairwise sui pesi finali.
+> 2. *I worker hanno convergito alla stessa funzione (comportamento)?* → **global test accuracy** sovrapposta per tutti i worker.
+> 3. *Quanto generalizza il modello su dati mai visti?* → **local test set** per-worker (`local_test_set: true`) per la stima più onesta per-worker; global test set per la stima cross-worker.
 
 Detto questo, la varianza osservata tra worker (~4%) è stabile tra run distinti — Workers 2 e 3 hanno costantemente accuracy inferiore di ~4 pp rispetto agli altri. Questa stabilità suggerisce che la causa principale è la difficoltà intrinseca delle partizioni, non una mancanza di convergenza del modello (che produrrebbe varianza casuale tra run).
 
@@ -1520,11 +1540,13 @@ Fase 4 — Fault Injection  [1 run]
 
 **Totale: 13 run.**
 
-#### Metrica di confronto: `mean_accuracy`
+#### Metrica di confronto: `mean_best_val_accuracy`
 
-La metrica usata per confrontare le configurazioni tra run è la **`mean_accuracy` finale** — media aritmetica della `val_accuracy` di tutti i worker all'ultimo round completato prima dell'early stopping.
+La metrica usata per confrontare le configurazioni tra run è la **`mean_best_val_accuracy`** — media aritmetica della `best_val_accuracy` di ogni worker, dove `best_val_accuracy` è il massimo di `val_accuracy` osservato nell'intera serie di round del worker.
 
-**La val accuracy finale è determinata dall'early stopping.** Ogni worker si ferma quando la val loss smette di migliorare per `early_stopping_patience` round consecutivi: l'ultimo round eseguito è quindi il punto di miglior generalizzazione locale trovato. La val accuracy riportata in `summary.txt` è quella di questo ultimo round — non la migliore mai osservata durante il training, ma quella al momento dello stop. I due valori coincidono solo se il modello non ha subito oscillazioni nelle ultime `patience` round; in presenza di spike post-FedAvg possono divergere leggermente (il campo `best_acc` in `summary.txt` riporta il massimo storico).
+**Perché il massimo e non il valore all'ultimo round.** Ogni worker si ferma quando la val loss smette di migliorare per `early_stopping_patience=10` round consecutivi. Il modello all'ultimo round può aver leggermente degradato rispetto al picco: i 10 round di patience potrebbero aver accumulato piccole oscillazioni post-FedAvg. Il massimo storico (`best_acc` in `summary.txt`) rappresenta il picco di qualità effettivamente raggiunto dal modello — che è anche il round in cui viene salvato `model_best.pt`. Usare il massimo invece dell'ultimo round elimina questa dipendenza dal comportamento delle ultime iterazioni.
+
+**Il val set è usato solo nell'early stopping.** La `val_accuracy` loggata ogni round è un sottoprodotto del calcolo della `val_loss` necessario per l'early stopping — non è una valutazione separata. Usare quei valori per confrontare configurazioni è un'analisi a posteriori sui dati già prodotti, non un secondo accesso al val set.
 
 Questo crea un collegamento diretto tra i due usi del val set: **early stopping e selezione degli iperparametri usano la stessa metrica sullo stesso dato**. La configurazione che vince nella griglia è quella il cui early stopping si è fermato nel punto più alto su quel val set — non necessariamente la configurazione che generalizza meglio su dati nuovi. Il bias ottimistico che ne deriva è documentato in Sezione 2.3 ed è la motivazione dell'Esperimento 3 con test set indipendente.
 
@@ -1601,7 +1623,7 @@ I grafici generati da `--plot` (`accuracy_over_rounds.png`, `loss_over_rounds.pn
 - `learning_rate` basso (1e-4) con `H` basso (100) → convergenza lenta ma stabile: aggregazioni frequenti con aggiornamenti conservativi.
 - `learning_rate` medio (1e-3) con `H` medio (500) → punto di riferimento DiLoCo: bilanciamento ottimale atteso.
 
-**Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 2, 3, 4).
+**Scelta della configurazione ottimale:** la coppia `(lr, H)` con `mean_best_val_accuracy` più alta diventa la **configurazione fissa** per tutti gli esperimenti successivi (Esp. 2, 3, 4).
 
 ### 7.4 Esperimento 2 — Scalabilità (2 run)
 
@@ -1627,7 +1649,7 @@ python scripts/save_experiment.py scalability_N3_f1   # o N8_f5
 docker compose down
 ```
 
-**Scelta della configurazione finale:** al termine di Esp. 1 e Esp. 2 si hanno 11 run totali. Si sceglie la combinazione `(lr, H, num_workers, fanout)` con `mean_accuracy` più alta — questa è la **configurazione complessiva ottimale** usata per Esp. 3 e Esp. 4.
+**Scelta della configurazione finale:** al termine di Esp. 1 e Esp. 2 si hanno 11 run totali. Si sceglie la combinazione `(lr, H, num_workers, fanout)` con `mean_best_val_accuracy` più alta — questa è la **configurazione complessiva ottimale** usata per Esp. 3 e Esp. 4.
 
 **Metriche da confrontare tra i 3 punti (N=3, N=5, N=8):**
 
@@ -2434,10 +2456,14 @@ machine_learning:
   batch_size: 32
   learning_rate: 0.001
   optimizer: "AdamW"
-  clip_grad: 1.0          # max L2 norm for gradient clipping (0 = disabled)
-  label_smoothing: 0.1    # cross-entropy label smoothing (0 = disabled)
-  dropout_conv: 0.25      # spatial dropout probability in conv blocks
-  dropout_fc: 0.5         # dropout probability before the final FC layer
+  clip_grad: 1.0              # max L2 norm for gradient clipping (0 = disabled)
+  label_smoothing: 0.1        # cross-entropy label smoothing (0 = disabled)
+  dropout_conv: 0.25          # spatial dropout probability in conv blocks
+  dropout_fc: 0.5             # dropout probability before the final FC layer
+  local_test_set: false       # true → 80/10/10 split; adds local_test/ per worker
+  global_test_set: false      # true → reserves global_test_fraction writers before any split
+  global_test_fraction: 0.10  # fraction of LEAF test writers reserved for global test
+  global_test_dir: "/app/data/femnist/global_test"  # container path, mounted read-only
 
 metrics:
   enabled: true
@@ -2490,16 +2516,17 @@ Le tre modalità di deploy condividono gli stessi passi di setup iniziale (downl
 
 **Prerequisiti della macchina locale:** Docker + Docker Compose, Python 3.11+, `git` (usato dal Passo 2 per clonare il repository LEAF). Per le modalità AWS è richiesto anche Terraform (v. Sezioni 11.3 e 11.4).
 
-Questi passi vanno ripetuti ogni volta che cambia `num_workers` o `use_test_set`.
+Questi passi vanno ripetuti ogni volta che cambia `num_workers`, `local_test_set`, o `global_test_set`.
 
 **Passo 1 — Configurazione**
 
 Editare `config.yaml`:
 - `num_workers`: numero di worker (es. 3 per la ricerca iperparametri, poi 5 e 8 per la scalabilità)
-- `use_test_set`: `false` = split 90/10 train/val; `true` = split 80/10/10 train/val/test
+- `local_test_set`: `false` = split 90/10 train/val; `true` = split 80/10/10 train/val/local_test
+- `global_test_set`: `false` = nessun global test; `true` = riserva `global_test_fraction` di scrittori prima dello split
 - tutti gli altri iperparametri (learning rate, fanout, ecc.)
 
-**Passo 2 — Download dataset** *(una-tantum, o quando cambia `use_test_set`)*
+**Passo 2 — Download dataset** *(una-tantum, o quando cambia `local_test_set`)*
 
 ```bash
 # Eseguito sulla macchina locale — scarica FEMNIST da LEAF (~900 MB immagini)
@@ -2508,19 +2535,23 @@ python scripts/download_femnist.py
 # Con --sf 0.05 per verifiche rapide di installazione (non per risultati da riportare)
 ```
 
-`download_femnist.py` clona LEAF, applica due patch di compatibilità a codice LEAF (`data_to_json.py` per Pillow ≥ 10 e `get_data.sh` per sistemi senza `unzip`), lancia `preprocess.sh` con i parametri letti da `config.yaml` (`--tf 0.9` o `0.8` in base a `use_test_set`), copia i JSON in `data/femnist/data/`, e rimuove LEAF.
+`download_femnist.py` clona LEAF, applica due patch di compatibilità a codice LEAF (`data_to_json.py` per Pillow ≥ 10 e `get_data.sh` per sistemi senza `unzip`), lancia `preprocess.sh` con i parametri letti da `config.yaml` (`--tf 0.9` o `0.8` in base a `local_test_set`), copia i JSON in `data/femnist/data/`, e rimuove LEAF. Il flag `global_test_set` non richiede il re-download: gli scrittori globali vengono estratti da `split_dataset.py` dopo il download, senza cambiare la frazione per-writer.
 
-**Passo 3 — Partizionamento e generazione compose** *(ripetere se `num_workers` o `use_test_set` cambia)*
+**Passo 3 — Partizionamento e generazione compose** *(ripetere se `num_workers`, `local_test_set`, o `global_test_set` cambia)*
 
 ```bash
 # split_dataset.py legge data/femnist/data/ e produce una directory per worker:
 #   data/femnist/worker_0/train/data.json
-#   data/femnist/worker_0/val/data.json   (e test/ se use_test_set: true)
+#   data/femnist/worker_0/val/data.json
+#   data/femnist/worker_0/local_test/data.json  (se local_test_set: true)
 #   data/femnist/worker_1/...
+# Se global_test_set: true, produce anche:
+#   data/femnist/global_test/data.json  ← mai assegnato a nessun worker
 python scripts/split_dataset.py
 
 # generate_compose.py legge config.yaml e genera docker-compose.yml
-# con N servizi worker + 1 servizio registry, bind mount corretti, healthcheck
+# con N servizi worker + 1 servizio registry, bind mount corretti, healthcheck.
+# Se global_test_set: true, aggiunge il bind mount read-only di global_test/ a ogni worker.
 python scripts/generate_compose.py
 ```
 

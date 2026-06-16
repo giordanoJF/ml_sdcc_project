@@ -31,15 +31,30 @@ See `docs/report.md` for full documentation on architecture, experiments, and AW
 # 1. Edit config.yaml — set num_workers, gossip_fanout, learning_rate, use_gpu, etc.
 
 # 2. Download FEMNIST dataset
-#    Re-run only when use_test_set changes (different --tf flag to LEAF)
+#    Re-run only when local_test_set changes (different --tf flag to LEAF).
+#    global_test_set does NOT require re-download.
 python scripts/download_femnist.py             # full dataset (default)
 # python scripts/download_femnist.py --sf 0.05  # 5% subset for quick install checks only
 
 # 3. Partition dataset and generate Docker Compose files
-#    Re-run when num_workers OR use_test_set OR use_gpu changes
+#    Re-run when num_workers, local_test_set, global_test_set, or use_gpu changes
 python scripts/split_dataset.py
 python scripts/generate_compose.py
 ```
+
+### Test set flags
+
+The system has two independent test set mechanisms with different purposes:
+
+| Flag | Split | What it measures |
+|---|---|---|
+| `local_test_set: false` (default) | 90/10 train/val | — |
+| `local_test_set: true` | 80/10/10 train/val/local_test | Generalisation on the **same writers** as the worker's training data, without the early-stopping bias |
+| `global_test_set: true` | carves out `global_test_fraction` of writers **before** any per-worker split | Functional convergence across workers — all workers evaluate on the **same writers, never seen by anyone** |
+
+**Val set role:** the val set is used only inside early stopping — `val_loss` is computed every round to decide when to stop. The `val_accuracy` logged at those same rounds is then used post-hoc to compare configurations, but this is just an analysis on already-produced data, not a second pass on the val set.
+
+**Comparison metric:** `mean_best_val_accuracy` — the mean across workers of each worker's peak `val_accuracy` over all rounds. Printed prominently by `aggregate_metrics.py`. Use this to rank configurations. The global test set (`global_test_set: true`) is the only fully unbiased metric.
 
 ## GPU Acceleration (local only)
 
@@ -116,13 +131,31 @@ python scripts/aws_deploy.py destroy_single     # IMPORTANT: stop billing
 python scripts/aws_deploy.py resume_single
 ```
 
-**Experiment workflow — 13 runs total. Comparison metric: `mean_accuracy` (unweighted average across workers).**
-- *Esp. 1 — hyperparameter grid (9 runs)*: `num_workers=5`, `fanout=3`, `batch_size=32` fixed. All 9 combinations of `learning_rate` ∈ {1e-4, 1e-3, 5e-3} × `inner_steps_H` ∈ {100, 500, 1000}. Pick best `(lr, H)` by `mean_accuracy`.
-- *Esp. 2 — scalability (2 runs)*: apply best `(lr, H)` from Esp. 1 with `(num_workers=3, fanout=1)` then `(num_workers=8, fanout=5)`. Re-run setup steps 1–3 before each. Pick overall best `(lr, H, N, fanout)`.
-- *Esp. 3 — honest test evaluation (1 run)*: set `use_test_set: true` with best config → re-download dataset required (`--tf` changes), re-run steps 1–3, train once. `aggregate_metrics.py` prints unbiased `test_accuracy`.
-- *Esp. 4 — fault injection (1 run)*: best config, low `drop_probability` and `crash_probability` (e.g. 0.10 / 0.03). Documents graceful degradation.
+**Experiment plan — 10 runs. Comparison metric: `mean_best_val_accuracy` (printed by `aggregate_metrics.py`).**
 
-See `docs/report.md` section 11.1.1 for detailed per-step tables (who does what, on which machine).
+Setup before all runs: `num_workers: 3`, `global_test_set: true`, `local_test_set: false`.
+
+- *Blocco A — base runs with N=3 (independent, run in any order):*
+  - `✓` reference: `fanout=1, H=500, lr=1e-3`
+  - `B0` no-FL baseline: `fanout=0, H=500`
+  - `F1` fanout effect: `fanout=2, H=500`
+  - `H1` inner steps effect: `fanout=1, H=100`
+  - `H2` inner steps effect: `fanout=1, H=1000`
+  - After Blocco A: pick `best_fanout` and `best_H`.
+
+- *Blocco B — scalability (re-split for each N):*
+  - `S1`: `N=5` with best config
+  - `S2`: `N=8` with best config
+
+- *Blocco C — fault tolerance (N=3, no re-split):*
+  - `D1`: `drop_probability=0.2`
+  - `D2`: `drop_probability=0.5`
+  - `C1`: `crash_probability=0.05`
+
+- *Blocco D — final unbiased evaluation (last, re-split with `local_test_set: true`):*
+  - `T0`: best config, `local_test_set: true`
+
+See `docs/report.md` section 13 for the full experiment plan with rationale.
 
 ---
 
