@@ -3,7 +3,7 @@ FEMNIST dataset loading (LEAF format).
 
 Each worker's partition is pre-split by scripts/split_dataset.py and
 mounted into the container at the path specified by data_dir in config.yaml.
-This module simply loads whatever train/ and val/ (and optionally test/)
+This module simply loads whatever train/ and val/ (and optionally local_test/)
 JSON files are present in that directory — no runtime splitting logic.
 
 Data model at this stage:
@@ -61,47 +61,46 @@ def _read_json_shards(directory: str) -> tuple[list, dict]:
     return all_users, user_data
 
 
+def _collect_samples(users: list, data_map: dict) -> tuple[list, list]:
+    # Flatten all writers' samples into two parallel lists.
+    # After this, writer identity is lost — we only keep (image, label) pairs.
+    x, y = [], []
+    for user in users:
+        x.extend(data_map[user]["x"])
+        y.extend(data_map[user]["y"])
+    return x, y
+
+
 def load_partition(
     data_dir: str, batch_size: int
 ) -> tuple[DataLoader, DataLoader, DataLoader | None, int]:
     """
-    Load the train/val(/test) split from the pre-split worker directory.
+    Load the train/val(/local_test) split from the pre-split worker directory.
 
     The directory must contain train/ and val/ subdirectories produced by
-    scripts/split_dataset.py. If a test/ subdirectory is also present
-    (use_test_set: true in config.yaml), a test_loader is returned; otherwise
-    test_loader is None. The caller should evaluate test_loader only once, at
-    the end of training — never for early stopping or hyperparameter decisions.
+    scripts/split_dataset.py. If a local_test/ subdirectory is also present
+    (local_test_set: true in config.yaml), a local_test_loader is returned;
+    otherwise it is None.
+
+    local_test_loader, when present, contains samples from the same writers
+    as this worker's val/ set but held out from gradient updates. It provides
+    an unbiased estimate of generalisation on the worker's own writer population.
+    Evaluate it only once at the end of training — never for early stopping.
 
     Returns:
-        train_loader, val_loader, test_loader (or None), num_train_samples
+        train_loader, val_loader, local_test_loader (or None), num_train_samples
     """
     train_users, train_data = _read_json_shards(os.path.join(data_dir, "train"))
     val_users, val_data = _read_json_shards(os.path.join(data_dir, "val"))
 
-    def collect_samples(users: list, data_map: dict) -> tuple[list, list]:
-        # Flatten all writers' samples into two parallel lists.
-        # After this, writer identity is lost — we only keep (image, label) pairs.
-        # This is intentional: the model trains on samples, not on writer identity.
-        x, y = [], []
-        for user in users:
-            x.extend(data_map[user]["x"])   # list of [784 floats]
-            y.extend(data_map[user]["y"])   # list of int labels
-        return x, y
-
-    train_x, train_y = collect_samples(train_users, train_data)
-    val_x, val_y = collect_samples(val_users, val_data)
-
-    # At this point:
-    #   train_x : list of N flat vectors, each [784 floats] — all training images
-    #   train_y : list of N integers in [0, 61]             — corresponding labels
-    # FEMNISTDataset will convert these to tensors and reshape x to (N, 1, 28, 28).
+    train_x, train_y = _collect_samples(train_users, train_data)
+    val_x, val_y = _collect_samples(val_users, val_data)
 
     train_loader = DataLoader(
         FEMNISTDataset(train_x, train_y),
         batch_size=batch_size,
         shuffle=True,
-        drop_last=True,  # avoid partial batches that could skew gradient estimates
+        drop_last=True,
     )
     val_loader = DataLoader(
         FEMNISTDataset(val_x, val_y),
@@ -109,15 +108,42 @@ def load_partition(
         shuffle=False,
     )
 
-    test_loader = None
-    test_dir = os.path.join(data_dir, "test")
-    if os.path.isdir(test_dir):
-        test_users, test_data = _read_json_shards(test_dir)
-        test_x, test_y = collect_samples(test_users, test_data)
-        test_loader = DataLoader(
-            FEMNISTDataset(test_x, test_y),
+    local_test_loader = None
+    local_test_dir = os.path.join(data_dir, "local_test")
+    if os.path.isdir(local_test_dir):
+        lt_users, lt_data = _read_json_shards(local_test_dir)
+        lt_x, lt_y = _collect_samples(lt_users, lt_data)
+        local_test_loader = DataLoader(
+            FEMNISTDataset(lt_x, lt_y),
             batch_size=batch_size,
             shuffle=False,
         )
 
-    return train_loader, val_loader, test_loader, len(train_x)
+    return train_loader, val_loader, local_test_loader, len(train_x)
+
+
+def load_global_test(global_test_dir: str, batch_size: int) -> DataLoader | None:
+    """
+    Load the shared global test set from global_test_dir.
+
+    The global test set contains writers carved out before any per-worker split
+    by scripts/split_dataset.py (global_test_set: true in config.yaml). These
+    writers never appear in any worker's train/, val/, or local_test/ directories.
+
+    Evaluating all workers on this identical set at each round reveals functional
+    convergence: if workers that started from random initializations and trained
+    on disjoint non-i.i.d. partitions reach the same accuracy on unseen writers,
+    the gossip protocol has driven them to the same functional solution — not just
+    nearby parameters (measured by L2 weight distance).
+
+    Returns None if global_test_dir does not exist (global_test_set: false).
+    """
+    if not os.path.isdir(global_test_dir):
+        return None
+    users, data = _read_json_shards(global_test_dir)
+    x, y = _collect_samples(users, data)
+    return DataLoader(
+        FEMNISTDataset(x, y),
+        batch_size=batch_size,
+        shuffle=False,
+    )

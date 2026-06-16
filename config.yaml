@@ -79,14 +79,35 @@ machine_learning:
   # Do not change unless you also update the bind mount in docker-compose.yml.
   data_dir: "/app/data/femnist"
 
-  # When false (default): 90/10 train/val split. Val is used for both early stopping
-  # and as the final accuracy metric (introduces a small optimistic bias).
-  # When true: 80/10/10 train/val/test split. Val is used only for early stopping;
-  # test/ provides an independent, unbiased final accuracy estimate written to
-  # test_result.json at the end of each worker's training.
-  # IMPORTANT: changing this value requires re-running download_femnist.py
-  # (different --tf flag to LEAF) and split_dataset.py before the next experiment.
-  use_test_set: false
+  # When false (default): 90/10 train/val split per worker. Val is used for both
+  # early stopping and as the final accuracy metric (small optimistic bias).
+  # When true: 80/10/10 train/val/local_test split per worker. Val is used only for
+  # early stopping; local_test/ provides an independent estimate of how well the model
+  # generalizes on the same writers the worker trained on (held out from gradient
+  # updates only, not from the worker entirely). Written to local_test_result.json
+  # at the end of training.
+  # IMPORTANT: changing this value requires re-running split_dataset.py.
+  local_test_set: false
+
+  # When true: reserves global_test_fraction of all LEAF test writers before any
+  # per-worker split. These writers never appear in any worker's train/, val/, or
+  # local_test/ directories — they belong to the experimenter only.
+  # All workers evaluate on the same global test set every round, revealing whether
+  # the gossip protocol drives functional convergence (same predictions on inputs
+  # from writers never seen by any worker), complementing the L2 weight-distance metric.
+  # No FL confidentiality concern: these writers are not assigned to any participant.
+  # IMPORTANT: changing this value requires re-running split_dataset.py.
+  global_test_set: false
+
+  # Fraction of LEAF test-split writers reserved for the global test set.
+  # Applied only when global_test_set: true.
+  # Example: 0.10 with ~3500 test writers → ~350 global writers (~35k samples).
+  global_test_fraction: 0.10
+
+  # Path to the global test set directory INSIDE the container.
+  # Mapped from the host via bind mount: ./data/femnist/global_test -> this path.
+  # All worker containers share the same bind mount (read-only from their perspective).
+  global_test_dir: "/app/data/femnist/global_test"
 
   # Mini-batch size for AdamW. Larger batches = more stable gradients but higher
   # memory usage and fewer gradient steps per epoch.

@@ -25,7 +25,7 @@ def _healthcheck(registry_port: int) -> str:
     )
 
 
-def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool) -> None:
+def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool, global_test_set: bool = False) -> None:
     """
     Generate docker-compose.yml for local single-machine development.
 
@@ -66,6 +66,12 @@ def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool) -> 
             "      - type: bind",
             f"        source: ./data/femnist/worker_{i}",
             "        target: /app/data/femnist",
+        ] + ([
+            "      - type: bind",
+            "        source: ./data/femnist/global_test",
+            "        target: /app/data/femnist/global_test",
+            "        read_only: true",
+        ] if global_test_set else []) + [
             "    networks:",
             "      - fl_net",
         ] + gpu_block
@@ -111,10 +117,12 @@ def main():
     grpc_port: int = cfg["network"]["grpc_port"]
     registry_port: int = cfg["network"]["registry_port"]
     use_gpu: bool = cfg["federated_learning"].get("use_gpu", False)
+    global_test_set: bool = cfg["machine_learning"].get("global_test_set", False)
 
     mode = "GPU (Dockerfile.worker.gpu)" if use_gpu else "CPU (Dockerfile.worker)"
-    print(f"Generating docker-compose.yml — {num_workers} workers, gRPC port {grpc_port}, mode={mode} ...")
-    write_local_compose(num_workers, registry_port, use_gpu)
+    extra = " + global_test mount" if global_test_set else ""
+    print(f"Generating docker-compose.yml — {num_workers} workers, gRPC port {grpc_port}, mode={mode}{extra} ...")
+    write_local_compose(num_workers, registry_port, use_gpu, global_test_set)
     print("Done. Run: docker compose up --build")
 
 

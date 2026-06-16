@@ -47,13 +47,18 @@ def main():
 
     with open(os.path.join(PROJECT_ROOT, "config.yaml")) as f:
         cfg = yaml.safe_load(f)
-    use_test_set = cfg["machine_learning"].get("use_test_set", False)
-    tf = 0.8 if use_test_set else 0.9
+    local_test_set = cfg["machine_learning"].get("local_test_set", False)
+    # --tf controls the per-writer train fraction in LEAF:
+    #   local_test_set=false → 90% train, 10% LEAF-test (used as worker val)
+    #   local_test_set=true  → 80% train, 20% LEAF-test (split 50/50 → val + local_test)
+    # global_test_set does not affect the LEAF download: it carves out writers after
+    # download, entirely within split_dataset.py, without changing per-writer sample counts.
+    tf = 0.8 if local_test_set else 0.9
 
     t_start = time.time()
     print("=== FEMNIST download via LEAF ===")
     print(f"Sampling fraction: {args.sf * 100:.0f}%%")
-    print(f"Split mode:        {'80/10/10 train/val/test (use_test_set=true)' if use_test_set else '90/10 train/val (use_test_set=false)'}")
+    print(f"Split mode:        {'80/10/10 train/val/local_test (local_test_set=true)' if local_test_set else '90/10 train/val (local_test_set=false)'}")
     print(f"Output directory:  {DEST_DIR}\n")
 
     os.chdir(PROJECT_ROOT)
