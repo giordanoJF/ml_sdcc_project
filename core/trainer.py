@@ -23,7 +23,8 @@ def train_step(
     optimizer.zero_grad()
     loss = F.cross_entropy(model(x), y, label_smoothing=label_smoothing)
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
+    if clip_grad > 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
     optimizer.step()
     return loss.item()
 

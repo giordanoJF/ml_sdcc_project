@@ -35,6 +35,8 @@ def run_label(lr: float, h: int) -> str:
 
 def already_done(label: str) -> bool:
     """Check if a results folder for this label already exists."""
+    if not os.path.isdir(RESULTS_ROOT):
+        return False
     for entry in os.listdir(RESULTS_ROOT):
         if entry.endswith(f"_{label}"):
             return True
@@ -95,8 +97,8 @@ def main() -> None:
 
         update_config(lr, h)
         run_cmd(["docker", "compose", "up", "--build"], label)
-        run_cmd(["python3.13", "scripts/aggregate_metrics.py", "--plot"], label)
-        run_cmd(["python3.13", "scripts/save_experiment.py", label], label)
+        run_cmd([sys.executable, "scripts/aggregate_metrics.py", "--plot"], label)
+        run_cmd([sys.executable, "scripts/save_experiment.py", label], label)
 
     print(f"\nAll {len(to_run)} run(s) complete.")
 

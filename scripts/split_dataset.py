@@ -69,7 +69,8 @@ def _build_worker_map(all_users: list[str], num_workers: int) -> dict[str, int]:
     # Map each writer ID to its worker index using contiguous slicing.
     # min() ensures the last writer always goes to worker (num_workers-1)
     # even when len(all_users) is not exactly divisible by num_workers.
-    chunk_size = len(all_users) // num_workers
+    # max(1, ...) guards against ZeroDivisionError when num_workers > len(all_users).
+    chunk_size = max(1, len(all_users) // num_workers)
     return {user: min(i // chunk_size, num_workers - 1) for i, user in enumerate(all_users)}
 
 

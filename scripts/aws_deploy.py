@@ -16,7 +16,7 @@ Supports two deployment modes:
   export AWS_SESSION_TOKEN=...
 
   # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, aws.instance_type_single)
-  # 2. Download and split dataset (once, or when use_test_set / num_workers changes)
+  # 2. Download and split dataset (once, or when local_test_set / num_workers changes)
   python scripts/download_femnist.py
   python scripts/split_dataset.py
   python scripts/generate_compose.py
@@ -130,7 +130,7 @@ Commands — multi-instance
 -------------------------
   provision   Create EC2 instances and security group via Terraform
   deploy      Build Docker images, upload dataset partitions, start containers
-  collect     Download metrics.csv (and test_result.json) from each worker
+  collect     Download metrics.csv (and local_test_result.json) from each worker
   status      Show Docker container status on every instance
   logs [id]   Tail logs from worker <id> (default 0) or 'registry'
   resume      Refresh Terraform state after a Learner Lab session restart (IPs change)
@@ -565,7 +565,7 @@ def cmd_deploy(cfg: dict):
 
 
 def cmd_collect(cfg: dict):
-    """Download metrics.csv and test_result.json from every worker instance."""
+    """Download per-worker output files from every worker instance."""
     aws_cfg  = cfg.get("aws", {})
     net_cfg  = cfg["network"]
     key_path = os.path.expanduser(aws_cfg["key_path"])
@@ -581,7 +581,7 @@ def cmd_collect(cfg: dict):
         # Files are written to /app/data/femnist/ inside the container, which
         # maps to /home/ubuntu/data/femnist/worker_{i}/ on the host (the mount point).
         remote_dir = f"/home/ubuntu/data/femnist/worker_{i}"
-        for fname in ("metrics.csv", "test_result.json", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
             probe = _ssh(ip, key_path,
                          f"test -f {remote_dir}/{fname} && echo yes || echo no",
                          capture=True)

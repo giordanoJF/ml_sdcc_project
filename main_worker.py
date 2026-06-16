@@ -220,15 +220,17 @@ def main():
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
 
-    # --- Peer cache: populated once at startup, refreshed only on gRPC failure ---
-    peer_cache = wait_for_all_peers(registry_url, total_workers)
-
-    # --- Thread 2: training loop ---
-    train_iter = infinite_batches(train_loader)
-    best_val_loss = float("inf")
-    patience_counter = 0
-
     try:
+        # --- Peer cache: populated once at startup, refreshed only on gRPC failure ---
+        # Placed inside try so that SIGTERM/SIGINT during the startup polling window
+        # (up to max_wait=300 s) still triggers the finally block and deregisters cleanly.
+        peer_cache = wait_for_all_peers(registry_url, total_workers)
+
+        # --- Thread 2: training loop ---
+        train_iter = infinite_batches(train_loader)
+        best_val_loss = float("inf")
+        patience_counter = 0
+
         for round_num in range(1, total_rounds + 1):
             round_start = time.time()
             logger.info(f"=== Round {round_num}/{total_rounds} ===")

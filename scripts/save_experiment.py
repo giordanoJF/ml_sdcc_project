@@ -14,12 +14,13 @@ Usage:
 
 Output:
     results/<timestamp>_<name>/
-        config.yaml               ← exact config used for this run
-        global_metrics.csv        ← per-round aggregated stats
-        summary.txt               ← human-readable summary
-        worker_0/metrics.csv      ← per-round per-worker metrics
-        worker_0/model_final.pt   ← final model checkpoint
-        worker_0/test_result.json ← final test accuracy (if use_test_set: true)
+        config.yaml                    ← exact config used for this run
+        global_metrics.csv             ← per-round aggregated stats
+        summary.txt                    ← human-readable summary
+        worker_0/metrics.csv           ← per-round per-worker metrics
+        worker_0/model_final.pt        ← final model checkpoint
+        worker_0/model_best.pt         ← best checkpoint (lowest val loss)
+        worker_0/local_test_result.json ← final test accuracy (if local_test_set: true)
         worker_1/...
         ...
 """
@@ -87,7 +88,8 @@ def main():
 
     # Aggregated outputs from aggregate_metrics.py
     for fname in ("global_metrics.csv", "summary.txt",
-                  "accuracy_over_rounds.png", "loss_over_rounds.png", "phase_timing.png"):
+                  "accuracy_over_rounds.png", "loss_over_rounds.png",
+                  "phase_timing.png", "global_test_accuracy.png"):
         src = os.path.join(DATA_ROOT, fname)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(dest, fname))
@@ -101,7 +103,7 @@ def main():
         worker_dest = os.path.join(dest, worker_name)
         os.makedirs(worker_dest)
 
-        for fname in ("metrics.csv", "test_result.json", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
             src = os.path.join(worker_dir, fname)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(worker_dest, fname))
@@ -123,13 +125,14 @@ def main():
             os.remove(p)
             cleaned.append(fname)
     for worker_dir in sorted(glob.glob(os.path.join(DATA_ROOT, "worker_*"))):
-        for fname in ("metrics.csv", "test_result.json", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
             p = os.path.join(worker_dir, fname)
             if os.path.exists(p):
                 os.remove(p)
                 cleaned.append(os.path.join(os.path.basename(worker_dir), fname))
 
-    for fname in ("accuracy_over_rounds.png", "loss_over_rounds.png", "phase_timing.png"):
+    for fname in ("accuracy_over_rounds.png", "loss_over_rounds.png",
+                  "phase_timing.png", "global_test_accuracy.png"):
         p = os.path.join(DATA_ROOT, fname)
         if os.path.exists(p):
             os.remove(p)

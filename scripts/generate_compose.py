@@ -114,8 +114,8 @@ def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool, glo
 def main():
     cfg = _load_config()
     num_workers: int = cfg["network"]["num_workers"]
-    grpc_port: int = cfg["network"]["grpc_port"]
     registry_port: int = cfg["network"]["registry_port"]
+    grpc_port: int = cfg["network"]["grpc_port"]
     use_gpu: bool = cfg["federated_learning"].get("use_gpu", False)
     global_test_set: bool = cfg["machine_learning"].get("global_test_set", False)
 
