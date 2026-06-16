@@ -97,7 +97,7 @@ machine_learning:
   # from writers never seen by any worker), complementing the L2 weight-distance metric.
   # No FL confidentiality concern: these writers are not assigned to any participant.
   # IMPORTANT: changing this value requires re-running split_dataset.py.
-  global_test_set: false
+  global_test_set: true
 
   # Fraction of LEAF test-split writers reserved for the global test set.
   # Applied only when global_test_set: true.

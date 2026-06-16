@@ -550,6 +550,31 @@ def main():
                 f"\nGlobal test — mean={mean_gt:.4f}, std={std_gt:.4f}, spread={spread:.4f}\n"
                 f"Verdict: {verdict}"
             )
+
+        # Global test accuracy at model_best.pt: the val_loss-minimum row already
+        # exists in the loaded CSV — no extra inference or checkpoint I/O needed.
+        print()
+        print("  Global test at model_best.pt (round with min val_loss):")
+        best_ckpt_gt: dict[str, float] = {}
+        for wid, rows in sorted(worker_rows.items()):
+            rows_sorted = sorted(rows, key=lambda r: int(r["round"]))
+            best_row = min(rows_sorted, key=lambda r: float(r["val_loss"]))
+            gt_val = best_row.get("global_test_accuracy", "")
+            if gt_val != "":
+                gt_val = float(gt_val)
+                best_ckpt_gt[wid] = gt_val
+                line = (f"  Worker {wid:>2}: round={int(best_row['round']):>4}  "
+                        f"val_loss={float(best_row['val_loss']):.4f}  "
+                        f"global_test={gt_val:.4f}")
+                print(line)
+                summary_lines.append(line)
+        if best_ckpt_gt:
+            vals = list(best_ckpt_gt.values())
+            mean_bgt = statistics.mean(vals)
+            std_bgt = statistics.stdev(vals) if len(vals) > 1 else 0.0
+            line = f"\n  Mean global test at model_best.pt: {mean_bgt:.4f}  (std={std_bgt:.4f})"
+            print(line)
+            summary_lines.append(line)
         print("-" * 65)
         print()
 
