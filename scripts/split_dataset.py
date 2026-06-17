@@ -2,39 +2,31 @@
 """
 Split the downloaded FEMNIST dataset into per-worker partitions.
 
-Run this script AFTER download_femnist.py and BEFORE docker compose up.
+Run AFTER download_femnist.py and BEFORE docker compose up.
 Re-run whenever num_workers, local_test_set, or global_test_set in config.yaml changes.
 
 Usage:
     python scripts/split_dataset.py
 
 Input:
-    data/femnist/data/train/*.json
-    data/femnist/data/val/*.json
+    data/femnist/data/train/*.json    (80% or 90% of each writer's samples)
+    data/femnist/data/val/*.json      (20% or 10% — set by --tf in download_femnist.py)
 
-Output (local_test_set: false, global_test_set: false — default):
-    data/femnist/worker_0/train/data.json
-    data/femnist/worker_0/val/data.json
-    data/femnist/worker_1/...
+Output (local_test_set: false, global_test_set: false):
+    data/femnist/worker_N/train/data.json
+    data/femnist/worker_N/val/data.json
 
 Output (local_test_set: true):
-    data/femnist/worker_0/train/data.json
-    data/femnist/worker_0/val/data.json
-    data/femnist/worker_0/local_test/data.json
-    data/femnist/worker_1/...
+    data/femnist/worker_N/train/data.json      ← 80% of each writer's samples
+    data/femnist/worker_N/val/data.json        ← 10% (first half of LEAF's 20% val)
+    data/femnist/worker_N/local_test/data.json ← 10% (second half)
 
 Output (global_test_set: true, additional):
-    data/femnist/global_test/data.json   ← ALL samples of the carved-out writers
-                                            (LEAF train + LEAF test merged), never in any worker dir
+    data/femnist/global_test/data.json         ← train + val samples of carved-out writers
 
-Memory strategy: two-pass streaming with immediate disk writes.
-  Pass 1 — read only writer IDs (no pixel data) to build the global
-            ordered list and compute the writer→worker mapping.
-  Pass 2 — open all output files simultaneously; stream shards one
-            at a time; write each writer's data directly to the correct
-            output file the moment it is read, then discard the shard.
-            Peak RAM = one shard (~1-2 GB as Python objects) regardless
-            of dataset size or number of workers.
+Memory: two-pass streaming — peak RAM = one JSON shard at a time.
+  Pass 1 — read only writer IDs (no pixel data) from train/ and val/.
+  Pass 2 — stream shards, writing each writer's data to the correct file immediately.
 """
 import gc
 import glob
@@ -45,332 +37,214 @@ import shutil
 import yaml
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_DIR = os.path.join(PROJECT_ROOT, "data", "femnist", "data")
+SRC_DIR   = os.path.join(PROJECT_ROOT, "data", "femnist", "data")
 DEST_ROOT = os.path.join(PROJECT_ROOT, "data", "femnist")
 
 
-def _load_config() -> dict:
-    with open(os.path.join(PROJECT_ROOT, "config.yaml")) as f:
-        return yaml.safe_load(f)
-
-
 def _collect_user_ids(directory: str) -> list[str]:
-    # Pass 1: read only the "users" key — no pixel data loaded into memory.
-    # Produces the global ordered list of writer IDs used to compute worker slices.
-    all_users: list[str] = []
+    """Pass 1: read only 'users' keys from all shards — no pixel data loaded."""
+    users: list[str] = []
     for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
         with open(path) as f:
-            shard = json.load(f)
-        all_users.extend(shard["users"])
-    return all_users
+            users.extend(json.load(f)["users"])
+    return users
 
 
-def _build_worker_map(all_users: list[str], num_workers: int) -> dict[str, int]:
-    # Map each writer ID to its worker index using contiguous slicing.
-    # min() ensures the last writer always goes to worker (num_workers-1)
-    # even when len(all_users) is not exactly divisible by num_workers.
-    # max(1, ...) guards against ZeroDivisionError when num_workers > len(all_users).
-    chunk_size = max(1, len(all_users) // num_workers)
-    return {user: min(i // chunk_size, num_workers - 1) for i, user in enumerate(all_users)}
+def _build_worker_map(users: list[str], num_workers: int) -> dict[str, int]:
+    chunk = max(1, len(users) // num_workers)
+    return {u: min(i // chunk, num_workers - 1) for i, u in enumerate(users)}
 
 
-def _stream_split(
-    split: str,
+def _make_user_lists(
+    worker_writers: list[str],
     worker_map: dict[str, int],
+    src_set: set[str],
     num_workers: int,
-    worker_user_lists: list[list[str]],
-    out_dirs: list[str],
-    global_buffer: dict | None = None,
-) -> None:
-    """
-    Pass 2: stream through all shards once, writing each writer's data
-    immediately to the correct worker output file.
+) -> list[list[str]]:
+    """Per-worker user lists restricted to writers present in src_set.
 
-    Writers not in worker_map (global test writers) are accumulated into
-    global_buffer if provided — their train samples are merged with their
-    test samples later in _stream_test_split, then written to disk once.
+    dataset.py iterates this list and looks up each writer in user_data —
+    so it must contain only writers that actually have data in that split.
     """
-    shard_files = sorted(glob.glob(os.path.join(SRC_DIR, split, "*.json")))
+    lists: list[list[str]] = [[] for _ in range(num_workers)]
+    for u in worker_writers:
+        if u in src_set:
+            lists[worker_map[u]].append(u)
+    return lists
 
-    handles = []
-    for w in range(num_workers):
-        h = open(os.path.join(out_dirs[w], "data.json"), "w")
+
+def _open_worker_files(
+    out_dirs: list[str], user_lists: list[list[str]]
+) -> tuple[list, list[bool]]:
+    """Open per-worker JSON files and write the header (users + opening of user_data)."""
+    handles, first = [], []
+    for i, d in enumerate(out_dirs):
+        os.makedirs(d, exist_ok=True)
+        h = open(os.path.join(d, "data.json"), "w")
         h.write('{"users":')
-        json.dump(worker_user_lists[w], h)
+        json.dump(user_lists[i], h)
         h.write(',"user_data":{')
         handles.append(h)
+        first.append(True)
+    return handles, first
 
-    first_entry = [True] * num_workers
 
-    for idx, shard_path in enumerate(shard_files, 1):
-        print(f"    shard {idx}/{len(shard_files)}: {os.path.basename(shard_path)}")
-        with open(shard_path) as f:
-            shard = json.load(f)
-
-        for user in shard["users"]:
-            if user not in worker_map:
-                if global_buffer is not None:
-                    data = shard["user_data"][user]
-                    if user not in global_buffer:
-                        global_buffer[user] = {"x": list(data["x"]), "y": list(data["y"])}
-                    else:
-                        global_buffer[user]["x"].extend(data["x"])
-                        global_buffer[user]["y"].extend(data["y"])
-                continue
-            w = worker_map[user]
-            if not first_entry[w]:
-                handles[w].write(",")
-            handles[w].write(json.dumps(user))
-            handles[w].write(":")
-            handles[w].write(json.dumps(shard["user_data"][user]))
-            first_entry[w] = False
-
-        del shard
-        gc.collect()
-
+def _close_worker_files(handles: list) -> None:
     for h in handles:
         h.write("}}")
         h.close()
 
 
-def _stream_test_split(
+def _stream(
+    src_dir: str,
     worker_map: dict[str, int],
-    num_workers: int,
-    worker_user_lists: list[list[str]],
     global_users_set: set[str],
+    worker_handles: list,
+    first_entry: list[bool],
     global_buffer: dict | None,
-    out_dirs_val: list[str],
-    out_dirs_local_test: list[str] | None,
+    local_test_handles: list | None = None,
+    first_local_test: list[bool] | None = None,
 ) -> None:
+    """Stream all shards in src_dir, routing each writer to the correct output.
+
+    Global writers go to global_buffer (train + val samples merged).
+    Worker writers go to their assigned worker file.
+    When local_test_handles is given (val/ pass, local_test_set=true), val data
+    is split 50/50 per writer: first half → val, second half → local_test.
+    With download_femnist.py using --tf 0.8 this gives 80/10/10 train/val/local_test.
     """
-    Stream through the LEAF test/ split and route each writer to the correct output:
-
-    - Writers in global_users_set → global_buffer (test samples merged with train
-      samples already accumulated in _stream_split; written to disk once in main).
-    - Remaining writers:
-        - If out_dirs_local_test is None  → all samples go to worker val/
-        - If out_dirs_local_test is given → samples split 50/50 per writer:
-            first half → worker val/ (early stopping)
-            second half → worker local_test/ (independent final evaluation)
-    """
-    shard_files = sorted(glob.glob(os.path.join(SRC_DIR, "val", "*.json")))
-
-    # Open per-worker val files
-    val_handles = []
-    for w in range(num_workers):
-        h = open(os.path.join(out_dirs_val[w], "data.json"), "w")
-        h.write('{"users":')
-        json.dump(worker_user_lists[w], h)
-        h.write(',"user_data":{')
-        val_handles.append(h)
-
-    # Open per-worker local_test files (only when local_test_set: true)
-    local_test_handles = []
-    if out_dirs_local_test is not None:
-        for w in range(num_workers):
-            h = open(os.path.join(out_dirs_local_test[w], "data.json"), "w")
-            h.write('{"users":')
-            json.dump(worker_user_lists[w], h)
-            h.write(',"user_data":{')
-            local_test_handles.append(h)
-
-    first_val = [True] * num_workers
-    first_local_test = [True] * num_workers
-
-    for idx, shard_path in enumerate(shard_files, 1):
-        print(f"    shard {idx}/{len(shard_files)}: {os.path.basename(shard_path)}")
-        with open(shard_path) as f:
+    shard_paths = sorted(glob.glob(os.path.join(src_dir, "*.json")))
+    for idx, path in enumerate(shard_paths, 1):
+        print(f"  shard {idx}/{len(shard_paths)}: {os.path.basename(path)}")
+        with open(path) as f:
             shard = json.load(f)
 
         for user in shard["users"]:
-            x = shard["user_data"][user]["x"]
-            y = shard["user_data"][user]["y"]
+            data = shard["user_data"][user]
 
             if user in global_users_set:
-                # Merge test samples into the buffer alongside the train samples
-                # already accumulated in _stream_split. Written to disk once in main().
                 if global_buffer is not None:
-                    if user not in global_buffer:
-                        global_buffer[user] = {"x": list(x), "y": list(y)}
-                    else:
-                        global_buffer[user]["x"].extend(x)
-                        global_buffer[user]["y"].extend(y)
-            else:
-                # → per-worker val (and optionally local_test)
-                w = worker_map[user]
-                if out_dirs_local_test is not None:
-                    # 50/50 per-writer split: val ← first half, local_test ← second half
-                    mid = max(1, len(x) // 2)
-                    if not first_val[w]:
-                        val_handles[w].write(",")
-                    val_handles[w].write(json.dumps(user) + ":" + json.dumps({"x": x[:mid], "y": y[:mid]}))
-                    first_val[w] = False
+                    buf = global_buffer.setdefault(user, {"x": [], "y": []})
+                    buf["x"].extend(data["x"])
+                    buf["y"].extend(data["y"])
+                continue
 
-                    if not first_local_test[w]:
-                        local_test_handles[w].write(",")
-                    local_test_handles[w].write(json.dumps(user) + ":" + json.dumps({"x": x[mid:], "y": y[mid:]}))
-                    first_local_test[w] = False
-                else:
-                    # All samples → val
-                    if not first_val[w]:
-                        val_handles[w].write(",")
-                    val_handles[w].write(json.dumps(user) + ":" + json.dumps({"x": x, "y": y}))
-                    first_val[w] = False
+            if user not in worker_map:
+                continue
+
+            w = worker_map[user]
+
+            if local_test_handles is not None:
+                mid = max(1, len(data["x"]) // 2)
+                val_data = {"x": data["x"][:mid], "y": data["y"][:mid]}
+                lt_data  = {"x": data["x"][mid:], "y": data["y"][mid:]}
+
+                if not first_entry[w]:
+                    worker_handles[w].write(",")
+                worker_handles[w].write(json.dumps(user) + ":" + json.dumps(val_data))
+                first_entry[w] = False
+
+                if not first_local_test[w]:
+                    local_test_handles[w].write(",")
+                local_test_handles[w].write(json.dumps(user) + ":" + json.dumps(lt_data))
+                first_local_test[w] = False
+            else:
+                if not first_entry[w]:
+                    worker_handles[w].write(",")
+                worker_handles[w].write(json.dumps(user) + ":" + json.dumps(data))
+                first_entry[w] = False
 
         del shard
         gc.collect()
 
-    for h in val_handles:
-        h.write("}}")
-        h.close()
-    for h in local_test_handles:
-        h.write("}}")
-        h.close()
-
-
-def _process_split(
-    src_split: str,
-    dst_split: str,
-    num_workers: int,
-    exclude: set[str] | None = None,
-    global_buffer: dict | None = None,
-) -> None:
-    """Process a single LEAF split directory → per-worker output directory."""
-    src_dir = os.path.join(SRC_DIR, src_split)
-    print(f"\n[{src_split} → {dst_split}]")
-
-    all_users = _collect_user_ids(src_dir)
-    if exclude:
-        all_users = [u for u in all_users if u not in exclude]
-    chunk_size = len(all_users) // num_workers
-    print(f"  {len(all_users)} writers total, ~{chunk_size} per worker")
-
-    worker_map = _build_worker_map(all_users, num_workers)
-
-    worker_user_lists: list[list[str]] = [[] for _ in range(num_workers)]
-    for user in all_users:
-        worker_user_lists[worker_map[user]].append(user)
-
-    out_dirs = []
-    for i in range(num_workers):
-        d = os.path.join(DEST_ROOT, f"worker_{i}", dst_split)
-        os.makedirs(d, exist_ok=True)
-        out_dirs.append(d)
-
-    _stream_split(src_split, worker_map, num_workers, worker_user_lists, out_dirs,
-                  global_buffer=global_buffer)
-
 
 def main():
-    cfg = _load_config()
-    num_workers: int = cfg["network"]["num_workers"]
-    ml_cfg = cfg["machine_learning"]
-    local_test_set: bool = ml_cfg.get("local_test_set", False)
-    global_test_set: bool = ml_cfg.get("global_test_set", False)
-    global_test_fraction: float = ml_cfg.get("global_test_fraction", 0.10)
+    cfg = yaml.safe_load(open(os.path.join(PROJECT_ROOT, "config.yaml")))
+    num_workers      = cfg["network"]["num_workers"]
+    ml               = cfg["machine_learning"]
+    local_test_set   = ml.get("local_test_set", False)
+    global_test_set  = ml.get("global_test_set", False)
+    global_test_frac = ml.get("global_test_fraction", 0.10)
 
     if not os.path.isdir(SRC_DIR):
         print(f"ERROR: source dataset not found at {SRC_DIR}")
         print("Run scripts/download_femnist.py first.")
         raise SystemExit(1)
 
-    # Remove stale per-worker directories and global test dir from previous runs
     for entry in glob.glob(os.path.join(DEST_ROOT, "worker_*")):
         shutil.rmtree(entry)
-    global_test_dir_host = os.path.join(DEST_ROOT, "global_test")
-    if os.path.isdir(global_test_dir_host):
-        shutil.rmtree(global_test_dir_host)
+    global_test_dir = os.path.join(DEST_ROOT, "global_test")
+    if os.path.isdir(global_test_dir):
+        shutil.rmtree(global_test_dir)
 
-    parts = []
-    if local_test_set:
-        parts.append("80/10/10 train/val/local_test per worker")
-    else:
-        parts.append("90/10 train/val per worker")
+    # ── Pass 1: single source of truth ────────────────────────────────────────
+    #
+    # Sorted union of train/ and val/ writers: fully deterministic regardless of
+    # LEAF's internal shard ordering. No assumption on which split comes first
+    # or how LEAF shuffled writers between train/ and test/.
+    train_users_set = set(_collect_user_ids(os.path.join(SRC_DIR, "train")))
+    val_users_set   = set(_collect_user_ids(os.path.join(SRC_DIR, "val")))
+    all_writers     = sorted(train_users_set | val_users_set)
+
+    n_global = max(1, int(len(all_writers) * global_test_frac)) if global_test_set else 0
+    global_users_set = set(all_writers[:n_global])
+    worker_writers   = [u for u in all_writers if u not in global_users_set]
+
+    # Single worker_map used for train/, val/, and local_test/
+    worker_map = _build_worker_map(worker_writers, num_workers)
+
+    # Per-split user lists for JSON headers (restricted to writers present in that split)
+    train_user_lists = _make_user_lists(worker_writers, worker_map, train_users_set, num_workers)
+    val_user_lists   = _make_user_lists(worker_writers, worker_map, val_users_set,   num_workers)
+
+    parts = ["80/10/10 train/val/local_test" if local_test_set else "90/10 train/val"]
     if global_test_set:
-        parts.append(f"global_test ({int(global_test_fraction * 100)}% of test writers)")
+        parts.append(f"global_test ({int(global_test_frac * 100)}% of writers)")
     print(f"Splitting FEMNIST into {num_workers} partitions [{', '.join(parts)}] ...")
+    print(f"  {len(all_writers)} writers total | {n_global} → global_test | {len(worker_writers)} → workers (~{len(worker_writers) // num_workers} per worker)")
 
-    # Determine global test writers before processing train/ so they can be excluded.
-    # Global test writers must never appear in any worker's train/ — otherwise they
-    # would not be truly unseen writers and the global test set would be meaningless.
-    src_test_dir = os.path.join(SRC_DIR, "val")
-    all_test_users = _collect_user_ids(src_test_dir)
+    global_buffer: dict | None = {} if global_test_set else None
 
-    if global_test_set:
-        n_global = max(1, int(len(all_test_users) * global_test_fraction))
-        global_user_list = all_test_users[:n_global]
-        worker_test_users = all_test_users[n_global:]
-    else:
-        global_user_list = []
-        worker_test_users = all_test_users
+    # ── Pass 2a: train/ ───────────────────────────────────────────────────────
+    train_dirs = [os.path.join(DEST_ROOT, f"worker_{i}", "train") for i in range(num_workers)]
+    train_handles, first_train = _open_worker_files(train_dirs, train_user_lists)
 
-    # global_buffer accumulates ALL samples (train + test) for global test writers.
-    # Using a buffer avoids duplicate JSON keys that would arise from writing train
-    # and test data for the same writer in two separate streaming passes.
-    global_users_set = set(global_user_list)
-    global_buffer: dict | None = {} if global_test_set and global_user_list else None
+    print("\n[train/]")
+    _stream(os.path.join(SRC_DIR, "train"), worker_map, global_users_set,
+            train_handles, first_train, global_buffer)
+    _close_worker_files(train_handles)
 
-    # train/ → per-worker train/; global test writers' train samples → global_buffer
-    _process_split("train", "train", num_workers, exclude=global_users_set,
-                   global_buffer=global_buffer)
+    # ── Pass 2b: val/ (+ optional local_test/) ───────────────────────────────
+    val_dirs = [os.path.join(DEST_ROOT, f"worker_{i}", "val") for i in range(num_workers)]
+    val_handles, first_val = _open_worker_files(val_dirs, val_user_lists)
 
-    # val/ → worker val/ (+ local_test/); global test writers' val samples → global_buffer
-    print("\n[val → worker val/" + (" + local_test (50/50 per writer)" if local_test_set else "") +
-          (" + global_test" if global_test_set else "") + "]")
+    lt_handles, first_lt = None, None
+    if local_test_set:
+        lt_dirs = [os.path.join(DEST_ROOT, f"worker_{i}", "local_test") for i in range(num_workers)]
+        lt_handles, first_lt = _open_worker_files(lt_dirs, val_user_lists)
 
-    if global_test_set:
-        print(f"  {len(all_test_users)} test writers total: "
-              f"{n_global} → global_test, {len(worker_test_users)} → workers")
-    else:
-        print(f"  {len(all_test_users)} test writers → workers")
+    print("\n[val/]")
+    _stream(os.path.join(SRC_DIR, "val"), worker_map, global_users_set,
+            val_handles, first_val, global_buffer,
+            local_test_handles=lt_handles, first_local_test=first_lt)
+    _close_worker_files(val_handles)
+    if lt_handles:
+        _close_worker_files(lt_handles)
 
-    chunk_size = len(worker_test_users) // num_workers
-    print(f"  ~{chunk_size} val writers per worker")
-
-    worker_map = _build_worker_map(worker_test_users, num_workers)
-    worker_user_lists: list[list[str]] = [[] for _ in range(num_workers)]
-    for user in worker_test_users:
-        worker_user_lists[worker_map[user]].append(user)
-
-    out_dirs_val = []
-    out_dirs_local_test = [] if local_test_set else None
-    for i in range(num_workers):
-        val_d = os.path.join(DEST_ROOT, f"worker_{i}", "val")
-        os.makedirs(val_d, exist_ok=True)
-        out_dirs_val.append(val_d)
-        if local_test_set:
-            lt_d = os.path.join(DEST_ROOT, f"worker_{i}", "local_test")
-            os.makedirs(lt_d, exist_ok=True)
-            out_dirs_local_test.append(lt_d)
-
-    _stream_test_split(
-        worker_map=worker_map,
-        num_workers=num_workers,
-        worker_user_lists=worker_user_lists,
-        global_users_set=global_users_set,
-        global_buffer=global_buffer,
-        out_dirs_val=out_dirs_val,
-        out_dirs_local_test=out_dirs_local_test,
-    )
-
-    # Write global_test/data.json once, with train+test samples merged per writer.
+    # ── Write global_test/ ────────────────────────────────────────────────────
     if global_buffer is not None:
-        os.makedirs(global_test_dir_host, exist_ok=True)
-        with open(os.path.join(global_test_dir_host, "data.json"), "w") as f:
-            json.dump({"users": global_user_list, "user_data": global_buffer}, f)
+        os.makedirs(global_test_dir, exist_ok=True)
+        with open(os.path.join(global_test_dir, "data.json"), "w") as f:
+            json.dump({"users": all_writers[:n_global], "user_data": global_buffer}, f)
 
-    # Remove the LEAF source shards — no longer needed once worker dirs are written.
     shutil.rmtree(SRC_DIR)
 
     print("\nDone. Per-worker partitions written to:")
     for i in range(num_workers):
-        dirs = "{train,val"
-        if local_test_set:
-            dirs += ",local_test"
-        dirs += "}"
-        print(f"  data/femnist/worker_{i}/{dirs}/")
+        splits = "train, val" + (", local_test" if local_test_set else "")
+        print(f"  data/femnist/worker_{i}/  [{splits}]")
     if global_test_set:
-        print(f"  data/femnist/global_test/  ← shared, never assigned to any worker")
+        print(f"  data/femnist/global_test/")
     print("\nNext step: python scripts/generate_compose.py && docker compose up --build")
 
 

@@ -159,19 +159,21 @@ I dati subiscono tre trasformazioni successive prima di essere usati dal modello
 
 **1. Lettura e fusione (`_read_json_shards`).**
 Tutti i file JSON di una split (`train/` o `val/`) vengono letti e fusi in due strutture:
-- `all_users`: lista flat di tutti i writer nell'ordine originale di LEAF (ordine deterministico).
+- `all_users`: lista flat di tutti i writer nell'ordine in cui sono stati scritti da `split_dataset.py` (ordine alfabetico per writer ID).
 - `user_data`: dizionario globale `{writer_id → {x, y}}`.
 
 **2. Partizionamento per worker (`split_dataset.py`).**
-La lista `all_users` viene divisa in $N$ slice contigue di dimensione $\lfloor |\mathcal{U}|/N \rfloor$, dove $\mathcal{U}$ è l'insieme dei writer e $N$ è `num_workers`. Con $N=3$ e 3.597 writer:
+`split_dataset.py` costruisce un'unica lista ordinata di tutti i writer come **unione ordinata alfabeticamente** degli ID presenti in `train/` e in `val/`. Questa lista è la fonte di verità per tutte le decisioni di routing: non dipende dall'ordine interno dei file JSON di LEAF, che è non deterministico tra run diversi a causa del seed casuale usato durante il campionamento. L'unione copre anche il caso limite di writer con zero campioni in uno dei due split (es. un writer con un solo campione che finisce interamente in `train/`).
+
+Da questa lista ordinata viene costruita **una sola `worker_map`** (`writer_id → worker_index`) usata identicamente per `train/`, `val/`, e `local_test/`. Questo garantisce che i campioni di training e di validation di uno stesso writer finiscano sempre nello stesso worker — proprietà che la versione precedente (due mappe costruite indipendentemente) assumeva implicitamente senza verificarla. La lista viene divisa in $N$ slice contigue di dimensione $\lfloor |\mathcal{U}|/N \rfloor$, dove $\mathcal{U}$ è l'insieme dei writer e $N$ è `num_workers`. Con $N=3$ e 3.597 writer:
 
 ```
-Worker 0 → writer    0–1198  (~1.199 writer, ~245.000 immagini)
-Worker 1 → writer 1199–2397  (~1.199 writer, ~245.000 immagini)
-Worker 2 → writer 2398–3596  (~1.199 writer, ~245.000 immagini)
+Worker 0 → writer    0–1198 (ordine alfabetico per ID, ~1.199 writer, ~245.000 immagini)
+Worker 1 → writer 1199–2397 (~1.199 writer, ~245.000 immagini)
+Worker 2 → writer 2398–3596 (~1.199 writer, ~245.000 immagini)
 ```
 
-Lo stesso partizionamento viene applicato **separatamente** sia a `train/` che a `test/` di LEAF: ogni worker riceve una slice contigua di writer da entrambe le cartelle. Il risultato sono due file per worker: `data/femnist/worker_{i}/train/data.json` e `data/femnist/worker_{i}/val/data.json`. La cartella sorgente `test/` di LEAF viene rinominata `val/` nelle cartelle worker per riflettere l'uso reale: non è un test set tenuto fuori dal training, ma il validation set usato per l'early stopping ad ogni round. Il rapporto 90/10 per campione dentro ogni writer — stabilito da LEAF — è preservato intatto.
+Il risultato sono due (o tre, con `local_test_set: true`) file per worker: `data/femnist/worker_{i}/train/data.json`, `worker_{i}/val/data.json`, e opzionalmente `worker_{i}/local_test/data.json`. La cartella sorgente `test/` di LEAF viene rinominata `val/` nelle cartelle worker per riflettere l'uso reale: non è un test set tenuto fuori dal training, ma il validation set usato per l'early stopping ad ogni round. Il rapporto 90/10 o 80/20 per campione dentro ogni writer — stabilito da LEAF tramite `--tf` — è preservato intatto.
 
 **3. Appiattimento e tensori (`collect_samples` + `FEMNISTDataset`).**
 All'interno del container, `load_partition` legge il proprio `data.json` e appiattisce tutti i campioni di tutti i writer in due liste parallele:
@@ -187,7 +189,7 @@ self.y = torch.tensor(y_data, dtype=torch.long)
 
 #### Perché la non-i.i.d. emerge naturalmente
 
-Poiché i writer vengono assegnati per slice contigue e LEAF li ordina per ID (che codifica il writer reale), ogni worker riceve gli stili di scrittura di un sottoinsieme specifico e distinto di persone. La distribuzione delle classi varia tra worker: uno scrittore potrebbe aver prodotto molte lettere maiuscole e poche cifre, un altro il contrario. Non esiste alcun meccanismo artificiale per garantire la non-i.i.d. — emerge direttamente dalla struttura del dataset, che riflette la variabilità naturale della scrittura umana.
+Poiché i writer vengono assegnati per slice contigue e l'unione è ordinata alfabeticamente per writer ID (un codice come `f1967_21` che identifica univocamente la persona reale), ogni worker riceve gli stili di scrittura di un sottoinsieme specifico e distinto di persone. La distribuzione delle classi varia tra worker: uno scrittore potrebbe aver prodotto molte lettere maiuscole e poche cifre, un altro il contrario. Non esiste alcun meccanismo artificiale per garantire la non-i.i.d. — emerge direttamente dalla struttura del dataset, che riflette la variabilità naturale della scrittura umana.
 
 La proprietà non-i.i.d. è cruciale per la valutazione realistica del sistema: un modello che converge su dati non-i.i.d. con comunicazione rara dimostra la robustezza dell'algoritmo di aggregazione in condizioni fedeli a quelle di un deployment reale.
 
@@ -622,8 +624,8 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 
 **`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da due flag in `config.yaml`. `local_test_set` (default `false`): con `false` scrive `data/femnist/worker_{i}/{train,val}/data.json` (90/10 per scrittore); con `true` scrive anche `worker_{i}/local_test/data.json`, dividendo il 20% LEAF al 50/50 per scrittore (10% val + 10% local\_test). `global_test_set` (default `false`): se abilitato, ritaglia `global_test_fraction` degli scrittori prima di qualunque assegnazione ai worker; quei writer non compaiono mai in nessuna partizione worker. I loro campioni da `train/` e da `val/` vengono accumulati in un `global_buffer` in memoria e scritti una sola volta in `data/femnist/global_test/data.json` — il buffer evita chiavi JSON duplicate che si produrrebbero scrivendo due passate sullo stesso file (LEAF mette gli stessi scrittori sia in `train/` che in `val/`). Al termine, lo script rimuove `data/femnist/data/` per liberare spazio su disco — rilevante su AWS Learner Lab dove lo storage è limitato. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
-- **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON, senza caricare i pixel. Produce la lista globale ordinata di tutti i writer, calcola la mappa `writer_id → worker_index` e raggruppa gli ID per worker. Consumo RAM: trascurabile (solo stringhe).
-- **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
+- **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON da `train/` e da `val/`, senza caricare i pixel. Costruisce l'**unione ordinata alfabeticamente** di tutti i writer ID (`sorted(train_set | val_set)`): questa lista è la fonte di verità per ogni decisione di routing, indipendente dall'ordine dei file LEAF (non deterministico tra run per via del seed casuale di campionamento). Da questa lista unica viene calcolata **una sola `worker_map`** (`writer_id → worker_index`), usata identicamente per `train/`, `val/`, e `local_test/`. Gli ID dei writer presenti in ogni split (non necessariamente identici, es. writer con zero campioni in val) vengono raggruppati separatamente per produrre header JSON accurati. Consumo RAM: trascurabile (solo stringhe).
+- **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. La stessa funzione di routing (`_stream`) viene usata sia per `train/` che per `val/`, passando `local_test_handles` solo nella seconda chiamata per il 50/50. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
 
 Lo script rimuove automaticamente le directory `worker_*` esistenti all'avvio, rendendo ogni esecuzione idempotente: se interrotto a metà, basta rilanciarla da capo senza rischio di dati inconsistenti. Al termine dell'elaborazione, lo script rimuove anche `data/femnist/data/`: la directory sorgente non è più necessaria una volta che le slice per-worker sono state scritte su disco.
 
@@ -631,7 +633,7 @@ La motivazione di eseguire entrambi gli step su host anziché dentro i container
 
 #### Strategia di partizione statica pre-deployment
 
-Il dataset FEMNIST viene partizionato in modo **deterministico e statico** prima dell'avvio dei container, dallo script `scripts/split_dataset.py`. Lo script legge i file JSON prodotti da LEAF, estrae la lista globale degli utenti ordinata, e assegna a ciascun worker uno slice contiguo:
+Il dataset FEMNIST viene partizionato in modo **deterministico e statico** prima dell'avvio dei container, dallo script `scripts/split_dataset.py`. Lo script costruisce l'unione ordinata alfabeticamente di tutti i writer ID presenti in `train/` e in `val/`, e assegna a ciascun worker uno slice contiguo di questa lista:
 
 $$\text{start}_k = k \cdot \left\lfloor \frac{|\mathcal{U}|}{N} \right\rfloor, \quad \text{end}_k = \begin{cases} \text{start}_k + \lfloor |\mathcal{U}|/N \rfloor & \text{se } k < N-1 \\ |\mathcal{U}| & \text{se } k = N-1 \end{cases}$$
 
