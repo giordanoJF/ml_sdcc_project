@@ -438,12 +438,14 @@ def cmd_deploy(cfg: dict):
     """Build images on all instances, upload partitions, start containers."""
     aws_cfg  = cfg.get("aws", {})
     net_cfg  = cfg["network"]
+    ml_cfg   = cfg.get("machine_learning", {})
 
-    key_path    = os.path.expanduser(aws_cfg["key_path"])
-    num_workers = net_cfg["num_workers"]
-    grpc_port   = net_cfg["grpc_port"]
-    reg_port    = net_cfg["registry_port"]
-    img_source  = aws_cfg.get("image_source", "build")
+    key_path        = os.path.expanduser(aws_cfg["key_path"])
+    num_workers     = net_cfg["num_workers"]
+    grpc_port       = net_cfg["grpc_port"]
+    reg_port        = net_cfg["registry_port"]
+    img_source      = aws_cfg.get("image_source", "build")
+    global_test_set = ml_cfg.get("global_test_set", False)
 
     out          = _terraform_output(TERRAFORM_DIR)
     reg_pub      = out["registry_public_ip"]
@@ -510,6 +512,21 @@ def cmd_deploy(cfg: dict):
     with ThreadPoolExecutor(max_workers=num_workers) as ex:
         list(ex.map(upload, enumerate(worker_pubs)))
 
+    if global_test_set:
+        global_test_local = DATA_ROOT / "global_test"
+        if not global_test_local.exists():
+            sys.exit(
+                "ERROR: data/femnist/global_test/ not found — "
+                "run split_dataset.py with global_test_set: true first"
+            )
+        print("  Uploading global_test to all workers...")
+        def upload_global_test(ip):
+            _scp_to(ip, key_path, global_test_local,
+                    "/home/ubuntu/data/femnist/", recursive=True)
+            print(f"  global_test → {ip}: done")
+        with ThreadPoolExecutor(max_workers=num_workers) as ex:
+            list(ex.map(upload_global_test, worker_pubs))
+
     # ------------------------------------------------------------------
     # 4. Start registry container
     # ------------------------------------------------------------------
@@ -542,11 +559,16 @@ def cmd_deploy(cfg: dict):
         i, pub, priv = args
         # Mount worker_{i}/ directly as /app/data/femnist so the container
         # sees train/ and val/ at the top level, matching load_partition(data_dir).
+        global_test_mount = (
+            f"-v /home/ubuntu/data/femnist/global_test:/app/data/femnist/global_test:ro "
+            if global_test_set else ""
+        )
         _ssh(pub, key_path,
              f"docker rm -f fl-worker 2>/dev/null || true && "
              f"docker run -d --name fl-worker "
              f"-p {grpc_port}:{grpc_port} "
              f"-v /home/ubuntu/data/femnist/worker_{i}:/app/data/femnist "
+             f"{global_test_mount}"
              f"-e WORKER_ID={i} "
              f"-e TOTAL_WORKERS={num_workers} "
              f"-e MY_HOST={priv} "
