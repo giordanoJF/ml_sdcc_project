@@ -56,7 +56,20 @@ python scripts/generate_compose.py
 docker compose up --build
 ```
 
-**Cycle between runs (same `num_workers`):**
+**Run the full experimental plan automatically (8 runs):**
+
+```bash
+python scripts/run_grid.py              # full plan, skips already-done runs
+python scripts/run_grid.py --dry-run    # preview without executing
+python scripts/run_grid.py --from f2    # resume from a specific run
+python scripts/run_grid.py --only ref h100 h1000   # run specific labels only
+```
+
+`run_grid.py` handles config updates, dataset re-partitioning when N changes, and result archiving automatically. See Section 13 of `docs/report.md` for the full plan and the config.yaml change table (§13.5).
+
+Before running, set `use_gpu: true/false` in `config.yaml` as needed — the script never touches that flag. Everything else (`num_workers`, `gossip_fanout`, `inner_steps_H`) is managed automatically.
+
+**Cycle between runs manually (same `num_workers`):**
 
 ```bash
 python scripts/aggregate_metrics.py --plot
