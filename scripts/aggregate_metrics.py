@@ -346,6 +346,9 @@ def main():
 
     print("-" * 75)
 
+    if not all_best_accs:
+        print("\n  *** No training data found — all workers logged 0 rounds ***")
+        return
     mean_best = statistics.mean(all_best_accs)
     std_best = statistics.stdev(all_best_accs) if len(all_best_accs) > 1 else 0.0
     print(f"\n  *** mean_best_val_accuracy = {mean_best:.4f}  (std={std_best:.4f}) ***")

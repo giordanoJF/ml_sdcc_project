@@ -18,8 +18,6 @@ Output:
         global_metrics.csv             ← per-round aggregated stats
         summary.txt                    ← human-readable summary
         worker_0/metrics.csv           ← per-round per-worker metrics
-        worker_0/model_final.pt        ← final model checkpoint
-        worker_0/model_best.pt         ← best checkpoint (lowest val loss)
         worker_0/local_test_result.json ← final test accuracy (if local_test_set: true)
         worker_1/...
         ...
@@ -69,6 +67,31 @@ def save_docker_logs(dest):
     return saved
 
 
+def _append_termination_reason(dest: str) -> None:
+    """Read the saved registry log and append the run termination reason to summary.txt."""
+    registry_log = os.path.join(dest, "logs", "registry.log")
+    summary_path = os.path.join(dest, "summary.txt")
+
+    if not os.path.exists(registry_log):
+        reason = "UNKNOWN — registry log not found"
+    else:
+        content = open(registry_log).read()
+        if "RUN_TERMINATION: NORMAL" in content:
+            reason = "NORMAL — all workers deregistered cleanly"
+        elif "WATCHDOG_TIMEOUT" in content:
+            reason = "WATCHDOG_TIMEOUT — registry forced shutdown after 60 min inactivity (ungraceful worker exits)"
+        elif "Signal 15" in content or "Signal 2" in content:
+            reason = "INTERRUPTED — manual stop (Ctrl+C / SIGTERM)"
+        else:
+            reason = "UNKNOWN — check logs/registry.log for details"
+
+    line = f"\nRun termination: {reason}\n"
+    print(f"  Run termination: {reason}")
+    if os.path.exists(summary_path):
+        with open(summary_path, "a") as f:
+            f.write(line)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Archive current experiment results.")
     parser.add_argument("name", help="Short label for this run (e.g. lr_1e-3, fanout_2)")
@@ -103,7 +126,7 @@ def main():
         worker_dest = os.path.join(dest, worker_name)
         os.makedirs(worker_dest)
 
-        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json"):
             src = os.path.join(worker_dir, fname)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(worker_dest, fname))
@@ -111,6 +134,8 @@ def main():
 
     log_files = save_docker_logs(dest)
     copied.extend(log_files)
+
+    _append_termination_reason(dest)
 
     print(f"Saved to: {dest}")
     print(f"Files archived: {len(copied)}")
@@ -130,6 +155,7 @@ def main():
             if os.path.exists(p):
                 os.remove(p)
                 cleaned.append(os.path.join(os.path.basename(worker_dir), fname))
+
 
     for fname in ("accuracy_over_rounds.png", "loss_over_rounds.png",
                   "phase_timing.png", "global_test_accuracy.png"):

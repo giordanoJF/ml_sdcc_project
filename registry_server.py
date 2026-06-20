@@ -25,11 +25,44 @@ _lock = threading.Lock()  # protects concurrent register/deregister calls
 _expected_workers: int = int(os.environ.get("TOTAL_WORKERS", "0"))
 _peak_registered: int = 0  # max simultaneous registrations seen
 
+# Inactivity watchdog: once all expected workers have been seen, if no deregistration
+# happens for _WATCHDOG_TIMEOUT seconds the registry forces shutdown. This handles
+# workers that exit ungracefully (SIGKILL, OOM) after registering — they never call
+# /deregister, so the registry would otherwise stall indefinitely.
+_WATCHDOG_TIMEOUT: int = 3600  # 60 minutes
+_watchdog_timer: threading.Timer | None = None
+
+
+def _watchdog_fire() -> None:
+    logging.warning(
+        f"WATCHDOG_TIMEOUT: no deregistration in {_WATCHDOG_TIMEOUT // 60} min — "
+        "forcing shutdown (ungraceful worker exits suspected)."
+    )
+    os._exit(1)
+
+
+def _arm_watchdog() -> None:
+    """Start or restart the inactivity watchdog."""
+    global _watchdog_timer
+    if _watchdog_timer is not None:
+        _watchdog_timer.cancel()
+    _watchdog_timer = threading.Timer(_WATCHDOG_TIMEOUT, _watchdog_fire)
+    _watchdog_timer.daemon = True
+    _watchdog_timer.start()
+
+
+def _cancel_watchdog() -> None:
+    global _watchdog_timer
+    if _watchdog_timer is not None:
+        _watchdog_timer.cancel()
+        _watchdog_timer = None
+
 
 def _schedule_shutdown() -> None:
     """Exit 2 s after the last worker deregisters (gives time to send the HTTP response)."""
+    _cancel_watchdog()
     def _exit():
-        logging.info("All workers done — registry shutting down.")
+        logging.info("RUN_TERMINATION: NORMAL — all workers deregistered cleanly.")
         os._exit(0)
     threading.Timer(2.0, _exit).start()
 
@@ -45,6 +78,9 @@ def register():
         _registry[worker_id] = address
         if len(_registry) > _peak_registered:
             _peak_registered = len(_registry)
+            if _expected_workers > 0 and _peak_registered >= _expected_workers:
+                # All expected workers are now registered — arm the watchdog.
+                _arm_watchdog()
     logging.info(f"Registered: {worker_id} @ {address}")
     return jsonify({"status": "ok"})
 
@@ -59,8 +95,11 @@ def deregister():
         empty = len(_registry) == 0
         all_seen = _expected_workers > 0 and _peak_registered >= _expected_workers
     logging.info(f"Deregistered: {worker_id} — active={len(_registry)}")
-    if empty and all_seen:
-        _schedule_shutdown()
+    if all_seen:
+        if empty:
+            _schedule_shutdown()
+        else:
+            _arm_watchdog()  # reset the timer: still waiting for remaining workers
     return jsonify({"status": "ok"})
 
 
