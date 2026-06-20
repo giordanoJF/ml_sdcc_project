@@ -1,0 +1,308 @@
+network:
+  # Full URL of the Discovery Server. Workers use this to register, deregister,
+  # and fetch the current peer list. Override with REGISTRY_URL env var for AWS
+  # multi-instance deployments where the registry runs on a separate machine.
+  registry_url: "http://registry:5000"
+
+  # Port the registry HTTP server listens on inside its container.
+  # Must match the port in registry_url. Injected as REGISTRY_PORT env var
+  # into the registry container by generate_compose.py.
+  registry_port: 5000
+
+  # Port each worker's gRPC server listens on for incoming model pushes (Phase C).
+  # All workers use the same internal port. In multi-instance EC2 (aws_deploy.py),
+  # each worker runs on its own EC2 instance so port collisions are not possible.
+  grpc_port: 50051
+
+  # Number of randomly selected peers each worker pushes its weights to at the
+  # end of each round (k-push gossip, Phase C). Higher values increase traffic
+  # linearly (k * model_size per round) but improve convergence speed.
+  # Typical range: 1 (minimal traffic) to N-1 (full broadcast).
+  # SYSTEM PARAMETER — not a pure ML hyperparameter. Controls the traffic/convergence
+  # trade-off that is the central subject of the comparative experiments.
+  # Experiment candidates: 1, 2, 3 (default), N-1
+  gossip_fanout: 2
+
+  # Total number of worker containers. After changing this value, regenerate
+  # the compose file and re-partition the dataset:
+  #   python scripts/split_dataset.py && python scripts/generate_compose.py
+  # SYSTEM PARAMETER — fixed per deployment. Vary only in scalability experiments
+  # to study how accuracy and convergence change with network size.
+  # Scalability experiment candidates: 3 (default), 5, 8 (AWS max: 9 EC2 limit → max 8 workers)
+  num_workers: 3
+
+
+
+
+federated_learning:
+  # Maximum number of training rounds before the process terminates.
+  # One round = Phase A (FedAvg aggregation) + Phase B (H local steps) + Phase C (gossip push).
+  # Can terminate earlier if early_stopping_patience is reached.
+  total_rounds: 200
+
+  # Number of local SGD steps each worker performs in Phase B before gossiping (H in DiLoCo).
+  # Higher H = less communication, more local drift between workers.
+  # Lower H = more communication, models stay closer but traffic increases.
+  # Default 500: with batch_size=32 this processes 16000 samples between gossip rounds.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 100, 500 (default), 1000
+  inner_steps_H: 1000
+
+  # Aggregation algorithm applied in Phase A. Currently only FedAvg is implemented.
+  aggregation_strategy: "FedAvg"
+
+  # Rounds without validation loss improvement before a worker stops local training.
+  # IMPORTANT — this is a LOCAL decision based on the worker's own validation partition,
+  # not a global FL convergence signal. When a worker stops, it deregisters from the
+  # Discovery Server and other workers lose it as a gossip peer, potentially slowing
+  # global convergence. For controlled comparative experiments, disable early stopping
+  # by setting this to a value larger than total_rounds (e.g. 9999) so all workers
+  # run for the same number of rounds. Keep it enabled for longer production runs
+  # to avoid wasting compute when a worker has genuinely plateaued.
+  # The threshold for "improvement" is 1e-4 (hardcoded in main_worker.py).
+  early_stopping_patience: 10
+
+  # To run workers in isolation (no-FL baseline), set gossip_fanout: 0.
+  # With fanout=0 no pushes are sent and the aggregation buffer stays empty,
+  # producing identical behavior to the former gossip_enabled: false flag.
+
+  # Set to true to use NVIDIA GPU acceleration (local only — AWS Learner Lab
+  # instances do not have GPUs). Requires NVIDIA Container Toolkit on the host
+  # and regenerating the compose file: python scripts/generate_compose.py.
+  # When true, generate_compose.py uses Dockerfile.worker.gpu (CUDA base image)
+  # and adds the GPU device reservation to each worker service.
+  # When false (default), uses Dockerfile.worker (CPU-only, smaller image ~1 GB).
+  use_gpu: true
+
+
+
+
+machine_learning:
+  dataset: "femnist"
+
+  # Path to the worker's data partition INSIDE the container.
+  # Mapped from the host via bind mount: ./data/femnist/worker_<id> -> /app/data/femnist
+  # Do not change unless you also update the bind mount in docker-compose.yml.
+  data_dir: "/app/data/femnist"
+
+  # When false (default): 90/10 train/val split per worker. Val is used for both
+  # early stopping and as the final accuracy metric (small optimistic bias).
+  # When true: 80/10/10 train/val/local_test split per worker. Val is used only for
+  # early stopping; local_test/ provides an independent estimate of how well the model
+  # generalizes on the same writers the worker trained on (held out from gradient
+  # updates only, not from the worker entirely). Written to local_test_result.json
+  # at the end of training.
+  # IMPORTANT: changing this value requires re-running split_dataset.py.
+  local_test_set: false
+
+  # When true: reserves global_test_fraction of all LEAF test writers before any
+  # per-worker split. These writers never appear in any worker's train/, val/, or
+  # local_test/ directories — they belong to the experimenter only.
+  # All workers evaluate on the same global test set every round, revealing whether
+  # the gossip protocol drives functional convergence (same predictions on inputs
+  # from writers never seen by any worker), complementing the L2 weight-distance metric.
+  # No FL confidentiality concern: these writers are not assigned to any participant.
+  # IMPORTANT: changing this value requires re-running split_dataset.py.
+  global_test_set: true
+
+  # Fraction of LEAF test-split writers reserved for the global test set.
+  # Applied only when global_test_set: true.
+  # Example: 0.10 with ~3500 test writers → ~350 global writers (~35k samples).
+  global_test_fraction: 0.10
+
+  # Path to the global test set directory INSIDE the container.
+  # Mapped from the host via bind mount: ./data/femnist/global_test -> this path.
+  # All worker containers share the same bind mount (read-only from their perspective).
+  global_test_dir: "/app/data/femnist/global_test"
+
+  # Mini-batch size for AdamW. Larger batches = more stable gradients but higher
+  # memory usage and fewer gradient steps per epoch.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 16, 32 (default), 64
+  batch_size: 32
+
+  # Learning rate for AdamW. AdamW is less sensitive to this than SGD, but on
+  # non-i.i.d. FL partitions a smaller lr (e.g. 1e-4) can reduce inter-worker drift.
+  # ML HYPERPARAMETER — affects model quality. Tune with grid search.
+  # Grid search candidates: 1e-4, 1e-3 (default), 5e-3
+  learning_rate: 0.001
+
+  # Optimizer. AdamW is used throughout; this field is informational only.
+  optimizer: "AdamW"
+
+  # Maximum L2 norm for gradient clipping. Clips gradients that exceed this threshold
+  # before the optimizer step. Reduces client drift in FL, where local gradients can
+  # diverge significantly from the global optimum. Set to 0 to disable.
+  clip_grad: 1.0
+
+  # Label smoothing coefficient for cross-entropy loss. Replaces hard targets (0/1)
+  # with soft targets (epsilon/(C-1) for wrong classes, 1-epsilon for the correct one).
+  # Helps calibration on FEMNIST's 62 visually similar classes. Set to 0 to disable.
+  label_smoothing: 0.1
+
+  # Dropout probability applied after each conv block (Dropout2d = spatial dropout:
+  # drops entire feature maps rather than individual activations, more appropriate
+  # for convolutional layers). Set to 0 to disable.
+  dropout_conv: 0.25
+
+  # Dropout probability applied before the final fully-connected classification layer.
+  # Set to 0 to disable.
+  dropout_fc: 0.5
+
+
+
+
+metrics:
+  # Set to false to disable per-round CSV logging (slightly faster training).
+  enabled: true
+
+  # Name of the CSV file written to data_dir/ at the end of each round.
+  # Visible on the host immediately via the bind mount — no data transfer needed.
+  # After the experiment, run: python scripts/aggregate_metrics.py
+  output_file: "metrics.csv"
+
+
+
+
+aws:
+  # AWS region. Learner Lab supports us-east-1 (default) and us-west-2.
+  # The pre-built vockey key pair is only in us-east-1; keep this value unless
+  # you create a custom key pair in us-west-2.
+  region: "us-east-1"
+
+  # EC2 instance type for worker nodes (multi-instance mode: one EC2 per worker).
+  # Memory bottleneck: dataset tensors loaded entirely in RAM by FEMNISTDataset.
+  # Each FEMNIST image = 784 float32 = 3.1 KB; full dataset ~800k images.
+  # Per-worker dataset RAM (approx):
+  #   3 workers → ~267k images/worker → ~830 MB tensors + ~300 MB PyTorch = ~1.1 GB
+  #   5 workers → ~160k images/worker → ~500 MB tensors + ~300 MB PyTorch = ~800 MB
+  #   8 workers → ~100k images/worker → ~310 MB tensors + ~300 MB PyTorch = ~610 MB
+  # Model weights are negligible (~7 MB for this CNN).
+  # Learner Lab supported instance sizes: nano, micro, small, medium, large only.
+  # Attempting to use xlarge or larger will result in the instance being terminated immediately.
+  # All t3 instances use 2 vCPU each (see 32-vCPU hard limit in IMPORTANT block below).
+  # t3.micro (1 GB), t3.small (2 GB), t3.medium (4 GB), t3.large (8 GB):
+  #   t3.micro  — NOT sufficient (1 GB OOM with 3–5 workers on full dataset)
+  #   t3.small  — sufficient for all worker counts with full dataset (2 GB > 1.1 GB worst case)
+  #   t3.medium — comfortable headroom; useful if you add larger batches or data augmentation
+  # Cost note: a 30-min run costs $0.005 on t3.small vs $0.010 on t3.medium — both negligible.
+  instance_type_worker: "t3.small"
+
+  # EC2 instance type for the registry (Flask service-discovery server, <50 MB RAM).
+  # Learner Lab supported instance sizes: nano, micro, small, medium, large only (xlarge+ terminated).
+  # t3.micro (1 GB, 2 vCPU) is more than sufficient; no reason to use anything larger.
+  instance_type_registry: "t3.micro"
+
+  # EC2 instance type for single-EC2 mode (ALL worker containers run on one machine).
+  # Memory is additive: N workers × per-worker RAM (see instance_type_worker comment).
+  # With full dataset:
+  #   3 workers → ~3.3 GB total → t3.medium (4 GB) is borderline; t3.large (8 GB) is safe
+  #   5 workers → ~4.0 GB total → t3.large (8 GB) required
+  #   8 workers → ~4.9 GB total → t3.large (8 GB) sufficient
+  # Learner Lab supports only nano, micro, small, medium, large across all instance families.
+  # t3.xlarge and larger will be terminated immediately — t3.large (2 vCPU, 8 GB) is the max.
+  # Cost note: t3.large costs $0.083/hr — a 30-min accuracy run costs ~$0.04, negligible.
+  instance_type_single: "t3.large"
+
+  # Availability Zone within the region. Pinning ALL instances to the same AZ
+  # keeps worker-to-worker gRPC gossip on intra-AZ private networking, which is FREE.
+  # Cross-AZ private traffic costs $0.01/GB each direction — with gossip_fanout=3,
+  # 200 rounds, and an 8-worker run the model transfer totals ~33 GB → ~$0.33 cross-AZ
+  # vs $0 same-AZ. Small but free to eliminate.
+  # Valid AZs per region:
+  #   us-east-1 → us-east-1a (default), us-east-1b, us-east-1c, ...
+  #   us-west-2 → us-west-2a, us-west-2b, us-west-2c, ...
+  # Must be consistent with the region above.
+  # Note: not all instance types are available in all AZs. If launch fails with a capacity
+  # error, try a different AZ (e.g. us-east-1b) — but set ALL instances to the same AZ.
+  availability_zone: "us-east-1a"
+
+  # EBS root volume (GB) for each worker EC2 instance (multi-instance mode).
+  # Disk usage breakdown per worker:
+  #   OS + apt packages           : ~5 GB
+  #   Docker engine               : ~1 GB
+  #   Worker image build          : ~3 GB  (python:3.11-slim + PyTorch + grpcio)
+  #   Dataset partition (train/val): ~0.5–2 GB  (lower with more workers or --sf 0.05)
+  #   Docker build cache          : ~1 GB
+  # Recommended range: 15 GB (8 workers, --sf 0.05) – 30 GB (3 workers, full dataset).
+  # Default 20 GB covers all configurations comfortably.
+  # Cost: gp3 = $0.08/GB/month → 20 GB = $0.002/hr; negligible during runs.
+  # Risk: if instances are stopped but not destroyed (resume scenario), EBS keeps
+  # charging at this rate until destroy is run.
+  # Learner Lab EBS hard limits: max 100 GB per volume. Volume type must be gp2, gp3,
+  # sc1, or standard — PIOPS (io1/io2) not supported.
+  volume_size_worker: 20
+
+  # EBS root volume (GB) for the registry EC2 instance.
+  # The registry runs only a lightweight Flask server (<50 MB); 8 GB is more than enough.
+  # Range: 8–15 GB. No reason to exceed 15 GB.
+  # Cost: 8 GB × $0.08/month = $0.0009/hr.
+  # Learner Lab EBS hard limits: max 100 GB per volume. PIOPS (io1/io2) not supported.
+  volume_size_registry: 8
+
+  # EBS root volume (GB) for the single-EC2 instance.
+  # All worker containers share this disk. Docker layer caching means the worker
+  # image is stored only once (~3 GB); dataset partitions for ALL workers are here.
+  # Disk usage breakdown:
+  #   OS + Docker daemon          : ~6 GB
+  #   Worker image (shared layers): ~3 GB  (built once, all containers reuse it)
+  #   Registry image              : ~0.3 GB
+  #   All dataset partitions      : ~0.5 GB (--sf 0.05) to ~4 GB (3 workers, full)
+  #   Docker build cache          : ~1 GB
+  # Recommended range: 20 GB (up to 5 workers, full dataset) – 30 GB (8 workers).
+  # Cost: gp3 = $0.08/GB/month → 20 GB ≈ $0.002/hr.
+  # Learner Lab EBS hard limits: max 100 GB per volume. PIOPS (io1/io2) not supported.
+  volume_size_single: 20
+
+  # IMPORTANT — Learner Lab hard limits:
+  #   - Maximum 9 concurrently running EC2 instances in a region.
+  #   - This deployment uses num_workers + 1 instances (workers + registry).
+  #   - Therefore num_workers must be <= 8 for AWS deploy.
+  #   - 20+ concurrent instances → immediate account deactivation.
+  #   - Maximum 32 vCPU across all concurrently running instances. t3 instances use 2 vCPU
+  #     each; 9×t3.large = 18 vCPU, well under the limit. Not a bottleneck for t3 deployments.
+
+  # Name of the EC2 key pair.
+  # In Learner Lab us-east-1, use the pre-existing "vockey" key pair (always pre-created).
+  # The "vockey" key pair is NOT available in us-west-2 — if using that region, create a new
+  # key pair in the EC2 console and update both key_name and key_path accordingly.
+  # Download labsuser.pem from the AWS Details panel (top of the lab interface).
+  key_name: "vockey"
+
+  # Path to the .pem private key downloaded from the Learner Lab AWS Details panel.
+  key_path: "~/Downloads/labsuser.pem"
+
+  # How to get the Docker image onto EC2 instances.
+  # "build": scp source + docker build on each instance in parallel (recommended,
+  #          no external registry needed, picks up latest code and config.yaml).
+  # "dockerhub": docker pull <dockerhub_image> (requires a prior docker push).
+  image_source: "build"
+
+  # DockerHub image tag. Only used when image_source is "dockerhub".
+  dockerhub_image: ""
+
+
+  
+
+fault_injection:
+  # Probability [0, 1] that a gossip push to a specific peer is silently dropped
+  # before the gRPC call is even attempted (simulates packet loss / network partition).
+  # At 0.20 with gossip_fanout=3, on average 2.4 messages are sent per round instead of 3.
+  drop_probability: 0.0
+
+  # Probability [0, 1] that a worker calls sys.exit(1) after Phase B in a given round,
+  # simulating a node crash. The process terminates immediately; the finally block
+  # still runs (deregistration + checkpoint save) because sys.exit raises SystemExit.
+  # At 0.05, expected lifetime of a worker before crash = 1/0.05 = 20 rounds.
+  crash_probability: 0.0
+
+  # Timeout in seconds for each outgoing gRPC call (send_model). If the target
+  # worker does not respond within this window, the call is marked as failed and
+  # the push is skipped for that peer (non-blocking for the sender).
+  grpc_timeout_seconds: 5.0
+
+  # Maximum round age difference accepted for incoming model updates.
+  # A message from round R is accepted only if current_round - R <= max_staleness.
+  # Prevents workers from incorporating very outdated weights that could degrade
+  # convergence. With H=500, 10 stale rounds = 5000 local batches of delay.
+  max_staleness: 10

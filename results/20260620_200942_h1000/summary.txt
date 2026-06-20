@@ -1,0 +1,34 @@
+Experiment summary — 3 workers
+============================================================
+
+  Worker  0: 24 rounds | final_acc=0.8550 | best_acc=0.9143 | total_training_s=296.3 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.88
+           phase_a=8519.0ms  phase_b=3.81s  phase_c=20.1ms  grpc_latency=19.96ms/call
+  Worker  1: 64 rounds | final_acc=0.8885 | best_acc=0.9010 | total_training_s=516.6 | avg_peers_contacted=0.50 | avg_neighbors_aggregated=0.56
+           phase_a=5167.9ms  phase_b=2.77s  phase_c=133.6ms  grpc_latency=198.62ms/call
+  Worker  2: 31 rounds | final_acc=0.9019 | best_acc=0.9019 | total_training_s=345.6 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.84
+           phase_a=7419.9ms  phase_b=3.58s  phase_c=147.4ms  grpc_latency=83.20ms/call
+
+mean_best_val_accuracy = 0.9057  std=0.0074
+  Worker  0: converged at round   24              wall-clock =   296.3s
+  Worker  1: converged at round   64              wall-clock =   516.6s
+  Worker  2: converged at round   31              wall-clock =   345.6s
+
+System convergence: YES — all workers converged
+System wall-clock total: 521.1s
+
+Mean pairwise L2 weight distance: 184.2726
+  Worker  0: final_global_test=0.8205  best_global_test=0.8847
+  Worker  1: final_global_test=0.7129  best_global_test=0.8926
+  Worker  2: final_global_test=0.7054  best_global_test=0.8532
+
+Global test — mean=0.7462, std=0.0644, spread=0.1151
+Verdict: WEAK functional convergence (spread > 5%) — models still diverge
+  Worker  0: round=  15  val_loss=0.3429  global_test=0.8847
+  Worker  1: round=  55  val_loss=0.3661  global_test=0.7670
+  Worker  2: round=  22  val_loss=0.3679  global_test=0.7059
+
+  Mean global test at model_best.pt: 0.7859  (std=0.0909)
+
+Total gossip messages sent: 87
+
+Run termination: NORMAL — all workers deregistered cleanly
