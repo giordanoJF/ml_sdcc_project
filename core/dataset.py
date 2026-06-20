@@ -17,6 +17,7 @@ import glob
 import json
 import os
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -28,12 +29,9 @@ class FEMNISTDataset(Dataset):
     Classes: 62 (digits 0-9 and letters a-z, A-Z).
     """
 
-    def __init__(self, x_data: list, y_data: list):
-        # x_data: list of flat vectors [784 floats] — one per image.
-        # Reshape to (N, 1, 28, 28): batch × channels × height × width,
-        # the format expected by Conv2d (1 channel = grayscale).
-        self.x = torch.tensor(x_data, dtype=torch.float32).view(-1, 1, 28, 28)
-        self.y = torch.tensor(y_data, dtype=torch.long)
+    def __init__(self, x_data: np.ndarray, y_data: np.ndarray):
+        self.x = torch.from_numpy(np.ascontiguousarray(x_data, dtype=np.float32)).view(-1, 1, 28, 28)
+        self.y = torch.from_numpy(np.ascontiguousarray(y_data, dtype=np.int64))
 
     def __len__(self) -> int:
         return len(self.y)
@@ -61,13 +59,24 @@ def _read_json_shards(directory: str) -> tuple[list, dict]:
     return all_users, user_data
 
 
-def _collect_samples(users: list, data_map: dict) -> tuple[list, list]:
-    # Flatten all writers' samples into two parallel lists.
-    # After this, writer identity is lost — we only keep (image, label) pairs.
-    x, y = [], []
+def _collect_samples(users: list, data_map: dict) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build pre-allocated numpy arrays from the LEAF user data map.
+
+    Avoids creating an intermediate flat Python list (which would double the
+    peak RAM usage: ~24 bytes/float as Python objects vs 4 bytes as float32).
+    The per-user slice assignment lets numpy convert one writer at a time.
+    """
+    total = sum(len(data_map[u]["y"]) for u in users)
+    x = np.empty((total, 784), dtype=np.float32)
+    y = np.empty(total, dtype=np.int64)
+    idx = 0
     for user in users:
-        x.extend(data_map[user]["x"])
-        y.extend(data_map[user]["y"])
+        ud = data_map[user]
+        n = len(ud["y"])
+        x[idx : idx + n] = ud["x"]
+        y[idx : idx + n] = ud["y"]
+        idx += n
     return x, y
 
 
@@ -94,7 +103,9 @@ def load_partition(
     val_users, val_data = _read_json_shards(os.path.join(data_dir, "val"))
 
     train_x, train_y = _collect_samples(train_users, train_data)
+    del train_data
     val_x, val_y = _collect_samples(val_users, val_data)
+    del val_data
 
     train_loader = DataLoader(
         FEMNISTDataset(train_x, train_y),
@@ -113,13 +124,14 @@ def load_partition(
     if os.path.isdir(local_test_dir):
         lt_users, lt_data = _read_json_shards(local_test_dir)
         lt_x, lt_y = _collect_samples(lt_users, lt_data)
+        del lt_data
         local_test_loader = DataLoader(
             FEMNISTDataset(lt_x, lt_y),
             batch_size=batch_size,
             shuffle=False,
         )
 
-    return train_loader, val_loader, local_test_loader, len(train_x)
+    return train_loader, val_loader, local_test_loader, int(train_x.shape[0])
 
 
 def load_global_test(global_test_dir: str, batch_size: int) -> DataLoader | None:
@@ -136,12 +148,32 @@ def load_global_test(global_test_dir: str, batch_size: int) -> DataLoader | None
     the gossip protocol has driven them to the same functional solution — not just
     nearby parameters (measured by L2 weight distance).
 
+    Memory strategy: split_dataset.py pre-generates data.npy + labels.npy alongside
+    the JSON. These are mounted read-only into every container, so all workers load
+    via mmap (mmap_mode='c'). The OS shares the same physical pages across all
+    processes — ~400 MB total regardless of worker count, vs 3+ GB per worker when
+    parsing JSON directly. Falls back to JSON if the .npy files are absent.
+
     Returns None if global_test_dir does not exist (global_test_set: false).
     """
     if not os.path.isdir(global_test_dir):
         return None
-    users, data = _read_json_shards(global_test_dir)
-    x, y = _collect_samples(users, data)
+
+    npy_x = os.path.join(global_test_dir, "data.npy")
+    npy_y = os.path.join(global_test_dir, "labels.npy")
+
+    if os.path.exists(npy_x) and os.path.exists(npy_y):
+        # Fast path: load from pre-generated numpy binary (created by split_dataset.py).
+        # mmap_mode='c' (copy-on-write) lets all workers share the same OS pages —
+        # ~400 MB total regardless of worker count, vs 3+ GB per worker from JSON.
+        x = np.load(npy_x, mmap_mode="c")
+        y = np.load(npy_y, mmap_mode="c")
+    else:
+        # Fallback: .npy absent (pre-fix split or missing). Slower but correct.
+        users, data = _read_json_shards(global_test_dir)
+        x, y = _collect_samples(users, data)
+        del data
+
     return DataLoader(
         FEMNISTDataset(x, y),
         batch_size=batch_size,

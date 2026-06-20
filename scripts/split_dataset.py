@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 
+import numpy as np
 import yaml
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -237,7 +238,21 @@ def main():
         with open(os.path.join(global_test_dir, "data.json"), "w") as f:
             json.dump({"users": all_writers[:n_global], "user_data": global_buffer}, f)
 
-    shutil.rmtree(SRC_DIR)
+        # Pre-convert to numpy binary so containers can load via mmap (read-only mount).
+        # All workers share the same physical pages → ~400 MB total instead of N × 3 GB.
+        total = sum(len(v["y"]) for v in global_buffer.values())
+        gt_x = np.empty((total, 784), dtype=np.float32)
+        gt_y = np.empty(total, dtype=np.int64)
+        idx = 0
+        for user in all_writers[:n_global]:
+            if user in global_buffer:
+                ud = global_buffer[user]
+                n = len(ud["y"])
+                gt_x[idx : idx + n] = ud["x"]
+                gt_y[idx : idx + n] = ud["y"]
+                idx += n
+        np.save(os.path.join(global_test_dir, "data.npy"),   gt_x[:idx])
+        np.save(os.path.join(global_test_dir, "labels.npy"), gt_y[:idx])
 
     print("\nDone. Per-worker partitions written to:")
     for i in range(num_workers):
