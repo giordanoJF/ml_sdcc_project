@@ -1,75 +1,81 @@
 # P2P Federated Learning — FEMNIST
 
-## Requirements
+## Host Requirements
 
-- Docker + Docker Compose
-- Python 3.11+
-- git
-- Terraform (for AWS deployments)
-
-```bash
-pip install -r requirements.debug.txt
-```
+- Docker + Docker Compose (runs containers)
+- Python 3.11+ (host-side scripts)
+- git (to clone the LEAF dataset repository)
+- Terraform ≥ 1.2 (AWS provisioning)
+- Python libraries (host-side scripts):
+  ```bash
+  pip install -r requirements.debug.txt
+  ```
 
 ## Deployment Modes
 
-| Mode | EC2 instances | Containers | When to use |
-|---|:---:|:---:|---|
-| **Local** | 0 | `num_workers` + 1 | development, accuracy experiments |
-| **Single EC2** | 1 | `num_workers` + 1 | same as local, on AWS |
-| **Multi-instance EC2** | `num_workers` + 1 | 1 per EC2 | convergence-time experiments (real TCP/IP) |
+**Local** — all containers run on the host machine via Docker Compose: one registry + `num_workers` workers.
 
-See `docs/report.md` for architecture, experiments, and AWS constraints.
+**Single EC2** — same Docker Compose setup, deployed to one AWS instance. Useful to run experiments on cloud hardware without changing the architecture.
+
+**Multi-instance EC2** — one EC2 instance per worker, plus one for the registry. Workers communicate over real TCP/IP across separate machines.
 
 ---
 
 ## Setup
 
+**1. Edit `config.yaml`** .
+
+**2. Download FEMNIST** — run once; re-run only if `local_test_set` changes in `config.yaml`. Use `--sf 0.05` for download just 5%
+
 ```bash
-# 1. Edit config.yaml (num_workers, gossip_fanout, learning_rate, use_gpu, …)
+python scripts/download_femnist.py
+```
 
-# 2. Download FEMNIST — re-run only when local_test_set changes
-python scripts/download_femnist.py          # full dataset
-# python scripts/download_femnist.py --sf 0.05   # 5% subset for quick install checks
+**3. Partition data across workers** — re-run when `num_workers`, `local_test_set`, or `global_test_set` changes.
 
-# 3. Partition data and generate docker-compose.yml
-#    Re-run when num_workers, local_test_set, or global_test_set changes
+```bash
 python scripts/split_dataset.py
+```
+
+**4. Generate `docker-compose.yml`** — re-run when `num_workers`, `use_gpu`, or `global_test_set` changes.
+
+```bash
 python scripts/generate_compose.py
 ```
 
 ### Test sets
 
-| Flag | Split | Purpose |
-|---|---|---|
-| `local_test_set: false` (default) | 90/10 train/val | val used for early stopping and as comparison metric |
-| `local_test_set: true` | 80/10/10 train/val/local_test | independent estimate on the worker's own writers |
-| `global_test_set: true` | reserves `global_test_fraction` of writers globally | fully unbiased convergence metric across all workers |
+Two independent flags in `config.yaml` control how data is split for evaluation:
 
-**Comparison metric:** `mean_best_val_accuracy` — printed by `aggregate_metrics.py`.
+**`local_test_set`** (default: `false`):
+- `false` — 90/10 train/val per worker. Val is used for early stopping and as the final accuracy metric.
+- `true` — 80/10/10 train/val/local_test per worker. Val is used only for early stopping; `local_test` contains the same writers as the training set, but a held-out portion of their samples never used for gradient updates.
+
+**`global_test_set`** (default: `true`): reserves `global_test_fraction` of writers before any per-worker split. All workers evaluate on this shared set every round — a fully unbiased convergence metric across the whole federation.
+
+**Comparison metric:** `mean_best_val_accuracy` — average across all workers of each worker's peak validation accuracy over all rounds. Used to compare different configurations across runs. Saved to `data/femnist/summary.txt` by `aggregate_metrics.py`.
 
 ---
 
 ## Local
 
-```bash
-docker compose up --build
-```
-
-**Run the full experimental plan automatically (8 runs):**
+**Automatic — `run_grid.py` manages the full experimental plan:**
 
 ```bash
-python scripts/run_grid.py              # full plan, skips already-done runs
-python scripts/run_grid.py --dry-run    # preview without executing
-python scripts/run_grid.py --from f2    # resume from a specific run
-python scripts/run_grid.py --only ref h100 h1000   # run specific labels only
+python scripts/run_grid.py
 ```
 
-`run_grid.py` handles config updates, dataset re-partitioning when N changes, and result archiving automatically. See Section 13 of `docs/report.md` for the full plan and the config.yaml change table (§13.5).
+`run_grid.py` handles config updates, dataset re-partitioning when N changes, and result archiving automatically.
 
-Before running, set `use_gpu: true/false` in `config.yaml` as needed — the script never touches that flag. Everything else (`num_workers`, `gossip_fanout`, `inner_steps_H`) is managed automatically.
+---
 
-**Cycle between runs manually (same `num_workers`):**
+**Manual — start and cycle between runs:**
+
+```bash
+docker compose up --build   # start training
+```
+
+When training finishes, save results and start the next run:
 
 ```bash
 python scripts/aggregate_metrics.py --plot
@@ -79,75 +85,194 @@ docker compose down
 docker compose up --build
 ```
 
-**When `num_workers` changes** — re-partition and regenerate:
+Depending on what changed in config.yaml, insert these steps before `docker compose up --build`:
 
+**`use_gpu` changed** (requires NVIDIA GPU + NVIDIA Container Toolkit):
 ```bash
-python scripts/aggregate_metrics.py --plot
-python scripts/save_experiment.py <name>
-docker compose down
-# edit num_workers in config.yaml
+python scripts/generate_compose.py
+```
+
+**`num_workers` or `global_test_set` changed:**
+```bash
 python scripts/split_dataset.py
 python scripts/generate_compose.py
-docker compose up --build
 ```
 
-### GPU (local only)
-
-Set `federated_learning.use_gpu: true` in `config.yaml`, then:
-
+**`local_test_set` changed:**
 ```bash
+python scripts/download_femnist.py
+python scripts/split_dataset.py
 python scripts/generate_compose.py
-docker compose up --build
 ```
-
-Requires NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
 ---
 
 ## Single EC2
 
+The **local machine** runs `download_femnist.py`, `split_dataset.py`, and `generate_compose.py` before the `scp` — the EC2 instance receives data already partitioned and runs only `docker compose up`. For subsequent runs, `split_dataset.py` and `generate_compose.py` can be re-run directly on the EC2 host (raw data is already there), except when `local_test_set` changes — that requires re-downloading LEAF locally (needs git) and re-uploading.
+
+Export credentials (Learner Lab panel → Start Lab → AWS Details → Show):
+
 ```bash
-# Export credentials from Learner Lab panel (AWS Academy → Start Lab → AWS Details → Show)
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_SESSION_TOKEN=...
+```
 
+Create the EC2 instance via Terraform, wait until Docker is ready, then print the public IP assigned by AWS:
+
+```bash
 python scripts/aws_deploy.py provision_single
+```
 
-# Follow printed instructions, then on the EC2 host:
+Copy the project to the instance (`<ip>` from the previous step), then connect:
+
+```bash
 scp -r . ubuntu@<ip>:~/project
 ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
-  cd ~/project
-  pip install -r requirements.debug.txt   # for analysis scripts (host, not container)
-  docker compose up --build
-  python scripts/aggregate_metrics.py --plot
-  python scripts/save_experiment.py <name>
+```
 
+`scp -r` copies the project recursively to `~/project` on the instance. `ssh -i` authenticates with the private key downloaded from Learner Lab (`aws.key_path` in `config.yaml`). `ubuntu` is the default user on EC2 Ubuntu instances.
+
+<br>
+
+**On the EC2 host — setup:**
+
+```bash
+cd ~/project
+pip install -r requirements.debug.txt
+```
+
+<br>
+
+**On the EC2 host — Automatic (`run_grid.py` manages the full experimental plan):**
+
+```bash
+python scripts/run_grid.py
+```
+
+<br>
+
+
+**On the EC2 host — Manual (start and cycle between runs):**
+
+```bash
+docker compose up --build
+```
+
+When training finishes, save results and start the next run:
+
+```bash
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py <name>
+docker compose down
+# edit config.yaml
+docker compose up --build
+```
+
+Depending on what changed in config.yaml, insert these steps before `docker compose up --build`:
+
+**`use_gpu` changed** (requires NVIDIA GPU + NVIDIA Container Toolkit):
+```bash
+python scripts/generate_compose.py
+```
+
+**`num_workers` or `global_test_set` changed:**
+```bash
+python scripts/split_dataset.py
+python scripts/generate_compose.py
+```
+
+**`local_test_set` changed** — `download_femnist.py` requires git, which is not installed on the EC2 instance. Run these **on the local machine**, delete the old data on EC2, then re-upload:
+```bash
+# on the local machine:
+python scripts/download_femnist.py
+python scripts/split_dataset.py
+ssh -i ~/Downloads/labsuser.pem ubuntu@<ip> "rm -rf ~/project/data/femnist"
+scp -r data/femnist ubuntu@<ip>:~/project/data/
+```
+
+When all runs are done:
+
+```bash
+python scripts/aggregate_metrics.py --plot
+python scripts/save_experiment.py <name>
+```
+
+<br>
+
+
+**Back on the local machine — download results, then stop billing:**
+
+```bash
+scp -r ubuntu@<ip>:~/project/results ./
 python scripts/aws_deploy.py destroy_single   # IMPORTANT: stop billing
+```
 
-# If the lab session restarted (new public IP):
-python scripts/aws_deploy.py resume_single
+**If the Learner Lab session restarted** (instance gets a new public IP):
+
+```bash
+python scripts/aws_deploy.py resume_single   # prints the new IP
 ```
 
 ---
 
 ## Multi-Instance EC2
 
+All orchestration runs locally via `aws_deploy.py` — no manual SSH needed. Training runs on the EC2 instances. `run_grid.py` is not supported in this mode: runs must be managed one at a time.
+
+Export credentials (same as Single EC2):
+
 ```bash
-# Export credentials (same as above)
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_SESSION_TOKEN=...
+```
 
-python scripts/aws_deploy.py provision   # create EC2 instances
-python scripts/aws_deploy.py deploy      # build images, upload data, start containers
-python scripts/aws_deploy.py status      # check container status
+Create all EC2 instances (one per worker + one for the registry), then build images, upload the dataset partitions, and start containers:
+
+```bash
+python scripts/aws_deploy.py provision
+python scripts/aws_deploy.py deploy
+```
+
+Monitor training — poll `status` until all worker containers show "Exited":
+
+```bash
+python scripts/aws_deploy.py status      # container status on every instance
 python scripts/aws_deploy.py logs 0      # tail worker_0 logs (Ctrl+C to exit)
-python scripts/aws_deploy.py collect     # download metrics when training ends
+```
+
+When all containers have exited, `collect` downloads `metrics.csv` and `local_test_result.json` from each worker to `data/femnist/worker_i/` locally. Run it once — the EC2 instances stay up (EBS data survives) until you call `destroy`:
+
+```bash
+python scripts/aws_deploy.py collect
 python scripts/aggregate_metrics.py --plot
 python scripts/save_experiment.py <name>
 python scripts/aws_deploy.py destroy     # IMPORTANT: stop billing
+```
 
-# If the lab session restarted (instances get new public IPs):
+**If config changes between runs** — update config locally, re-run the relevant scripts, then call `deploy` again (it stops old containers, re-uploads data, and restarts):
+
+**`num_workers` or `global_test_set` changed:**
+```bash
+python scripts/split_dataset.py
+python scripts/aws_deploy.py deploy
+```
+
+**`local_test_set` changed** — requires re-download locally (git not on EC2):
+```bash
+python scripts/download_femnist.py
+python scripts/split_dataset.py
+python scripts/aws_deploy.py deploy
+```
+
+No need to `destroy` and re-`provision` between runs — instances stay up, `deploy` handles the rest. `deploy` always deletes the old data partition on each worker before re-uploading, so no stale files survive between runs.
+
+**Inter-worker communication:** workers register their private VPC IP with the registry at startup. Gossip gRPC calls go directly between workers via private IPs — the registry is used only for initial peer discovery. All instances are in the same availability zone, so intra-cluster traffic is free.
+
+**If the Learner Lab session restarted** (instances get new public IPs):
+
+```bash
 python scripts/aws_deploy.py resume
 ```

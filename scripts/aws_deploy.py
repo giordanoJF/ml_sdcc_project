@@ -505,7 +505,8 @@ def cmd_deploy(cfg: dict):
         local = DATA_ROOT / f"worker_{i}"
         if not local.exists():
             sys.exit(f"ERROR: {local} not found — run split_dataset.py first")
-        _ssh(ip, key_path, "mkdir -p /home/ubuntu/data/femnist")
+        _ssh(ip, key_path,
+             "rm -rf /home/ubuntu/data/femnist && mkdir -p /home/ubuntu/data/femnist")
         _scp_to(ip, key_path, local, "/home/ubuntu/data/femnist/", recursive=True)
         print(f"  worker_{i} → {ip}: done")
 
@@ -536,6 +537,7 @@ def cmd_deploy(cfg: dict):
          f"docker run -d --name fl-registry --restart unless-stopped "
          f"-p {reg_port}:{reg_port} "
          f"-e REGISTRY_PORT={reg_port} "
+         f"-e TOTAL_WORKERS={num_workers} "
          f"fl-registry:latest")
 
     print(f"  Waiting for registry health...", end="", flush=True)
@@ -603,7 +605,7 @@ def cmd_collect(cfg: dict):
         # Files are written to /app/data/femnist/ inside the container, which
         # maps to /home/ubuntu/data/femnist/worker_{i}/ on the host (the mount point).
         remote_dir = f"/home/ubuntu/data/femnist/worker_{i}"
-        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json"):
             probe = _ssh(ip, key_path,
                          f"test -f {remote_dir}/{fname} && echo yes || echo no",
                          capture=True)

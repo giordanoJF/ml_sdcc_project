@@ -2565,6 +2565,23 @@ Il workflow è **identico al locale** — stessi script, stessa immagine Docker,
 
 > **Nota:** `aggregate_metrics.py` e `save_experiment.py` girano direttamente **sull'host EC2** (fuori dai container) e richiedono `pip install -r requirements.debug.txt` sull'host.
 
+**Divisione dei ruoli tra macchina locale e EC2:**
+
+Per il primo run, tutti gli script di setup (`download_femnist.py`, `split_dataset.py`, `generate_compose.py`) girano sulla **macchina locale** prima dell'`scp`. L'istanza EC2 riceve il progetto già pronto — dati partizionati, `docker-compose.yml` generato — e lancia direttamente `docker compose up --build`. Non è necessario installare git o altri tool sull'istanza per il primo avvio.
+
+Per i run successivi (dopo aver modificato `config.yaml`), la scelta dipende da cosa cambia:
+
+- `use_gpu` cambia → `generate_compose.py` può girare direttamente sull'host EC2 (nessuna dipendenza esterna)
+- `num_workers` o `global_test_set` cambiano → `split_dataset.py` + `generate_compose.py` possono girare sull'host EC2: i dati grezzi LEAF (`data/femnist/data/`) sono già presenti nell'`scp` iniziale
+- `local_test_set` cambia → richiede `download_femnist.py`, che usa `git` per clonare il repository LEAF. Git non è installato sull'istanza (lo `user_data` installa solo Docker). La procedura corretta è eseguire download e split sulla macchina locale, cancellare i dati vecchi sull'EC2 (un semplice `scp -r` non rimuove file preesistenti), e ri-uploadare:
+
+  ```bash
+  python scripts/download_femnist.py
+  python scripts/split_dataset.py
+  ssh -i ~/Downloads/labsuser.pem ubuntu@<ip> "rm -rf ~/project/data/femnist"
+  scp -r data/femnist ubuntu@<ip>:~/project/data/
+  ```
+
 **Chi esegue cosa e in che ordine:**
 
 | Passo | Chi | Dove | Comando |
@@ -2622,6 +2639,28 @@ ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
 python scripts/aws_deploy.py destroy_single
 ```
 
+**Re-esecuzione degli script di setup dopo modifiche a `config.yaml`:**
+
+Se si modifica la configurazione tra un run e l'altro, alcuni script vanno rieseguiti. La regola varia in base a cosa cambia e a dove gli script possono girare:
+
+| Cosa cambia | Script da rieseguire | Dove |
+|---|---|---|
+| `use_gpu` | `generate_compose.py` | EC2 host |
+| `num_workers` o `global_test_set` | `split_dataset.py` + `generate_compose.py` | EC2 host |
+| `local_test_set` | `download_femnist.py` + `split_dataset.py` | **locale**, poi re-upload |
+
+`split_dataset.py` e `generate_compose.py` possono girare direttamente sull'host EC2 — i dati grezzi sono già presenti dalla `scp` iniziale. `download_femnist.py` richiede invece `git` per clonare il repository LEAF, che non è installato sull'istanza (lo `user_data` installa solo Docker). In caso di cambio di `local_test_set` la procedura corretta è:
+
+```bash
+# sulla macchina locale:
+python scripts/download_femnist.py
+python scripts/split_dataset.py
+# cancellare i dati vecchi sull'EC2 (scp -r non rimuove file preesistenti)
+ssh -i ~/Downloads/labsuser.pem ubuntu@<ip> "rm -rf ~/project/data/femnist"
+scp -r data/femnist ubuntu@<ip>:~/project/data/
+# poi sull'host EC2: docker compose up --build
+```
+
 **Security group:** solo la porta 22 (SSH) deve essere esposta verso l'esterno. Le comunicazioni gRPC tra worker e registry avvengono sulla rete bridge interna di Docker — non richiedono regole ingress aggiuntive.
 
 ---
@@ -2669,7 +2708,7 @@ Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra m
 | `deploy` [5/5] | `aws_deploy.py` | **EC2 worker × N** | avvia container worker su ogni EC2, con mount della propria partizione e IP privato come `MY_HOST` |
 | Training | Container worker (N) | **N EC2 distinte** | allena localmente, fa gossip gRPC tra EC2 via IP privati VPC |
 | Discovery | Container registry (1) | **EC2 registry** | gestisce peer list durante il training |
-| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv`, `model_best.pt`, `model_final.pt`, `local_test_result.json` da ogni EC2 worker |
+| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv` e `local_test_result.json` da ogni EC2 worker (i file modello non vengono scaricati — non sono usati dall'analisi e genererebbero traffico egress inutile) |
 | Analisi | Operatore | **locale** | `aggregate_metrics.py`, `save_experiment.py` |
 | `destroy` | `aws_deploy.py` + Terraform | **locale → AWS** | termina tutte le istanze EC2, rimuove security group |
 
@@ -2700,6 +2739,35 @@ python scripts/save_experiment.py <nome>    # es. scalability_aws_N5
 # Distruggere le istanze per fermare la fatturazione
 python scripts/aws_deploy.py destroy
 ```
+
+**Come capire quando il training è terminato:**
+
+Non esiste una notifica automatica all'operatore. Il meccanismo è il seguente: quando tutti i worker terminano il training chiamano `/deregister` sul registry; il registry, ricevute tutte le deregistrazioni, si spegne (grazie a `TOTAL_WORKERS` passato a entrambi i container). I container Docker si fermano autonomamente — le istanze EC2 restano accese con i dati su disco EBS. L'operatore rileva la fine del training facendo polling con `status`:
+
+```bash
+python scripts/aws_deploy.py status   # ripetere finché tutti i worker mostrano "Exited"
+```
+
+Solo a quel punto si chiama `collect` (una volta sola), poi `aggregate_metrics.py`, `save_experiment.py`, e infine `destroy`. L'ordine è vincolante: `collect` deve precedere `destroy` — dopo la distruzione delle istanze i dati su EBS sono irrecuperabili.
+
+**Comunicazione inter-worker in multi-instance:**
+
+In locale e su Single EC2, i worker comunicano via rete bridge interna Docker usando il nome del container (`worker_0`, `worker_1`, …) come hostname — Docker risolve questi nomi via DNS interno. In multi-instance non esiste una rete Docker condivisa tra istanze diverse: ogni container gira su una macchina separata. La comunicazione avviene tramite **IP privati VPC**.
+
+`cmd_deploy` passa a ciascun worker container `-e MY_HOST={priv}` dove `priv` è l'IP privato dell'istanza EC2 su cui gira. Il worker costruisce il proprio indirizzo gRPC come `MY_HOST:grpc_port` e lo registra sul registry. Il registry (`REGISTRY_URL=http://{reg_priv}:{reg_port}`) è anch'esso raggiungibile via IP privato. Quando un worker vuole fare gossip, chiama `/peers` sul registry e ottiene la lista degli indirizzi privati degli altri worker, poi fa le chiamate gRPC direttamente a quei peer — il registry serve esclusivamente per la discovery iniziale, non è coinvolto nel trasferimento dei pesi.
+
+Tutte le istanze sono fissate nello stesso availability zone (`aws.availability_zone` in `config.yaml`): il traffico intra-AZ tra istanze della stessa VPC è gratuito, mentre il traffico cross-AZ costerebbe $0.01/GB.
+
+**Re-esecuzione degli script di setup tra run consecutivi in multi-instance:**
+
+A differenza di Single EC2, non è necessario distruggere e ricreare le istanze tra un run e l'altro. `deploy` si occupa di fermare i vecchi container (`docker rm -f`), ri-uploadare i dati aggiornati e riavviare i container. `provision` va chiamato una sola volta all'inizio; `destroy` una sola volta alla fine di tutti i run.
+
+| Cosa cambia | Script locali | Comando successivo |
+|---|---|---|
+| `num_workers` o `global_test_set` | `split_dataset.py` | `aws_deploy.py deploy` |
+| `local_test_set` | `download_femnist.py` + `split_dataset.py` | `aws_deploy.py deploy` |
+
+`deploy` cancella la directory `data/femnist` su ogni worker prima di ricaricare (`rm -rf` + `mkdir`), garantendo che nessun file stale sopravviva tra un run e l'altro — in particolare se `local_test_set` o `global_test_set` cambiano tra run consecutivi.
 
 **Dove finiscono le metriche:**
 
@@ -2749,6 +2817,27 @@ python scripts/aws_deploy.py destroy
 ```
 
 > Se si esegue sempre `destroy` prima che la sessione scada, `resume` non è mai necessario. È uno strumento di recupero per i casi in cui il training superi il limite di sessione.
+
+**Limitazione: `run_grid.py` non è supportato in modalità multi-instance.**
+
+`run_grid.py` è progettato per la modalità locale (docker compose): aggiorna il config, riesegue gli script di setup e rilancia i container in sequenza automatica. In multi-instance ogni run richiede `deploy` (build + upload + avvio su N istanze remote) e `collect` (SCP da N istanze), operazioni che `run_grid.py` non gestisce. I run vanno quindi orchestrati manualmente uno alla volta:
+
+```bash
+# per ogni run:
+# 1. modificare config.yaml in locale
+# 2. rieseguire split_dataset.py / generate_compose.py se necessario
+python scripts/aws_deploy.py deploy
+# ... aspetta fine training (status / logs) ...
+python scripts/aws_deploy.py collect
+python scripts/aggregate_metrics.py
+python scripts/save_experiment.py <nome>
+# ripetere per il run successivo, poi:
+python scripts/aws_deploy.py destroy
+```
+
+**Meccanismo di auto-shutdown del registry in multi-instance.**
+
+In modalità locale `generate_compose.py` inietta `TOTAL_WORKERS` nel container registry, che usa questo valore per sapere quando tutti i worker hanno terminato e spegnersi automaticamente (permettendo a `docker compose up` di ritornare al terminale). In multi-instance, `cmd_deploy` passa `TOTAL_WORKERS` sia ai worker che al registry: il registry si spegne quando l'ultimo worker si deregistra, e un watchdog di 60 minuti gestisce i crash ungraceful. Senza questo meccanismo il registry resterebbe vivo indefinitamente e qualsiasi orchestrazione automatica dei run rimarrebbe bloccata.
 
 ---
 
