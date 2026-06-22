@@ -177,21 +177,12 @@ ssh -i ~/Downloads/labsuser.pem ubuntu@<ip> 'cd ~/project && docker compose logs
 
 <br>
 
-**When training finishes — analyze on the EC2 host:**
+**When training finishes — collect results and analyze locally:**
 
 ```bash
-ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
-cd ~/project
+python scripts/aws_deploy.py collect_single   # SCP metrics.csv, local_test_result.json, model_best.pt → data/femnist/
 python scripts/aggregate_metrics.py --plot
 python scripts/save_experiment.py <name>
-```
-
-<br>
-
-**Download results to the local machine, then stop billing:**
-
-```bash
-scp -r ubuntu@<ip>:~/project/results ./
 python scripts/aws_deploy.py destroy_single   # IMPORTANT: stop billing
 ```
 
@@ -224,11 +215,14 @@ python scripts/aws_deploy.py deploy_single
 
 ```bash
 python scripts/aws_deploy.py resume_single   # updates Terraform state, prints new IP
-# Case A — training had already finished: SSH in to analyze, then destroy
+# Case A — training had already finished: collect, analyze, then destroy
+python scripts/aws_deploy.py collect_single
+python scripts/aggregate_metrics.py --plot && python scripts/save_experiment.py <name>
+python scripts/aws_deploy.py destroy_single
 # Case B — training was still running: partial metrics.csv and model_best.pt are on EBS.
-#           WARNING: deploy_single wipes data/femnist before re-uploading — collect first
+#           WARNING: deploy_single wipes data/femnist before re-uploading — collect_single first
 #           if you want to keep the partial data, otherwise it is permanently lost.
-python scripts/aws_deploy.py collect         # optional: save partial data locally
+python scripts/aws_deploy.py collect_single  # optional: save partial data locally
 python scripts/aws_deploy.py deploy_single   # wipes EBS data, re-uploads, restarts
 ```
 

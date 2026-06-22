@@ -121,6 +121,8 @@ Usage
 Commands — single EC2
 ---------------------
   provision_single   Create one EC2 instance via Terraform (docker-compose mode)
+  deploy_single      Upload project and dataset, build images, start containers
+  collect_single     Download per-worker output files from the single EC2 to data/femnist/
   destroy_single     Terminate the single EC2 instance
   resume_single      Refresh Terraform state after a session restart (IP changed)
 
@@ -387,6 +389,40 @@ def cmd_deploy_single(cfg: dict):
     print(f"  Destroy : python scripts/aws_deploy.py destroy_single")
 
 
+def cmd_collect_single(cfg: dict):
+    """Download per-worker output files from the single EC2 instance to data/femnist/."""
+    aws_cfg     = cfg.get("aws", {})
+    net_cfg     = cfg["network"]
+    key_path    = os.path.expanduser(aws_cfg["key_path"])
+    num_workers = net_cfg["num_workers"]
+
+    out = _terraform_output(TERRAFORM_SINGLE_DIR)
+    ip  = out["public_ip"]
+
+    print(f"Collecting from single EC2 ({ip})...")
+    for i in range(num_workers):
+        local_dir  = DATA_ROOT / f"worker_{i}"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        # Containers write to /app/data/femnist (bind-mounted from
+        # ~/project/data/femnist/worker_{i} on the EC2 host).
+        remote_dir = f"/home/ubuntu/project/data/femnist/worker_{i}"
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt"):
+            probe = _ssh(ip, key_path,
+                         f"test -f {remote_dir}/{fname} && echo yes || echo no",
+                         capture=True)
+            if probe.stdout.strip() == "yes":
+                _scp_from(ip, key_path,
+                          f"{remote_dir}/{fname}",
+                          local_dir / fname)
+                print(f"  worker_{i}: {fname} ✓")
+            else:
+                print(f"  worker_{i}: {fname} — not found (training still running?)")
+
+    print("\nRun locally to analyze:")
+    print("  python scripts/aggregate_metrics.py --plot")
+    print("  python scripts/save_experiment.py <name>")
+
+
 def cmd_destroy_single():
     """Terminate the single EC2 instance and remove its security group."""
     _terraform(TERRAFORM_SINGLE_DIR, "destroy", "-auto-approve")
@@ -520,7 +556,6 @@ def cmd_deploy(cfg: dict):
     num_workers     = net_cfg["num_workers"]
     grpc_port       = net_cfg["grpc_port"]
     reg_port        = net_cfg["registry_port"]
-    img_source      = aws_cfg.get("image_source", "build")
     global_test_set = ml_cfg.get("global_test_set", False)
 
     out          = _terraform_output(TERRAFORM_DIR)
@@ -543,34 +578,27 @@ def cmd_deploy(cfg: dict):
             print(f"  {ip}: ready")
 
     # ------------------------------------------------------------------
-    # 2. Build (or pull) Docker images on all instances in parallel
+    # 2. Build Docker images on all instances in parallel
     # ------------------------------------------------------------------
-    print(f"\n[2/5] Getting Docker images (image_source={img_source})...")
-    if img_source == "build":
-        archive = _create_source_archive()
-        try:
-            roles = ["registry"] + ["worker"] * num_workers
-            def build(args):
-                ip, role = args
-                _build_on_instance(ip, key_path, archive, role)
-                print(f"  {ip} ({role}): build OK")
+    print("\n[2/5] Building Docker images...")
+    archive = _create_source_archive()
+    try:
+        roles = ["registry"] + ["worker"] * num_workers
+        def build(args):
+            ip, role = args
+            _build_on_instance(ip, key_path, archive, role)
+            print(f"  {ip} ({role}): build OK")
 
-            with ThreadPoolExecutor(max_workers=len(all_ips)) as ex:
-                futures = {ex.submit(build, (ip, role)): ip
-                           for ip, role in zip(all_ips, roles)}
-                for fut in as_completed(futures):
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        sys.exit(f"ERROR: build failed on {futures[fut]}: {e}")
-        finally:
-            os.unlink(archive)
-    else:
-        image = aws_cfg.get("dockerhub_image", "")
-        if not image:
-            sys.exit("ERROR: dockerhub_image must be set when image_source=dockerhub")
-        for ip in all_ips:
-            _ssh(ip, key_path, f"docker pull {image}")
+        with ThreadPoolExecutor(max_workers=len(all_ips)) as ex:
+            futures = {ex.submit(build, (ip, role)): ip
+                       for ip, role in zip(all_ips, roles)}
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    sys.exit(f"ERROR: build failed on {futures[fut]}: {e}")
+    finally:
+        os.unlink(archive)
 
     # ------------------------------------------------------------------
     # 3. Upload dataset partitions to worker instances
@@ -760,6 +788,7 @@ def main():
     # Single EC2 commands
     sub.add_parser("provision_single", help="Create one EC2 instance via Terraform (docker-compose mode)")
     sub.add_parser("deploy_single",    help="Upload project and dataset, build images, start containers (single EC2)")
+    sub.add_parser("collect_single",   help="Download per-worker output files from the single EC2 to data/femnist/")
     sub.add_parser("destroy_single",   help="Terminate the single EC2 instance")
     sub.add_parser("resume_single",    help="Refresh state after a session restart (single EC2)")
 
@@ -779,6 +808,7 @@ def main():
 
     if   args.command == "provision_single": cmd_provision_single(cfg)
     elif args.command == "deploy_single":    cmd_deploy_single(cfg)
+    elif args.command == "collect_single":   cmd_collect_single(cfg)
     elif args.command == "destroy_single":   cmd_destroy_single()
     elif args.command == "resume_single":    cmd_resume_single()
     elif args.command == "provision":        cmd_provision(cfg)
