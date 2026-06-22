@@ -1076,8 +1076,7 @@ Round N (early stopping):
 
 Quando Thread 2 esce dal loop, la sequenza di shutdown è:
 
-1. Il blocco `finally` salva `model_final.pt` su disco.
-2. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
+1. Il blocco `finally` esegue `deregister_worker()` — il worker sparisce dalla lista peer del Discovery Server.
 3. `grpc_server.stop(grace=10)` ferma il server gRPC con un periodo di grazia di 10 secondi.
 4. Il processo termina e il container Docker si spegne.
 
@@ -1234,7 +1233,6 @@ Si varia un parametro alla volta mantenendo gli altri ai valori di default. Per 
 
 # 2. Pulisci i risultati precedenti
 rm -f data/femnist/worker_*/metrics.csv \
-      data/femnist/worker_*/model_final.pt \
       data/femnist/worker_*/model_best.pt \
       data/femnist/worker_*/local_test_result.json
 
@@ -1256,6 +1254,8 @@ docker compose down
 ```
 
 Lo script `save_experiment.py` copia in `results/` i `metrics.csv` di ogni worker, il `global_metrics.csv`, il `summary.txt`, gli eventuali `local_test_result.json` e `model_best.pt`, il `config.yaml` usato, e i log di ogni container Docker (`logs/<service>.log`). Il salvataggio dei log avviene tramite `docker compose logs` prima che i container vengano rimossi: Docker mantiene i log di un container finché il container non viene eliminato — anche se è crashato — quindi il file di log include l'output fino al momento del crash.
+
+**Comportamento in caso di training interrotto a metà (modalità locale):** `metrics.csv` viene scritto round per round in modalità append — ogni round completato è immediatamente su disco. Se il training viene interrotto prima del completamento, il file contiene tutte le round completate fino a quel momento. `model_best.pt` è presente se almeno una round ha migliorato la val_loss. `local_test_result.json` non esiste (viene scritto solo a fine training). Al rilancio del training, `MetricsWriter` apre il file in modalità `"a"` e **aggiunge righe** senza sovrascrivere — il nuovo run si accumula sul vecchio, producendo dati corrotti. Il passaggio `rm -f data/femnist/worker_*/metrics.csv ...` nel workflow manuale va eseguito prima di ogni `docker compose up --build`, oppure usare `save_experiment.py` che pulisce la directory automaticamente.
 
 **Cosa fa `docker compose down` e quando usarlo.** `docker compose down` ferma i container e li **rimuove** (lo stato "exited" viene eliminato insieme ai log Docker), rimuove le reti create dal compose, ma **non** rimuove le immagini Docker (rimangono in cache) né i file su disco (`data/femnist/worker_*/` rimane intatto). Va eseguito tra ogni run perché `config.yaml` è copiato nell'immagine al build time — non è montato come volume — quindi un run successivo con `config.yaml` modificato ma senza `docker compose down` + `--build` userebbe la config precedente baked nell'immagine.
 
@@ -1362,7 +1362,7 @@ La riga viene scritta **dopo** le fasi A, B e C, incluse le durate di rete. La `
 
 ### 6.3 Aggregazione Globale Post-Esperimento
 
-`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, i checkpoint `worker_*/model_best.pt` (con fallback su `model_final.pt`). Produce:
+`scripts/aggregate_metrics.py` legge tutti i file `worker_*/metrics.csv` e, se presenti, i checkpoint `worker_*/model_best.pt`. Produce:
 
 **1. Tabella per round** — per ogni round, aggrega le metriche di tutti i worker attivi:
 
@@ -1375,11 +1375,9 @@ La riga viene scritta **dopo** le fasi A, B e C, incluse le durate di rete. La `
 
 **2. Riassunto per worker** — rounds completati, accuracy finale, accuracy migliore, media di peer contattati, media di vicini aggregati.
 
-**3. Divergenza dei pesi (weight divergence)** — se i checkpoint `model_best.pt` sono presenti (con fallback su `model_final.pt`), lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia.
+**3. Divergenza dei pesi (weight divergence)** — se i checkpoint `model_best.pt` sono presenti, lo script carica tutti i modelli, appiattisce i parametri float in un vettore 1-D e calcola la distanza L2 tra ogni coppia.
 
-> **`model_best.pt` vs `model_final.pt`:** `model_best.pt` viene salvato ogni volta che la val loss migliora — è il modello al round con la migliore generalizzazione. `model_final.pt` viene salvato alla fine del training (blocco `finally`) ed è il modello all'ultimo round, potenzialmente leggermente degradato rispetto al picco a causa dei round di patience. Per la divergenza dei pesi si preferisce `model_best.pt` perché rappresenta il modello che si userebbe in produzione. Nessuno dei due è un checkpoint di ripristino (non include stato dell'optimizer né round corrente).
->
-> **Trade-off spazio/prestazioni.** Salvare `model_best.pt` ad ogni miglioramento introduce scritture su disco aggiuntive durante il training. Con un modello da ~7 MB e tipicamente 10–30 aggiornamenti per run il costo è trascurabile in locale; su EC2 con EBS il costo è ugualmente minimo (~7 MB × N scritture, ampiamente sotto i GB allocati). Il beneficio — avere sempre il modello al picco di qualità disponibile per l'analisi — giustifica abbondantemente il costo. In scenari con modelli molto grandi o storage molto limitato si potrebbe salvare solo `model_final.pt` commentando il blocco di salvataggio in `main_worker.py`.
+> **`model_best.pt`** viene salvato ogni volta che la val loss migliora — è il modello al round con la migliore generalizzazione, quello che si userebbe in produzione. Non è un checkpoint di ripristino (non include stato dell'optimizer né round corrente). Il costo di scrittura è trascurabile: ~7 MB per aggiornamento, tipicamente 10–30 aggiornamenti per run.
 
 $$d(w_i, w_j) = \|w_i - w_j\|_2$$
 
@@ -1594,7 +1592,7 @@ docker compose up --build
 
 # 4. Al termine, verificare che esistano i file attesi:
 ls data/femnist/worker_*/metrics.csv
-ls data/femnist/worker_*/model_final.pt
+ls data/femnist/worker_*/model_best.pt
 python scripts/aggregate_metrics.py
 ```
 
@@ -1674,7 +1672,7 @@ if random.random() < crash_prob:
 
 La scelta di `sys.exit(1)` è deliberata e ha implicazioni precise:
 
-1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione e lo snapshot finale `model_final.pt` viene salvato.
+1. `sys.exit(1)` solleva `SystemExit`, un'eccezione Python che **attraversa** i blocchi `finally`. Questo garantisce che il blocco `finally` in `main()` — che chiama `deregister_worker()` — venga eseguito prima che il processo termini. Il Registry riceve la deregistrazione.
 
 2. `SystemExit` non viene catturata da `grpc_server.stop()`, che non viene mai raggiunta. Il processo termina effettivamente — simulando un crash reale piuttosto che una terminazione pulita.
 
@@ -1745,8 +1743,7 @@ signal.signal(signal.SIGINT, _handle_shutdown)
 Entrambi chiamano `sys.exit(0)`, che solleva `SystemExit` e attraversa il blocco `finally` — la stessa sequenza del crash simulato, ma con exit code 0 (terminazione normale). Il risultato è:
 
 1. `deregister_worker()` viene chiamato → il worker sparisce dalla lista peer
-2. Lo snapshot finale `model_final.pt` viene salvato
-3. Il processo termina con exit code 0
+2. Il processo termina con exit code 0
 
 #### Known limitation: SIGKILL e OOM
 
@@ -2151,7 +2148,7 @@ deploy     →  [1] attende SSH+Docker su tutte le istanze
               [3] SCP partizioni dataset ai worker in parallelo
               [4] avvia registry container + attende healthcheck
               [5] avvia worker container in parallelo
-collect    →  SCP metrics.csv, local_test_result.json, model_best.pt, model_final.pt da ogni worker
+collect    →  SCP metrics.csv, local_test_result.json, model_best.pt da ogni worker
 status     →  mostra docker ps su ogni istanza
 logs <id>  →  docker logs -f worker_<id> o registry (via SSH interattivo)
 destroy    →  terraform destroy (elimina tutte le istanze)
@@ -2518,7 +2515,6 @@ Ogni worker scrive `metrics.csv` in `/app/data/femnist/` dentro il container. Gr
 data/femnist/worker_0/metrics.csv
 data/femnist/worker_1/metrics.csv
 ...
-data/femnist/worker_0/model_final.pt          ← snapshot finale dei pesi
 data/femnist/worker_0/model_best.pt           ← checkpoint con val_loss minima (per weight divergence)
 data/femnist/worker_0/local_test_result.json  ← solo se local_test_set: true
 ```
@@ -2588,9 +2584,10 @@ Per i run successivi (dopo aver modificato `config.yaml`), la scelta dipende da 
 |---|---|---|---|
 | Setup (passi 1–3) | Operatore | **macchina locale** | `download_femnist.py`, `split_dataset.py`, `generate_compose.py` |
 | `provision_single` | `aws_deploy.py` + Terraform | **locale → AWS** | crea 1 istanza EC2 (Ubuntu 22.04, `t3.large`), installa Docker via `user_data`, attende SSH ready |
-| Upload progetto | Operatore | **locale → EC2** | `scp -r . ubuntu@<ip>:~/project` |
-| Dipendenze host | Operatore (via SSH) | **EC2** | `pip install -r requirements.debug.txt` |
-| Avvio | Operatore (via SSH) | **EC2** | `docker compose up --build` |
+| `deploy_single` [1/4] | `aws_deploy.py` | **locale → EC2** | attende SSH + Docker ready |
+| `deploy_single` [2/4] | `aws_deploy.py` | **locale → EC2** | SCP codice sorgente + `docker-compose.yml`, installa `requirements.debug.txt` sull'host EC2 |
+| `deploy_single` [3/4] | `aws_deploy.py` | **locale → EC2** | `rm -rf` vecchi dati, SCP dell'intera `data/femnist/` (tutte le partizioni) |
+| `deploy_single` [4/4] | `aws_deploy.py` | **EC2** | `docker compose up --build -d` — avvia tutti i container in background |
 | Training | Container (N+1) | **EC2** | automatico, identico al caso locale |
 | Analisi | Operatore (via SSH) | **EC2** | `aggregate_metrics.py`, `save_experiment.py` |
 | `destroy_single` | `aws_deploy.py` + Terraform | **locale → AWS** | termina l'istanza EC2, rimuove il security group |
@@ -2604,18 +2601,12 @@ export AWS_SESSION_TOKEN=...
 # Provisioning: Terraform crea l'istanza EC2 e installa Docker automaticamente
 python scripts/aws_deploy.py provision_single
 
-# Upload del progetto (inclusa la cartella data/ già partizionata) e avvio
-scp -r . ubuntu@<ip>:~/project
+# Deploy: upload codice + dati + avvio container (tutto automatico)
+python scripts/aws_deploy.py deploy_single
+
+# A fine training: analisi sull'host EC2 via SSH
 ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
 cd ~/project
-
-# Installa dipendenze host (una sola volta per istanza) — servono per gli script di analisi
-pip install -r requirements.debug.txt
-
-# Avvio training
-docker compose up --build
-
-# A fine training: analisi direttamente sull'host EC2
 python scripts/aggregate_metrics.py
 python scripts/save_experiment.py <nome>
 
@@ -2623,19 +2614,26 @@ python scripts/save_experiment.py <nome>
 python scripts/aws_deploy.py destroy_single
 ```
 
-**Sessione scaduta durante il training (`resume_single`):** la sessione dura 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo *prima* che il timer scada — questo è il modo più semplice per evitare interruzioni su run lunghi. Se la sessione scade comunque prima di `destroy_single`, AWS stoppa l'istanza — i dati su disco (dataset, `metrics.csv` parziale) sopravvivono, ma i container Docker si fermano. Alla riapertura della sessione l'istanza riparte con un nuovo IP pubblico:
+**Sessione scaduta durante il training (`resume_single`):** la sessione dura 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo *prima* che il timer scada — questo è il modo più semplice per evitare interruzioni. Se la sessione scade, AWS **stoppa** l'istanza (non la termina): è equivalente a uno shutdown forzato. I dati su disco EBS sopravvivono intatti, ma la RAM viene azzerata — tutti i processi in esecuzione, incluso il demone Docker, vengono terminati. I container **non ripartono automaticamente** quando l'istanza viene riaccesa. L'istanza si riavvia con un **nuovo IP pubblico**; `terraform.tfstate` contiene ancora il vecchio, quindi `resume_single` va eseguito per allinearlo.
 
 ```bash
 python scripts/aws_deploy.py resume_single   # aggiorna tfstate, stampa nuovo IP
 
-# Caso A — training finito: analizza e distruggi
+# Caso A — training era già finito prima della scadenza
+#          (metrics.csv completo su disco EBS)
 ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
   cd ~/project && python scripts/aggregate_metrics.py && python scripts/save_experiment.py <nome>
 python scripts/aws_deploy.py destroy_single
 
-# Caso B — training era in corso (stato modello perso, nessun checkpoint): riparte dal round 1
-ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
-  cd ~/project && docker compose up
+# Caso B — training era ancora in corso (stato modello in RAM: perso)
+#          Su disco ci sono: metrics.csv parziale (tutte le round completate) e
+#          model_best.pt (se almeno una round ha migliorato la val_loss).
+#          ATTENZIONE: deploy_single cancella l'intera directory data/femnist prima
+#          di ricaricare il dataset — i dati intermedi su EBS vengono persi.
+#          Se vuoi conservarli, esegui collect PRIMA di deploy_single.
+python scripts/aws_deploy.py collect         # opzionale: salva dati parziali in locale
+python scripts/aws_deploy.py deploy_single   # rm -rf data su EC2 + re-upload + riavvio
+# ... aspetta fine training, poi analisi e destroy come al solito
 python scripts/aws_deploy.py destroy_single
 ```
 
@@ -2708,7 +2706,7 @@ Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra m
 | `deploy` [5/5] | `aws_deploy.py` | **EC2 worker × N** | avvia container worker su ogni EC2, con mount della propria partizione e IP privato come `MY_HOST` |
 | Training | Container worker (N) | **N EC2 distinte** | allena localmente, fa gossip gRPC tra EC2 via IP privati VPC |
 | Discovery | Container registry (1) | **EC2 registry** | gestisce peer list durante il training |
-| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv` e `local_test_result.json` da ogni EC2 worker (i file modello non vengono scaricati — non sono usati dall'analisi e genererebbero traffico egress inutile) |
+| `collect` | `aws_deploy.py` | **EC2 → locale** | SCP di `metrics.csv`, `local_test_result.json` e `model_best.pt` da ogni EC2 worker; `model_best.pt` è necessario per la weight divergence analysis in `aggregate_metrics.py` |
 | Analisi | Operatore | **locale** | `aggregate_metrics.py`, `save_experiment.py` |
 | `destroy` | `aws_deploy.py` + Terraform | **locale → AWS** | termina tutte le istanze EC2, rimuove security group |
 
@@ -2775,7 +2773,7 @@ Durante il training ogni worker scrive in `/app/data/femnist/` dentro il suo con
 
 **Sessione Learner Lab scaduta durante il training (`resume`):**
 
-La sessione dura circa 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo prima che il timer scada — il modo più semplice per non interrompere un training lungo. Se la sessione scade comunque prima di `destroy`, AWS **stoppa** automaticamente le istanze (non le termina: i dati su disco EBS sopravvivono). Alla riapertura della sessione, le istanze vengono riavviate con **nuovi IP pubblici**. Il file `terraform.tfstate` contiene ancora i vecchi IP, quindi i comandi `collect`, `status` e `logs` si connetterebbero agli indirizzi sbagliati.
+La sessione dura circa 4 ore ma può essere rinnovata cliccando **Start Lab** di nuovo prima che il timer scada — il modo più semplice per non interrompere un training lungo. Se la sessione scade, AWS **stoppa** automaticamente tutte le istanze (non le termina): è equivalente a uno shutdown forzato su ogni macchina. I dati su disco EBS sopravvivono intatti, ma la RAM viene azzerata — tutti i processi in esecuzione, incluso il demone Docker su ogni istanza, vengono terminati. I container **non ripartono automaticamente** quando le istanze vengono riaccese. Le istanze si riavviano con **nuovi IP pubblici**; `terraform.tfstate` contiene ancora i vecchi IP, quindi i comandi `collect`, `status`, `logs` e `deploy` si connetterebbero agli indirizzi sbagliati.
 
 `resume` esegue `terraform apply -refresh-only`: interroga AWS, aggiorna il file di stato con i nuovi IP e li stampa. Non modifica l'infrastruttura e non riavvia nessun container.
 
@@ -2809,8 +2807,13 @@ python scripts/save_experiment.py <nome>
 python scripts/aws_deploy.py destroy
 
 # Caso B — il training era ancora in corso (stato del modello in RAM: perso)
-#          Non esiste checkpointing: il training deve ripartire dal round 1.
-python scripts/aws_deploy.py deploy    # re-upload sorgenti, riavvia container
+#          Su disco ci sono: metrics.csv parziale (tutte le round completate) e
+#          model_best.pt (se almeno una round ha migliorato la val_loss).
+#          ATTENZIONE: deploy cancella l'intera directory data/femnist su ogni worker
+#          prima di ricaricare il dataset — i dati intermedi su EBS vengono persi.
+#          Se vuoi conservarli, esegui collect PRIMA di deploy.
+python scripts/aws_deploy.py collect         # opzionale: salva dati parziali in locale
+python scripts/aws_deploy.py deploy          # rm -rf data su ogni EC2 + re-upload + riavvio
 # ... aspetta fine training ...
 python scripts/aws_deploy.py collect
 python scripts/aws_deploy.py destroy
@@ -2839,6 +2842,14 @@ python scripts/aws_deploy.py destroy
 
 In modalità locale `generate_compose.py` inietta `TOTAL_WORKERS` nel container registry, che usa questo valore per sapere quando tutti i worker hanno terminato e spegnersi automaticamente (permettendo a `docker compose up` di ritornare al terminale). In multi-instance, `cmd_deploy` passa `TOTAL_WORKERS` sia ai worker che al registry: il registry si spegne quando l'ultimo worker si deregistra, e un watchdog di 60 minuti gestisce i crash ungraceful. Senza questo meccanismo il registry resterebbe vivo indefinitamente e qualsiasi orchestrazione automatica dei run rimarrebbe bloccata.
 
+**Sincronizzazione allo startup.**
+
+Il meccanismo di sincronizzazione tra worker è implementato nel codice applicativo (`main_worker.py`), non in docker-compose, e funziona identicamente in tutte e tre le modalità. `register_worker()` ritenta la registrazione fino a 10 volte con intervallo di 3 secondi, coprendo il caso in cui il container registry parta leggermente dopo i worker. `wait_for_all_peers()` blocca poi ogni worker con polling ogni 5 secondi (timeout 300 s) finché tutti gli N worker non risultano registrati — una barriera di sincronizzazione distribuita che garantisce che il training non inizi prima che l'intera federazione sia online. In multi-instance la comunicazione avviene via IP privato VPC anziché rete bridge Docker, ma il codice non vede la differenza: riceve `REGISTRY_URL` e `MY_HOST` come variabili d'ambiente in entrambi i casi.
+
+**Scelta di containerizzare anche in multi-instance.**
+
+In modalità multi-instance ogni EC2 ospita un solo processo (un worker o il registry): a differenza del caso locale e single-EC2, Docker non fornisce qui alcun beneficio di isolamento tra processi sulla stessa macchina. Il costo è concreto — build dell'immagine su ogni istanza a ogni `deploy` (~5–8 minuti) e overhead del daemon Docker. La scelta di mantenere Docker anche in questa modalità è motivata esclusivamente dalla **consistenza dell'ambiente di esecuzione**: lo stesso container testato in locale gira identico su EC2, eliminando qualsiasi rischio di divergenza tra dipendenze Python, versioni di librerie o configurazione del sistema operativo. In un progetto con pochi run AWS e focus sulla correttezza dei risultati, questo beneficio supera il costo del build time. Un'alternativa più leggera — installare le dipendenze Python via `user_data` Terraform e lanciare `python main_worker.py` direttamente sull'host — ridurrebbe il deploy a un semplice SCP dei sorgenti, ma richiederebbe di mantenere sincronizzate due pipeline di installazione delle dipendenze.
+
 ---
 
 ### 11.5 Analisi delle Metriche (comune a tutte le modalità)
@@ -2855,12 +2866,12 @@ python scripts/save_experiment.py <nome>
 | **Per-round table** | `round` \| `mean_acc` \| `std_acc` \| `min_acc` \| `max_acc` \| `PhaseA(s)` \| `PhaseB(s)` \| `PhaseC(s)` |
 | **Per-worker summary** | accuracy finale e migliore, total training time (somma `round_duration_s`), breakdown medio per fase, latenza gRPC media |
 | **System convergence** | per ogni worker: *converged at round X* oppure *hit round limit* + wall-clock reale dal timestamp; poi: verdetto del sistema (*YES — all workers converged* o *PARTIAL*) e wall-clock totale del sistema (dal primo worker start all'ultimo worker end) |
-| **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker (se i `model_final.pt` sono presenti) |
+| **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker da `model_best.pt` (checkpoint con val_loss minima — assente → sezione saltata) |
 | **Test set results** | `local_test_accuracy` per worker, solo se `local_test_set: true` |
 
 `global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
 
-`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/model_best.pt`, `worker_*/local_test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro per il prossimo run. Va eseguito prima di `docker compose down`.
+`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/local_test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro (rimuove anche `model_best.pt` se presente) per il prossimo run. Va eseguito prima di `docker compose down`.
 
 ### Confronto tra approccio 90/10 e 80/10/10
 
