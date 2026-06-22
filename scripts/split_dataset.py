@@ -13,20 +13,22 @@ Input:
     data/femnist/data/val/*.json      (20% or 10% — set by --tf in download_femnist.py)
 
 Output (local_test_set: false, global_test_set: false):
-    data/femnist/worker_N/train/data.json
-    data/femnist/worker_N/val/data.json
+    data/femnist/worker_N/train/data.json + data.npy + labels.npy
+    data/femnist/worker_N/val/data.json   + data.npy + labels.npy
 
 Output (local_test_set: true):
-    data/femnist/worker_N/train/data.json      ← 80% of each writer's samples
-    data/femnist/worker_N/val/data.json        ← 10% (first half of LEAF's 20% val)
-    data/femnist/worker_N/local_test/data.json ← 10% (second half)
+    data/femnist/worker_N/train/data.json      + data.npy + labels.npy  ← 80%
+    data/femnist/worker_N/val/data.json        + data.npy + labels.npy  ← 10%
+    data/femnist/worker_N/local_test/data.json + data.npy + labels.npy  ← 10%
 
 Output (global_test_set: true, additional):
-    data/femnist/global_test/data.json         ← train + val samples of carved-out writers
+    data/femnist/global_test/data.json + data.npy + labels.npy
 
-Memory: two-pass streaming — peak RAM = one JSON shard at a time.
+Memory: three-pass — peak during streaming = one JSON shard; peak during .npy conversion =
+  one per-worker partition at a time (~300–800 MB depending on num_workers).
   Pass 1 — read only writer IDs (no pixel data) from train/ and val/.
   Pass 2 — stream shards, writing each writer's data to the correct file immediately.
+  Pass 3 — convert each per-worker JSON to .npy for fast binary loading in containers.
 """
 import gc
 import glob
@@ -94,6 +96,27 @@ def _close_worker_files(handles: list) -> None:
     for h in handles:
         h.write("}}")
         h.close()
+
+
+def _save_npy(directory: str) -> None:
+    """Read the partition JSON from directory and save data.npy + labels.npy alongside it."""
+    with open(os.path.join(directory, "data.json")) as f:
+        shard = json.load(f)
+    users = shard["users"]
+    data  = shard["user_data"]
+    total = sum(len(data[u]["y"]) for u in users)
+    x = np.empty((total, 784), dtype=np.float32)
+    y = np.empty(total, dtype=np.int64)
+    idx = 0
+    for user in users:
+        ud = data[user]
+        n  = len(ud["y"])
+        x[idx : idx + n] = ud["x"]
+        y[idx : idx + n] = ud["y"]
+        idx += n
+    del data, shard
+    np.save(os.path.join(directory, "data.npy"),   x)
+    np.save(os.path.join(directory, "labels.npy"), y)
 
 
 def _stream(
@@ -253,6 +276,20 @@ def main():
                 idx += n
         np.save(os.path.join(global_test_dir, "data.npy"),   gt_x[:idx])
         np.save(os.path.join(global_test_dir, "labels.npy"), gt_y[:idx])
+
+    # ── Pass 3: pre-generate .npy for fast loading in worker containers ──────────
+    # JSON-parsed Python float objects cost ~24 bytes/float (vs 4 as float32).
+    # For N=8 workers (~100k images each), JSON peak RAM was ~1.9 GB — OOM risk on
+    # t3.small (2 GB). Binary .npy files let dataset.py skip JSON entirely: load
+    # peak drops to the array size alone (~310 MB for N=8, ~830 MB for N=3).
+    npy_splits = ["train", "val"] + (["local_test"] if local_test_set else [])
+    print(f"\n[pre-generating .npy ({', '.join(npy_splits)})]")
+    for i in range(num_workers):
+        for split in npy_splits:
+            split_dir = os.path.join(DEST_ROOT, f"worker_{i}", split)
+            print(f"  worker_{i}/{split} ...", end=" ", flush=True)
+            _save_npy(split_dir)
+            print("done")
 
     print("\nDone. Per-worker partitions written to:")
     for i in range(num_workers):
