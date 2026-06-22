@@ -173,10 +173,10 @@ Worker 1 → writer 1199–2397 (~1.199 writer, ~245.000 immagini)
 Worker 2 → writer 2398–3596 (~1.199 writer, ~245.000 immagini)
 ```
 
-Il risultato sono due (o tre, con `local_test_set: true`) file per worker: `data/femnist/worker_{i}/train/data.json`, `worker_{i}/val/data.json`, e opzionalmente `worker_{i}/local_test/data.json`. La cartella sorgente `test/` di LEAF viene rinominata `val/` nelle cartelle worker per riflettere l'uso reale: non è un test set tenuto fuori dal training, ma il validation set usato per l'early stopping ad ogni round. Il rapporto 90/10 o 80/20 per campione dentro ogni writer — stabilito da LEAF tramite `--tf` — è preservato intatto.
+Il risultato è una directory per worker con, per ogni split (`train/`, `val/`, e opzionalmente `local_test/`), due file: `data.json` (formato LEAF originale) e `data.npy` + `labels.npy` (binario NumPy, generati dalla Passata 3 di `split_dataset.py` per il caricamento rapido nei container). La cartella sorgente `test/` di LEAF viene rinominata `val/` nelle cartelle worker per riflettere l'uso reale: non è un test set tenuto fuori dal training, ma il validation set usato per l'early stopping ad ogni round. Il rapporto 90/10 o 80/20 per campione dentro ogni writer — stabilito da LEAF tramite `--tf` — è preservato intatto.
 
-**3. Appiattimento e tensori (`collect_samples` + `FEMNISTDataset`).**
-All'interno del container, `load_partition` legge il proprio `data.json` e appiattisce tutti i campioni di tutti i writer in due liste parallele:
+**3. Appiattimento e tensori (`_load_split` + `FEMNISTDataset`).**
+All'interno del container, `load_partition` chiama `_load_split` per ogni split: se `data.npy` e `labels.npy` sono presenti (caso normale dopo `split_dataset.py`) li carica direttamente via `np.load`; altrimenti rilegge il JSON e appiattisce i campioni di tutti i writer in due array NumPy paralleli:
 - `train_x`: lista di vettori da 784 float — tutte le immagini del worker.
 - `train_y`: lista di etichette corrispondenti.
 
@@ -622,10 +622,11 @@ La preparazione del dataset avviene interamente sull'host, **prima** della creaz
 > **Nota sulle modifiche a codice LEAF di terze parti.**  
 > LEAF (Caldas et al., 2018) è un repository accademico non più attivamente mantenuto per la compatibilità con Python e librerie di sistema moderne. Le due patch sopra non alterano l'algoritmo di preprocessing né la struttura dei dati prodotti — modificano esclusivamente chiamate di sistema o di libreria diventate obsolete o non portabili. Le patch vengono applicate programmaticamente da `download_femnist.py` alla copia locale clonata, e scompaiono insieme all'intera directory `leaf/` al passo 7: non è necessario mantenere un fork. Ad ogni nuova esecuzione di `download_femnist.py`, LEAF viene riclonato e riprotato da zero.
 
-**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da due flag in `config.yaml`. `local_test_set` (default `false`): con `false` scrive `data/femnist/worker_{i}/{train,val}/data.json` (90/10 per scrittore); con `true` scrive anche `worker_{i}/local_test/data.json`, dividendo il 20% LEAF al 50/50 per scrittore (10% val + 10% local\_test). `global_test_set` (default `false`): se abilitato, ritaglia `global_test_fraction` degli scrittori prima di qualunque assegnazione ai worker; quei writer non compaiono mai in nessuna partizione worker. I loro campioni da `train/` e da `val/` vengono accumulati in un `global_buffer` in memoria e scritti una sola volta in `data/femnist/global_test/data.json` — il buffer evita chiavi JSON duplicate che si produrrebbero scrivendo due passate sullo stesso file (LEAF mette gli stessi scrittori sia in `train/` che in `val/`). La directory sorgente `data/femnist/data/` viene preservata per consentire di ri-eseguire lo split con `num_workers` diverso senza dover ri-scaricare il dataset. Lo script adotta una strategia a **due passate con scrittura immediata su disco** per mantenere il consumo di RAM costante indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
+**`scripts/split_dataset.py`** — partiziona `data/femnist/data/` in slice per-worker. Il comportamento dipende da due flag in `config.yaml`. `local_test_set` (default `false`): con `false` scrive `data/femnist/worker_{i}/{train,val}/data.json` (90/10 per scrittore); con `true` scrive anche `worker_{i}/local_test/data.json`, dividendo il 20% LEAF al 50/50 per scrittore (10% val + 10% local\_test). `global_test_set` (default `false`): se abilitato, ritaglia `global_test_fraction` degli scrittori prima di qualunque assegnazione ai worker; quei writer non compaiono mai in nessuna partizione worker. I loro campioni da `train/` e da `val/` vengono accumulati in un `global_buffer` in memoria e scritti una sola volta in `data/femnist/global_test/data.json` — il buffer evita chiavi JSON duplicate che si produrrebbero scrivendo due passate sullo stesso file (LEAF mette gli stessi scrittori sia in `train/` che in `val/`). La directory sorgente `data/femnist/data/` viene preservata per consentire di ri-eseguire lo split con `num_workers` diverso senza dover ri-scaricare il dataset. Lo script adotta una strategia a **tre passate** per mantenere il consumo di RAM controllato indipendentemente dalla dimensione del dataset. Il dataset completo occupa ~4 GB su disco ma si espanderebbe a 40–80 GB come oggetti Python se caricato interamente in memoria — dimensione insostenibile su un portatile.
 
 - **Passata 1 (solo ID):** legge esclusivamente il campo `users` di ogni shard JSON da `train/` e da `val/`, senza caricare i pixel. Costruisce l'**unione ordinata alfabeticamente** di tutti i writer ID (`sorted(train_set | val_set)`): questa lista è la fonte di verità per ogni decisione di routing, indipendente dall'ordine dei file LEAF (non deterministico tra run per via del seed casuale di campionamento). Da questa lista unica viene calcolata **una sola `worker_map`** (`writer_id → worker_index`), usata identicamente per `train/`, `val/`, e `local_test/`. Gli ID dei writer presenti in ogni split (non necessariamente identici, es. writer con zero campioni in val) vengono raggruppati separatamente per produrre header JSON accurati. Consumo RAM: trascurabile (solo stringhe).
 - **Passata 2 (streaming con scrittura immediata):** apre tutti i file di output dei worker simultaneamente; legge un shard alla volta; per ogni writer nel shard, scrive l'entry `user_id: {x, y}` direttamente nel file del worker corretto in quel momento, senza accumularla in memoria. La stessa funzione di routing (`_stream`) viene usata sia per `train/` che per `val/`, passando `local_test_handles` solo nella seconda chiamata per il 50/50. Alla fine del shard, esegue `del shard` + `gc.collect()` per liberare subito la RAM prima del shard successivo. Il picco di RAM è **un singolo shard** (~1–2 GB come oggetti Python) indipendentemente dal numero di worker o dalla dimensione totale del dataset.
+- **Passata 3 (pre-generazione `.npy`):** per ogni directory `worker_{i}/{train,val,local_test}/`, rilegge il JSON appena scritto una partizione alla volta, pre-alloca array NumPy (`float32` + `int64`) e salva `data.npy` + `labels.npy` nella stessa directory. Il picco di questa passata è una singola partizione (~310–830 MB a seconda di `num_workers`). Questi file binari vengono letti da `dataset.py` in alternativa al JSON per evitare il picco di ~1.9 GB causato dagli oggetti Python del parser JSON (vedere analisi RAM nella Sezione 8.1).
 
 Lo script rimuove automaticamente le directory `worker_*` esistenti all'avvio, rendendo ogni esecuzione idempotente: se interrotto a metà, basta rilanciarla da capo senza rischio di dati inconsistenti. La directory sorgente `data/femnist/data/` viene preservata in modo da poter ri-eseguire lo split con un diverso `num_workers` senza dover ri-scaricare il dataset (il download richiede ~40 minuti).
 
@@ -675,7 +676,7 @@ Una partizione dinamica (che ribilancia i dati al join di nuovi worker) avrebbe 
 
 #### Caricamento nel worker
 
-`core/dataset.py` espone la funzione `load_partition(data_dir, batch_size)` che legge semplicemente tutti i file JSON presenti in `data_dir/train/` e `data_dir/val/` — la stessa interfaccia di lettura indipendentemente da quanti worker esistano. Il splitting è già avvenuto su host; il container non sa nulla della topologia globale.
+`core/dataset.py` espone `load_partition(data_dir, batch_size)`: per ogni split (`train/`, `val/`, `local_test/`) chiama `_load_split`, che usa `data.npy` + `labels.npy` se presenti (fast path, caricamento binario diretto), altrimenti rilegge il JSON come fallback. L'interfaccia è identica indipendentemente da quanti worker esistano. Il splitting è già avvenuto su host; il container non sa nulla della topologia globale.
 
 #### Immutabilità dei dati durante il training
 
@@ -947,7 +948,87 @@ L'architettura è organizzata in tre componenti sequenziali: due blocchi convolu
 
 Il classificatore contribuisce il 94% dei parametri (FC1 domina), come tipico nelle CNN piccole: la feature extraction è parsimoniosa grazie ai kernel condivisi, mentre i layer FC non condividono pesi.
 
-### 5.3 Motivazione di Ogni Scelta di Progetto
+### 5.3 Fondamenti Teorici del Training
+
+Questa sezione descrive i meccanismi teorici alla base delle scelte di training: la funzione di loss, la regola di aggiornamento SGD, il ruolo del batch size, l'inizializzazione dei pesi, e la motivazione della label smoothing. La comprensione di questi fondamenti è necessaria per leggere le motivazioni delle singole scelte di progetto nella sezione 5.4 che segue.
+
+#### Funzione di Loss: Cross-Entropy
+
+La **cross-entropy** è la funzione di loss standard per classificazione multi-classe. Viene dalla teoria dell'informazione: misura quanti bit in media servono per codificare un messaggio dalla distribuzione vera $p$ usando un codice ottimizzato per la distribuzione predetta $q$. In pratica, dati i logit $z_1, \ldots, z_C$ prodotti dall'ultimo layer lineare del modello, il vettore di probabilità predette si ottiene con softmax:
+
+$$q_k = \frac{e^{z_k}}{\sum_{j=1}^C e^{z_j}}$$
+
+I **logit** $z_k$ sono i valori grezzi in uscita dall'ultimo layer, prima di softmax — numeri reali non normalizzati che possono assumere qualsiasi valore. Softmax li converte in probabilità positive che sommano a 1.
+
+Con label hard (one-hot), la distribuzione vera è $p_y = 1$ per la classe corretta $y$ e $p_k = 0$ altrimenti. La cross-entropy si riduce a:
+
+$$\mathcal{L} = -\log q_y = -\log \frac{e^{z_y}}{\sum_j e^{z_j}}$$
+
+Solo il termine della classe corretta sopravvive, e minimizzare $-\log q_y$ significa massimizzare la probabilità assegnata alla classe giusta. Questa loss è differenziabile rispetto ai logit $z_k$, il che la rende ottimizzabile con discesa del gradiente.
+
+#### Ottimizzazione: SGD e Learning Rate
+
+La **discesa del gradiente stocastica (SGD)** aggiorna i parametri del modello $\theta$ nella direzione opposta al gradiente della loss:
+
+$$\theta \leftarrow \theta - \alpha \cdot \nabla_\theta \mathcal{L}$$
+
+Il coefficiente $\alpha$ — chiamato **learning rate** in PyTorch, $\eta$ o $\alpha$ in letteratura — determina la grandezza del passo. Un $\alpha$ troppo alto causa divergenza (i pesi saltano oltre i minimi); un $\alpha$ troppo basso causa convergenza lenta o blocco in minimi locali.
+
+**AdamW** è un'estensione di SGD che mantiene due stime per ogni parametro: $m_t$ (media mobile dei gradienti, primo momento) e $v_t$ (media mobile del quadrato dei gradienti, secondo momento). Il passo effettivo per il parametro $i$ è:
+
+$$\Delta\theta_i = \alpha \cdot \frac{m_t^{(i)}}{\sqrt{v_t^{(i)}} + \varepsilon}$$
+
+Il denominatore $\sqrt{v_t}$ normalizza il passo in base alla variabilità storica del gradiente per quel parametro: parametri con gradienti instabili ricevono passi più piccoli, parametri con gradienti stabili ricevono passi più grandi. Questo rende AdamW molto meno sensibile alla scelta del learning rate rispetto a SGD puro.
+
+#### Batch Size e Rumore del Gradiente
+
+Il gradiente vero sarebbe calcolato su tutto il dataset: $\nabla\mathcal{L} = \frac{1}{N}\sum_{i=1}^N \nabla\mathcal{L}_i$. Con mini-batch di dimensione $B$, si calcola una stima su $B$ campioni casuali. Per la legge dei grandi numeri, questa stima ha varianza proporzionale a $\sigma^2_g / B$: **batch più piccoli → stima più rumorosa**; **batch più grandi → stima più accurata della direzione del gradiente vero**.
+
+Il rumore dei batch piccoli non è solo un costo: è anche un beneficio. Passi rumorosi fanno rimbalzare il modello fuori da **minimi stretti** (sharp minima) — regioni dello spazio dei parametri con loss bassa localmente ma alta ai loro bordi, che generalizzano male. I minimi che sopravvivono al rumore tendono a essere **minimi piatti** (flat minima), dove la loss rimane bassa in un intorno ampio e il modello generalizza meglio a dati non visti.
+
+Batch size e learning rate sono accoppiati: raddoppiare $B$ dimezza la varianza del gradiente, effetto equivalente a dimezzare $\alpha$ (linear scaling rule, Goyal et al. 2017). Per questo le due variabili non vengono variate indipendentemente nella griglia sperimentale.
+
+#### Inizializzazione dei Pesi: He Initialization
+
+I pesi della rete non possono essere inizializzati a zero (tutti i neuroni computerebbero la stessa funzione e riceverebbero lo stesso gradiente) né con valori arbitrariamente grandi. Il problema dell'**esplosione/vanishing del gradiente** in backpropagation emerge dall'algebra: il gradiente al layer $l$ è il prodotto di $L - l$ Jacobiane. Se la norma tipica di ciascuna Jacobiana è $> 1$, il prodotto esplode; se $< 1$, vanisce.
+
+**He initialization** (He et al., 2015), usata da PyTorch di default per layer convoluzionali e lineari con ReLU, inizializza i pesi con:
+
+$$W \sim \mathcal{N}\left(0,\; \frac{2}{\text{fan\_in}}\right)$$
+
+Il fattore $2/\text{fan\_in}$ bilancia esattamente la varianza degli output: con $n$ ingressi e pesi $w_i \sim \mathcal{N}(0, 2/n)$, la varianza di $\sum_i w_i x_i$ rimane dell'ordine di $\text{Var}(x)$ indipendentemente da $n$. Il fattore $2$ (invece di $1$) compensa il fatto che ReLU azzera metà dei neuroni, dimezzando la varianza dell'output se si usasse $1/n$.
+
+**Xavier/Glorot initialization** ($\text{Var}(W) = 2/(\text{fan\_in} + \text{fan\_out})$) è la variante per attivazioni simmetriche (tanh, sigmoid) che non azzerano la metà negativa.
+
+#### Label Smoothing e il Problema dei Logit
+
+**Cosa sono i logit.** L'ultimo layer del modello è `Linear(512 → 62)`: per ogni classe $k$ calcola $z_k = w_k \cdot h + b_k$, dove $h$ è il vettore hidden da 512 valori. I 62 scalari $z_1, \ldots, z_{62}$ sono i **logit** — numeri reali non vincolati (possono essere positivi, negativi, di qualsiasi grandezza) che rappresentano "quanto il modello pende verso quella classe". Non sono ancora probabilità.
+
+**Da logit a probabilità: softmax.** Per calcolare la cross-entropy servono probabilità. Softmax le ricava dai logit:
+
+$$q_k = \frac{e^{z_k}}{\sum_{j=1}^{62} e^{z_j}}$$
+
+Poiché gli esponenziali sono positivi e si divide per la loro somma, ogni $q_k \in (0,1)$ e $\sum_k q_k = 1$. Ora $(q_1, \ldots, q_{62})$ è la distribuzione di probabilità predetta dal modello.
+
+**La cross-entropy con target hard.** La label vera è la classe $y$; la distribuzione vera è one-hot: $p_y = 1$, $p_k = 0$ per $k \neq y$. La cross-entropy è $\mathcal{L} = -\sum_k p_k \log q_k = -\log q_y$ (tutti i termini con $p_k = 0$ spariscono). Minimizzare $-\log q_y$ significa massimizzare $q_y$, cioè spingere la probabilità assegnata alla classe corretta verso 1.
+
+**Il problema: i logit crescono senza limite.** Sostituendo la softmax:
+
+$$q_y = \frac{e^{z_y}}{e^{z_y} + \sum_{k \neq y} e^{z_k}}$$
+
+Per avere $q_y = 1$, serve $e^{z_y} \gg \sum_{k \neq y} e^{z_k}$, cioè $z_y \to +\infty$. Siccome $q_y = 1$ esatta non è mai raggiungibile con logit finiti, il gradiente $\partial\mathcal{L}/\partial z_y = -(1 - q_y)$ è sempre negativo e l'ottimizzatore spinge $z_y$ sempre più in alto, senza mai fermarsi. Dopo molte epoche i logit tipicamente assumono valori come $z_y = +50$, $z_k = -20$ per $k \neq y$: il modello assegna probabilità $\approx 1$ alla classe scelta e probabilità $\approx 10^{-30}$ a tutte le altre, anche su input genuinamente ambigui.
+
+Questo è l'**overconfidence**: su FEMNIST, dove `O` e `0` o `1`, `l`, `I` si somigliano, il modello risponde comunque con certezza assoluta invece di mantenere una distribuzione che riflette l'ambiguità reale del task.
+
+**La soluzione: label smoothing.** Con $\varepsilon = 0.1$ e $K = 62$ classi, si sostituisce il target one-hot con:
+
+$$\tilde{p}_y = 1 - \varepsilon = 0.9 \qquad \tilde{p}_k = \frac{\varepsilon}{K} \approx 0.0016 \quad (k \neq y)$$
+
+Ora il minimo della loss è raggiunto quando $q_y = 0.9$ e $q_k \approx 0.0016$. Questo corrisponde a logit finiti: risolvendo la softmax, basta che $z_y - z_k \approx \log(549) \approx 6.3$ per ogni $k \neq y$. L'ottimizzatore converge a una soluzione stabile con logit dell'ordine di $6$ invece di $50$, e il modello mantiene una probabilità residua sulle classi simili — comportamento calibrato che riflette l'incertezza reale.
+
+---
+
+### 5.4 Motivazione di Ogni Scelta di Progetto
 
 #### Same Padding (`padding=1`)
 
@@ -1039,7 +1120,7 @@ ReLU ($f(x) = \max(0, x)$) è la scelta standard per reti convoluzionali per qua
 
 **Un solo layer FC nascosto (512 neuroni).** Il classificatore ha struttura `3136 → 512 → 62`. Un secondo layer nascosto (es. `3136 → 512 → 256 → 62`) aggiunge ~131K parametri (+8%) senza benefici misurabili su un task di classificazione a 62 classi: la capacità discriminativa necessaria è già raggiunta dalla combinazione feature-extractor conv + un layer FC. 512 neuroni è la dimensione minima che offre un collo di bottiglia significativo rispetto ai 3136 input (rapporto ~6:1), forzando una compressione delle feature estratte dai blocchi conv in una rappresentazione densa prima della classificazione finale. Valori più bassi (256, 128) aumenterebbero la compressione a rischio di perdita di informazione; valori più alti (1024, 2048) aumenterebbero il rischio di overfitting locale senza guadagno di capacità utile.
 
-### 5.4 Confronto con il Modello Placeholder
+### 5.5 Confronto con il Modello Placeholder
 
 | Caratteristica | Placeholder | Modello Proposto |
 |---|---|---|
@@ -1055,7 +1136,7 @@ ReLU ($f(x) = \max(0, x)$) è la scelta standard per reti convoluzionali per qua
 
 Il modello proposto ha **meno parametri** del placeholder nonostante abbia il doppio dei layer conv. La ragione è che il placeholder, con valid padding, produce una feature map 64×12×12 = 9.216 elementi dopo il pool; il modello proposto, con same padding e doppio pool, produce 64×7×7 = 3.136 elementi. Il layer FC1 (dominante) è quindi 3× più piccolo: $9.216 \times 256 \approx 2.4\text{M}$ vs $3.136 \times 512 \approx 1.6\text{M}$. Il ridotto numero di parametri ha un beneficio diretto sul sistema FL: ogni messaggio gossip trasporta i pesi del modello serializzato, e il risparmio del 28% per messaggio si moltiplica per il numero di round e di worker.
 
-### 5.5 Early Stopping Locale
+### 5.6 Early Stopping Locale
 
 L'early stopping è implementato nel training loop principale (`main_worker.py`) e si basa sulla validation loss locale calcolata da `validate()`. La validazione avviene **dopo la Phase A** (aggregazione FedAvg), quindi misura la qualità del modello aggregato — non solo del modello locale pre-training. Se la validation loss non migliora di almeno $10^{-4}$ per `early_stopping_patience` round consecutivi (default: 10), il training locale si arresta.
 
@@ -1102,7 +1183,7 @@ Nel nostro sistema l'unità naturale è il **round** (Phase A + B + C), non l'ep
 
 2. **Le epoche non hanno confini netti nel training loop.** L'iteratore `infinite_batches` attraversa il dataset in modo continuo tra round successivi; il confine di epoca può cadere a metà di un Phase B senza che il training loop se ne accorga. Con Worker 0 (~210k campioni, batch_size=32, H=500) un'epoca completa corrisponde a circa 13 round — non esiste un momento naturale di "fine epoca" tra un round e il successivo. Usare l'epoca come unità di early stopping richiederebbe di tracciare i confini di epoca dentro `infinite_batches` e sincronizzarli con il loop dei round, aggiungendo complessità senza alcun beneficio: ciò che conta è la val loss dopo FedAvg, non il numero di volte che il dataset è stato attraversato.
 
-3. **Il rumore della val loss è più alto per round che per epoca.** In ML classico, la val loss per epoca è relativamente smooth perché il modello aggiorna i pesi gradualmente su tutto il dataset prima di essere valutato. Qui, la FedAvg di Phase A può causare uno spike brusco nella val loss anche quando il sistema sta convergendo — il modello riceve pesi da worker con distribuzioni diverse e impiega qualche round di Phase B per riadattarsi (documentato in Sezione 5.5 al punto 3). Per questo `patience=10` round è una scelta conservativa rispetto ai 3–5 tipici del ML classico: serve più margine per filtrare il rumore post-aggregazione senza fermare prematuramente il training durante una normale fase di recovery.
+3. **Il rumore della val loss è più alto per round che per epoca.** In ML classico, la val loss per epoca è relativamente smooth perché il modello aggiorna i pesi gradualmente su tutto il dataset prima di essere valutato. Qui, la FedAvg di Phase A può causare uno spike brusco nella val loss anche quando il sistema sta convergendo — il modello riceve pesi da worker con distribuzioni diverse e impiega qualche round di Phase B per riadattarsi (documentato in Sezione 5.6 al punto 3). Per questo `patience=10` round è una scelta conservativa rispetto ai 3–5 tipici del ML classico: serve più margine per filtrare il rumore post-aggregazione senza fermare prematuramente il training durante una normale fase di recovery.
 
 Questa scelta è **metodologicamente corretta**: l'early stopping per round è lo standard nella letteratura FL (DiLoCo, FedAvg originale, FedProx) perché il round è l'unità in cui il sistema compie un'iterazione completa di training collaborativo — esattamente come l'epoca è l'unità in cui il sistema centralizzato compie un'iterazione completa sul dataset.
 
@@ -1166,7 +1247,7 @@ Per i **confronti controllati** (Blocchi A, B, C del piano sperimentale), è con
 
 Per **run di produzione** o esperimenti esplorativi dove si vuole evitare compute inutile su worker già convergenti, l'early stopping può rimanere abilitato con `patience: 10`.
 
-### 5.6 Selezione degli Iperparametri
+### 5.7 Selezione degli Iperparametri
 
 Il sistema non usa cross-validation (motivata in Sezione 2.3) né ottimizzazione automatica degli iperparametri (Bayesian optimization, Optuna, ecc.). I parametri in `config.yaml` sono fissi per tutta la durata di ogni run: non cambiano durante il training e non vengono aggiustati in risposta alla val loss. La ricerca è **manuale**: si esegue una run per ogni configurazione, si legge la val accuracy finale, e si sceglie la configurazione migliore a mano.
 
@@ -1402,6 +1483,8 @@ L'accuracy finale e la sua varianza tra worker rispondono a questa domanda — c
 - **Local test set** (`local_test_set: true`): split 80/10/10 per worker. Il 10% di test appartiene agli **stessi scrittori** del worker (tenuto fuori dagli aggiornamenti dei gradienti). Risponde alla domanda: *il modello generalizza bene sui propri scrittori, al di là dei campioni usati per l'early stopping?* La riservatezza FL è intatta: nessun dato esce dal worker.
 
 - **Global test set** (`global_test_set: true`): una frazione (`global_test_fraction`, default 10%) degli scrittori LEAF viene estratta **prima** di assegnare i dati a qualsiasi worker. Questi scrittori non compaiono in nessun `train/`, `val/`, o `local_test/` di nessun worker — appartengono esclusivamente all'operatore/sperimentatore. Risponde alla domanda: *il gossip ha portato i worker a convergere verso la stessa funzione su input mai visti da nessuno?* Tutti i worker valutano lo stesso set ogni round, producendo curve di accuracy sorapposte: se convergono, il sistema ha raggiunto convergenza funzionale — non solo prossimità dei pesi (L2 distance).
+
+  **Perché 10%.** FEMNIST ha 3.597 scrittori totali; il 10% riserva circa 360 scrittori (~18.600 campioni). Questa dimensione garantisce stime stabili dell'accuracy su tutte le 62 classi (≥300 campioni per classe in media) senza sottrarre una quota eccessiva ai worker — il 90% restante, ripartito tra N worker, produce partizioni ancora robuste. Una frazione più grande (20%) aumenterebbe la stabilità del global test ma ridurrebbe i dati di training per worker di un quinto; una più piccola (5%) potrebbe produrre stime instabili su classi rare. Il 10% è il valore standard usato negli split train/test in letteratura (incluso LEAF stesso, che usa 90/10 per i campioni di ogni scrittore).
 
 **Confidenzialità FL nel global test set.** La privacy in FL riguarda i dati di training dei partecipanti. Il global test set è separato da tutti i dati dei worker per costruzione: quegli scrittori non vengono mai assegnati a nessun partecipante, quindi non c'è nulla da proteggere. In un deployment reale, il global test set risiederebbe sul server dell'operatore e i worker si limiterebbero a inviare le predizioni — struttura analoga a quella che `aggregate_metrics.py` realizza leggendo i file CSV dal host.
 
@@ -2174,15 +2257,25 @@ Il Learner Lab impone limiti precisi che determinano le scelte architetturali e 
 
 **Scelta delle istanze**
 
-Per i worker è stato scelto `t3.small` (2 vCPU, 2 GB RAM). Il collo di bottiglia di RAM è il dataset: `FEMNISTDataset.__init__` converte l'intero split di training in tensori PyTorch in memoria all'avvio (non caricamento lazy). La stima per worker è circa:
+Per i worker è stato scelto `t3.small` (2 vCPU, 2 GB RAM). Il collo di bottiglia di RAM è il caricamento del dataset all'avvio del container: `FEMNISTDataset.__init__` converte l'intero split di training in tensori PyTorch in memoria (nessun caricamento lazy).
 
-| `num_workers` | Immagini/worker | Tensori train (float32) | PyTorch overhead | Totale |
+**Problema originale — JSON parsing.** Il formato LEAF serializza i pixel come float in JSON. Quando Python legge un file JSON, ogni numero diventa un oggetto `float` Python (~24 byte ciascuno, per via dell'overhead dell'interprete) invece di un `float32` a 4 byte. Per N=8 worker con ~100k immagini ciascuno (784 float/immagine), il picco durante il parsing era:
+
+$$100\,000 \times 784 \times 24 \text{ byte} \approx 1{,}9 \text{ GB per worker}$$
+
+Con N=3 worker (~267k immagini ciascuno) il picco saliva a ~4.6 GB — ampiamente oltre i 2 GB di t3.small (OOM).
+
+**Fix — pre-generazione file `.npy`.** `split_dataset.py` ora esegue una terza passata al termine dello streaming JSON: per ogni directory `worker_{i}/{train,val,local_test}/` legge il JSON appena scritto, lo converte in array NumPy (`float32` + `int64`), e salva `data.npy` + `labels.npy` nella stessa directory. `dataset.py` usa questi file binari al posto del JSON se presenti (fallback a JSON per split pre-fix). Il caricamento binario via `np.load` legge i byte direttamente senza allocare oggetti Python intermedi: il picco di RAM scende all'array stesso. `torch.from_numpy` condivide la memoria con NumPy — nessuna copia aggiuntiva.
+
+| `num_workers` | Immagini/worker | Array train (float32) | PyTorch (condiviso) | Totale |
 |:---:|:---:|:---:|:---:|:---:|
-| 3 | ~267k | ~830 MB | ~300 MB | ~1.1 GB |
-| 5 | ~160k | ~500 MB | ~300 MB | ~800 MB |
-| 8 | ~100k | ~310 MB | ~300 MB | ~610 MB |
+| 3 | ~267k | ~830 MB | ~0 MB aggiuntivi | ~900 MB |
+| 5 | ~160k | ~500 MB | ~0 MB aggiuntivi | ~570 MB |
+| 8 | ~100k | ~310 MB | ~0 MB aggiuntivi | ~380 MB |
 
-I pesi del modello sono trascurabili (~7 MB). `t3.small` (2 GB) è sufficiente per tutti i valori di `num_workers` con il dataset completo, con margine. Per batch size > 64 o modelli più grandi, `t3.medium` (4 GB) offre maggiore sicurezza.
+I pesi del modello sono trascurabili (~7 MB). `t3.small` (2 GB) è ora sufficiente per tutti i valori di `num_workers` con il dataset completo, con ampio margine. Il fallback JSON rimane disponibile per compatibilità con split generati prima di questa modifica, ma non è raccomandato in produzione.
+
+**Nota: global_test e mmap.** Il `global_test/data.npy` usa una strategia diversa: `load_global_test` lo carica con `mmap_mode='c'` (copy-on-write). Con mmap, il sistema operativo non copia il file in RAM al momento del `np.load` ma lo mappa nell'address space del processo; le pagine fisiche vengono caricate solo quando accedute, e — soprattutto — **processi diversi che mappano lo stesso file condividono le stesse pagine fisiche**. In locale e su single EC2, dove N worker girano sulla stessa macchina e montano lo stesso `global_test/data.npy`, questo risparmia ~400 MB × (N-1) di RAM fisica: l'OS mantiene un'unica copia indipendentemente da quanti worker ci siano. In multi-instance, ogni istanza ospita un solo worker, quindi la condivisione non si applica — mmap rimane comunque corretto e fa il suo lavoro (evita il JSON parsing), ma il beneficio di condivisione non esiste. Le partizioni per-worker non usano mmap perché ogni worker carica un file diverso: nessuna condivisione è possibile, e un array contiguo in RAM è preferibile per i pattern di accesso random del training loop con shuffle.
 
 Per il registry `t3.micro` (1 GB RAM) è più che sufficiente: il Discovery Server è un server Flask in-memory con traffico minimo.
 
@@ -2194,7 +2287,7 @@ AWS addebita quattro voci distinte; tutte sono rilevanti per questo progetto:
 |---|---|---|
 | EC2 compute | $0.021/hr per t3.small, $0.042 per t3.medium | Solo istanze *running*; istanze *stopped* non addebitano compute |
 | **IPv4 pubblici** | **$0.005/hr per IP** (dal feb 2024) | Si applica a ogni istanza running; spesso dimenticato — aggiunge ~25% al compute su 9 istanze |
-| EBS (disco) | $0.08/GB/mese (gp3) | Addebitato anche su istanze *stopped*; 20 GB ≈ $0.002/hr; rischio se si dimentica `destroy` |
+| EBS (disco) | $0.08/GB/mese (gp3) | Addebitato per istanza anche su *stopped*; multi-instance con N=8: 20 GB × 9 istanze = 180 GB ≈ $0.018/hr; ridurre `volume_size_worker` a 12 GB taglia a 116 GB ≈ $0.012/hr; rischio se si dimentica `destroy` |
 | Trasferimento dati | $0.01/GB tra AZ diverse (IP privati) | Gratis nella stessa AZ; il deployment pinna tutte le istanze alla stessa AZ per azzerare questo costo |
 
 I worker comunicano via IP privati VPC (non Internet), quindi non si applicano tariffe egress Internet ($0.09/GB). L'orchestratore locale scarica solo i CSV di metriche (KB totali).
@@ -2282,13 +2375,12 @@ Tutti i parametri operativi del sistema sono centralizzati in `config.yaml`, uni
 | `aws` | `instance_type_worker` | `t3.small` | Tipo istanza EC2 per i worker (multi-instance); t3.small (2 GB) regge tutti i `num_workers` |
 | `aws` | `instance_type_registry` | `t3.micro` | Tipo istanza EC2 per il registry (server Flask, <50 MB RAM) |
 | `aws` | `instance_type_single` | `t3.large` | Tipo istanza single-EC2; t3.large (8 GB) regge fino a 8 worker con dataset completo |
-| `aws` | `volume_size_worker` | `20` | Disco EBS worker in GB (multi-instance); range consigliato: 15–30 GB |
-| `aws` | `volume_size_registry` | `8` | Disco EBS registry in GB; 8 GB sempre sufficiente (range: 8–15 GB) |
-| `aws` | `volume_size_single` | `20` | Disco EBS single-EC2 in GB; range consigliato: 20–30 GB |
+| `aws` | `volume_size_worker` | `20` | Disco EBS worker in GB (multi-instance). Breakdown: Ubuntu ~4.5 GB + Docker ~0.3 GB + fl-worker image ~1.5 GB + partizione dataset ~0.5 GB + global_test ~0.4 GB + `model_best.pt` ~7 MB + `metrics.csv` ~30 KB ≈ **7–8 GB usati**. **Attenzione:** addebitato per istanza — con N=8 worker il costo EBS è `volume_size_worker × 8`; ridurre a 12 GB è sicuro (4 GB di margine) e risparmia ~$0.006/hr sull'intero cluster. Default 20 GB è conservativo. Range consigliato: 12–20 GB. |
+| `aws` | `volume_size_registry` | `8` | Disco EBS registry in GB. Breakdown: Ubuntu ~4.5 GB + Docker ~0.3 GB + fl-registry image ~0.2 GB ≈ **5 GB usati**; 8 GB sempre sufficiente (range: 8–15 GB). |
+| `aws` | `volume_size_single` | `20` | Disco EBS single-EC2 in GB. Breakdown: Ubuntu ~4.5 GB + Docker ~0.3 GB + fl-worker image ~1.5 GB (condivisa da tutti i container) + fl-registry image ~0.2 GB + tutte le partizioni dataset ~4 GB + global_test ~0.4 GB + `model_best.pt` × N worker ~56 MB (N=8) + `metrics.csv` × N ~0.2 MB ≈ **11–12 GB usati**; 20 GB sufficiente fino a 8 worker. Range consigliato: 20–30 GB. |
 | `aws` | `key_name` | `vockey` | Nome della key pair EC2; in us-east-1 Learner Lab usa la `vockey` predefinita |
 | `aws` | `key_path` | `~/Downloads/labsuser.pem` | Path locale al `.pem` scaricato dal pannello AWS Details |
-| `aws` | `image_source` | `build` | `build` = docker build su EC2; `dockerhub` = docker pull |
-| `aws` | `dockerhub_image` | `""` | Immagine DockerHub (solo se `image_source: dockerhub`) |
+| `aws` | *(image source)* | build | Le immagini Docker vengono sempre buildate direttamente su EC2 via SCP + `docker build` |
 
 ### 10.2 File di Configurazione Completo
 
@@ -2343,8 +2435,6 @@ aws:
   # IMPORTANT: num_workers + 1 <= 9 (Learner Lab hard limit)
   key_name: "vockey"                     # pre-existing key pair in us-east-1
   key_path: "~/Downloads/labsuser.pem"   # downloaded from AWS Details panel
-  image_source: "build"                  # "build" = docker build on EC2 (recommended)
-  dockerhub_image: ""                    # only used when image_source: "dockerhub"
 ```
 
 ---
@@ -2397,12 +2487,12 @@ python scripts/download_femnist.py
 
 ```bash
 # split_dataset.py legge data/femnist/data/ e produce una directory per worker:
-#   data/femnist/worker_0/train/data.json
-#   data/femnist/worker_0/val/data.json
-#   data/femnist/worker_0/local_test/data.json  (se local_test_set: true)
+#   data/femnist/worker_0/train/data.json + data.npy + labels.npy
+#   data/femnist/worker_0/val/data.json   + data.npy + labels.npy
+#   data/femnist/worker_0/local_test/data.json + data.npy + labels.npy  (se local_test_set: true)
 #   data/femnist/worker_1/...
 # Se global_test_set: true, produce anche:
-#   data/femnist/global_test/data.json  ← mai assegnato a nessun worker
+#   data/femnist/global_test/data.json + data.npy + labels.npy  ← mai assegnato a nessun worker
 python scripts/split_dataset.py
 
 # generate_compose.py legge config.yaml e genera docker-compose.yml
@@ -2557,7 +2647,7 @@ Il workflow è **identico al locale** — stessi script, stessa immagine Docker,
   | `aws.region` | `us-east-1` | Regione AWS |
   | `aws.availability_zone` | `us-east-1a` | AZ dell'istanza; non influisce su costi (tutto il traffico è sulla rete Docker interna) |
   | `aws.instance_type_single` | `t3.large` | Tipo istanza; t3.large (8 GB) regge fino a 8 worker con dataset completo |
-  | `aws.volume_size_single` | `20` | Disco EBS in GB; 20 GB copre tutti i casi; aumentare a 30 GB con 8 worker e dataset completo |
+  | `aws.volume_size_single` | `20` | Disco EBS in GB. Uso stimato: Ubuntu ~4.5 GB + Docker ~2 GB (immagini) + dataset completo ~4.4 GB + `model_best.pt` × N ~56 MB ≈ 11–12 GB; 20 GB sufficiente; aumentare a 30 GB con 8 worker e dataset completo per margine extra |
 
 > **Nota:** `aggregate_metrics.py` e `save_experiment.py` girano direttamente **sull'host EC2** (fuori dai container) e richiedono `pip install -r requirements.debug.txt` sull'host.
 
@@ -2589,7 +2679,8 @@ Per i run successivi (dopo aver modificato `config.yaml`), la scelta dipende da 
 | `deploy_single` [3/4] | `aws_deploy.py` | **locale → EC2** | `rm -rf` vecchi dati, SCP dell'intera `data/femnist/` (tutte le partizioni) |
 | `deploy_single` [4/4] | `aws_deploy.py` | **EC2** | `docker compose up --build -d` — avvia tutti i container in background |
 | Training | Container (N+1) | **EC2** | automatico, identico al caso locale |
-| Analisi | Operatore (via SSH) | **EC2** | `aggregate_metrics.py`, `save_experiment.py` |
+| `collect_single` | `aws_deploy.py` | **EC2 → locale** | SCP `metrics.csv`, `local_test_result.json`, `model_best.pt` da ogni worker → `data/femnist/worker_i/` |
+| Analisi | Operatore | **macchina locale** | `aggregate_metrics.py`, `save_experiment.py` |
 | `destroy_single` | `aws_deploy.py` + Terraform | **locale → AWS** | termina l'istanza EC2, rimuove il security group |
 
 ```bash
@@ -2604,10 +2695,9 @@ python scripts/aws_deploy.py provision_single
 # Deploy: upload codice + dati + avvio container (tutto automatico)
 python scripts/aws_deploy.py deploy_single
 
-# A fine training: analisi sull'host EC2 via SSH
-ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
-cd ~/project
-python scripts/aggregate_metrics.py
+# A fine training: scarica i risultati e analizza in locale
+python scripts/aws_deploy.py collect_single   # SCP metrics.csv, local_test_result.json, model_best.pt
+python scripts/aggregate_metrics.py --plot
 python scripts/save_experiment.py <nome>
 
 # Distruggere l'istanza per fermare la fatturazione
@@ -2621,8 +2711,8 @@ python scripts/aws_deploy.py resume_single   # aggiorna tfstate, stampa nuovo IP
 
 # Caso A — training era già finito prima della scadenza
 #          (metrics.csv completo su disco EBS)
-ssh -i ~/Downloads/labsuser.pem ubuntu@<nuovo_ip>
-  cd ~/project && python scripts/aggregate_metrics.py && python scripts/save_experiment.py <nome>
+python scripts/aws_deploy.py collect_single
+python scripts/aggregate_metrics.py --plot && python scripts/save_experiment.py <nome>
 python scripts/aws_deploy.py destroy_single
 
 # Caso B — training era ancora in corso (stato modello in RAM: perso)
@@ -2630,10 +2720,10 @@ python scripts/aws_deploy.py destroy_single
 #          model_best.pt (se almeno una round ha migliorato la val_loss).
 #          ATTENZIONE: deploy_single cancella l'intera directory data/femnist prima
 #          di ricaricare il dataset — i dati intermedi su EBS vengono persi.
-#          Se vuoi conservarli, esegui collect PRIMA di deploy_single.
-python scripts/aws_deploy.py collect         # opzionale: salva dati parziali in locale
+#          Se vuoi conservarli, esegui collect_single PRIMA di deploy_single.
+python scripts/aws_deploy.py collect_single  # opzionale: salva dati parziali in locale
 python scripts/aws_deploy.py deploy_single   # rm -rf data su EC2 + re-upload + riavvio
-# ... aspetta fine training, poi analisi e destroy come al solito
+# ... aspetta fine training, poi collect_single + analisi + destroy come al solito
 python scripts/aws_deploy.py destroy_single
 ```
 
@@ -2688,8 +2778,8 @@ Questa è l'unica modalità in cui i worker comunicano su **TCP/IP reale** tra m
   | `aws.availability_zone` | `us-east-1a` | AZ di tutte le istanze; intra-AZ è gratuito, cross-AZ costa $0.01/GB |
   | `aws.instance_type_worker` | `t3.small` | Tipo istanza worker; t3.small (2 GB) è sufficiente per tutti i `num_workers` |
   | `aws.instance_type_registry` | `t3.micro` | Tipo istanza registry; t3.micro (1 GB) è sempre sufficiente |
-  | `aws.volume_size_worker` | `20` | Disco EBS worker in GB; range consigliato: 15–30 GB |
-  | `aws.volume_size_registry` | `8` | Disco EBS registry in GB; 8 GB è ampiamente sufficiente |
+  | `aws.volume_size_worker` | `20` | Disco EBS worker in GB. Uso stimato: Ubuntu ~4.5 GB + Docker ~1.8 GB (engine + fl-worker image) + partizione dataset ~0.5 GB + global_test ~0.4 GB + `model_best.pt` ~7 MB + `metrics.csv` ~30 KB ≈ 7–8 GB; 20 GB lascia ampio margine. Range consigliato: 15–30 GB |
+  | `aws.volume_size_registry` | `8` | Disco EBS registry in GB. Uso stimato: Ubuntu ~4.5 GB + Docker engine ~0.3 GB + fl-registry image ~0.2 GB ≈ 5 GB; 8 GB è ampiamente sufficiente |
 
 - Le istanze e Docker **non vanno creati manualmente**: `aws_deploy.py provision` invoca Terraform che crea le istanze EC2 e installa Docker automaticamente via `user_data`
 
@@ -3072,7 +3162,7 @@ Questa sezione è la fonte di verità per l'intera campagna sperimentale: quali 
 
 | Parametro | Valore | Motivazione |
 |---|:---:|---|
-| `learning_rate` | 0.001 | valore ottimale per AdamW su FEMNIST (Sezione 5.6) |
+| `learning_rate` | 0.001 | valore ottimale per AdamW su FEMNIST (Sezione 5.7) |
 | `batch_size` | 32 | bilanciamento gradiente / velocità |
 | `clip_grad` | 1.0 | drift bound (Sezione 5.3) |
 | `label_smoothing` | 0.1 | calibrazione su 62 classi (Sezione 5.3) |
@@ -3306,6 +3396,64 @@ Il gossip protocol produce tre effetti misurabili e coerenti attraverso tutta la
 3. **Riduce la varianza inter-worker**: global test std scende da 0.084 (`n8_f1`) a 0.036 (`n8_fn`) — i modelli non solo sono più accurati in media ma sono più uniformi tra loro.
 
 In un FL non-i.i.d. con partizioni fortemente eterogenee, la convergenza completa (L2→0, tutti i modelli identici) non è raggiungibile in numero finito di round con dati locali persistentemente diversi: ogni round di training locale re-introduce drift verso la distribuzione locale. La convergenza funzionale parziale osservata in `n8_fn` — 8 worker con dati completamente disgiunti che convergono a classificare writer mai visti con std=0.036 — è il risultato atteso e teoricamente motivato per questo tipo di sistema.
+
+### 14.7 Discussione: Scelte Algoritmiche, Confronto con DiLoCo e Possibili Estensioni
+
+#### Ispirazione a DiLoCo e differenze strutturali
+
+Il sistema è ispirato a DiLoCo [1] nelle sue idee fondamentali — training locale per H inner steps prima di ogni sincronizzazione, partizionamento non-i.i.d. per scrittore, AdamW come ottimizzatore — ma si discosta da DiLoCo su tre punti strutturali importanti. La Sezione 2 analizza in dettaglio queste differenze e la loro motivazione; qui si riassumono in chiave sperimentale, con una tabella di confronto diretto.
+
+| Dimensione | DiLoCo | Questo progetto | Motivazione della differenza |
+|---|---|---|---|
+| **Architettura** | Server centrale + N worker | P2P puro, gossip k-push | Requisito di sistema: nessun aggregatore centrale |
+| **Sincronizzazione** | Sincrona (barrier a fine round) | Asincrona (ogni worker fa push quando vuole) | Gossip P2P non può attendere tutti i worker |
+| **Cosa viene inviato** | Pseudo-gradiente $\Delta\theta = \theta_\text{inizio} - \theta_\text{fine}$ | Pesi $\theta$ direttamente | Outer optimizer richiede $\Delta\theta$; FedAvg lavora sui pesi |
+| **Aggregazione** | Outer optimizer (Nesterov SGD, $\eta=0.7$, $\beta=0.9$) sui $\Delta\theta$ globali | FedAvg pesato per campioni sui pesi ricevuti | Outer optimizer richiede visione globale di tutti i $\Delta\theta$ — incompatibile con gossip parziale |
+| **Inner optimizer** | SGD | **AdamW** | AdamW converge meglio di SGD su task non-i.i.d. con lr moderate |
+| **Outer optimizer** | AdamW / Nesterov | **Nessuno** (FedAvg non è un optimizer) | Non realizzabile senza coordinatore centrale |
+| **Stato optimizer tra round** | Inner SGD: stateless; outer Nesterov: stateful nel server | AdamW: stateful nel worker, **stantio dopo FedAvg** | Limite noto: $m_t$, $v_t$ calcolati prima dell'aggregazione rimangono dopo |
+| **H (inner steps)** | 500 (valore validato nel paper) | 100–1000 (ablation sperimentale) | Stessa motivazione, range esplorato empiricamente |
+| **Fault tolerance** | Dipende dall'implementazione del server | Nativa: timeout gRPC + peer cache refresh | Gossip asincrono P2P è inherentemente fault tolerant |
+| **Single point of failure** | Sì (il server centrale) | No | Vantaggio architetturale del P2P |
+
+**1. Architettura: aggregatore centrale vs gossip P2P.**
+DiLoCo usa un server centrale (o AllReduce) che raccoglie i contributi di tutti i worker e applica un aggiornamento globale sincronizzato. Il nostro sistema è puramente P2P: ogni worker invia i propri pesi a un sottoinsieme casuale di peer (gossip k-push) senza coordinatore. Questo rende il sistema più robusto ai crash (nessun single point of failure) e più scalabile in rete, a costo di convergenza funzionale più lenta e meno prevedibile.
+
+**2. Aggregazione: FedAvg pesato vs outer optimizer su pseudo-gradienti.**
+DiLoCo non media i pesi direttamente. Ogni worker calcola il **pseudo-gradiente** $\Delta\theta = \theta_\text{iniziale} - \theta_\text{finale}$ (la differenza tra il modello prima e dopo gli H step locali) e lo invia al server. Il server applica un **outer optimizer** (AdamW o Nesterov SGD) su questi pseudo-gradienti — cioè tratta la sincronizzazione come un passo di ottimizzazione esplicito con momento e adattività. Il nostro sistema usa invece **FedAvg pesato** (McMahan et al. [2]): la media pesata per numero di campioni dei pesi dei worker ricevuti, incluso il proprio:
+
+$$\theta_\text{new} = \frac{n_\text{locale} \cdot \theta_\text{locale} + \sum_i n_i \cdot \theta_i}{n_\text{locale} + \sum_i n_i}$$
+
+FedAvg è più semplice, non richiede stato dell'optimizer lato aggregazione, ed è naturalmente compatibile con il gossip asincrono. L'outer optimizer di DiLoCo ha garanzie teoriche di convergenza più forti ma richiede un coordinatore che mantenga il momento globale tra i round — incompatibile con l'architettura P2P adottata.
+
+**3. AdamW: inner optimizer in entrambi, outer solo in DiLoCo.**
+In DiLoCo, l'inner optimizer (per i passi locali H) è **SGD**, mentre AdamW è usato come outer optimizer sull'aggregazione. Nel nostro sistema, **AdamW è l'inner optimizer** — si applica ai passi locali di training di ogni worker. Questo è una scelta ragionevole e comune nella letteratura FL: AdamW converge più velocemente di SGD in presenza di gradienti rumorosi (non-i.i.d.) e di learning rate moderate. Non è sbagliato usare AdamW come inner optimizer; cambia il ruolo rispetto a DiLoCo, non la correttezza.
+
+Esiste però un effetto collaterale noto: lo stato di AdamW (vettori di momento $m_t$ e $v_t$) è mantenuto tra un round e l'altro. Dopo ogni FedAvg i pesi cambiano bruscamente — il modello si sposta in un punto diverso del landscape della loss — ma lo stato dell'optimizer rimane quello del round precedente, calcolato rispetto alla posizione pre-aggregazione. I primi step del round successivo usano quindi un momento "stantio". Nella pratica il sistema converge comunque (i risultati lo confermano), ma questa discrasia è un limite noto e documentato dell'uso di optimizer stateful in FL asincrono.
+
+#### Perché la convergenza funzionale incompleta è attesa
+
+I risultati mostrano ~90% di val accuracy in tutte le configurazioni — il training locale converge bene. La "WEAK functional convergence" riportata dal sistema si riferisce alla metrica più stringente: il global test spread > 5% tra worker diversi. Questo non è un fallimento del sistema: è la conseguenza diretta e teoricamente motivata del training su dati non-i.i.d.
+
+Ogni round di training locale re-introduce **drift verso la distribuzione locale del worker** (i suoi writer specifici). Con fanout basso (1 peer per round), il mixing time del gossip è troppo lento per compensare il drift accumulato in H=1000 step. Con fanout alto (N−1 peer), l'averaging è abbastanza aggressivo da dominare il drift: `n8_fn` raggiunge global test std=0.036 e spread=9.3% — il valore più vicino alla convergenza funzionale nell'intera campagna. La convergenza funzionale completa (spread→0, tutti i modelli identici) richiederebbe o fanout=N con round infiniti, o dati i.i.d., nessuna delle due condizioni verificata nel progetto.
+
+La val accuracy ~90% su un task a 62 classi con partizioni non-i.i.d. è in linea con i valori riportati in letteratura per FedAvg su FEMNIST (Sezione 12.1). I risultati sono quindi **corretti, significativi e coerenti con la letteratura**.
+
+#### Possibili estensioni non implementate
+
+Le seguenti estensioni avrebbero potenzialmente migliorato la convergenza funzionale ma non sono state implementate: la motivazione è documentata per ciascuna.
+
+**Outer optimizer su pseudo-gradienti (DiLoCo esatto).** Come discusso in Sezione 2, l'outer optimizer di DiLoCo è **architetturalmente incompatibile** con il gossip P2P asincrono: richiede che tutti i worker inviino i propri $\Delta\theta$ a un coordinatore centrale che applica l'outer step e ridistribuisce il modello aggiornato. In un sistema P2P ogni worker aggrega solo un sottoinsieme casuale di modelli ricevuti — non esiste un punto dove tutti i $\Delta\theta$ di un round si incontrano. Mantenere uno stato dell'outer optimizer (momento, secondo momento) coerente tra peer asincroni richiederebbe sincronizzazione globale, contraddittoria con il design. Non è quindi una questione di complessità implementativa: è un problema strutturale.
+
+**FedProx.** Aggiunge un termine di prossimità $\frac{\mu}{2}\|\theta - \theta_\text{globale}\|^2$ alla loss locale, penalizzando i modelli che si allontanano troppo dal modello ricevuto via gossip. Riduce il drift locale senza modificare l'aggregazione. Sarebbe implementabile aggiungendo il termine di regolarizzazione in `core/trainer.py`. Non implementato perché il parametro $\mu$ introduce un ulteriore iperparametro da ottimizzare e i risultati attuali mostrano già convergenza soddisfacente con fanout alto.
+
+**SCAFFOLD.** Usa control variates per correggere il bias introdotto dall'eterogeneità dei dati. Richiede che ogni worker mantenga una stima locale del gradiente di controllo e la sincronizzi con il server — strutturalmente incompatibile con gossip P2P puro (il control variate globale richiede un coordinatore).
+
+**Reset dello stato AdamW dopo FedAvg.** Azzerare $m_t$ e $v_t$ dopo ogni aggregazione eliminerebbe il problema dello stato stantio. Sarebbe banale da implementare (`optimizer.state = collections.defaultdict(dict)` dopo `model.load_state_dict`). Non implementato perché i primi step dopo il reset sarebbero equivalenti a SGD puro (momento nullo), potenzialmente destabilizzando la convergenza nel breve periodo; e perché i risultati attuali non evidenziano instabilità riconducibili a questo effetto.
+
+#### Conclusione
+
+Il sistema implementato è un adattamento coerente e motivato di DiLoCo all'architettura P2P: gossip asincrono invece di aggregatore centrale, FedAvg pesato invece di outer optimizer su pseudo-gradienti, AdamW come inner optimizer. Le differenze rispetto a DiLoCo sono scelte ingegneristiche consapevoli, non errori. I risultati sperimentali dimostrano che il sistema apprende (~90% val accuracy), che il gossip produce convergenza funzionale misurabile e crescente con il fanout, e che il trade-off comunicazione/convergenza è riproducibile e coerente con la teoria FL. L'estensione più naturale verso DiLoCo esatto — outer optimizer su pseudo-gradienti in gossip P2P — è tecnicamente identificata e documentata, ma non necessaria per validare il sistema nei termini del progetto.
 
 ---
 
