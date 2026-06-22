@@ -13,7 +13,7 @@ Usage:
 
 Input:
     data/femnist/worker_*/metrics.csv      (one file per worker, required)
-    data/femnist/worker_*/model_final.pt   (final checkpoints, optional)
+    data/femnist/worker_*/model_best.pt    (best checkpoint by val_loss, optional)
 
 Output (printed to stdout):
     Per-round table  : round | mean_acc | std_acc | min_acc | max_acc [| phase timings]
@@ -465,11 +465,9 @@ def main():
     # ---------------------------------------------------------------------------
     checkpoint_paths = sorted(
         glob.glob(os.path.join(args.data_root, "worker_*", "model_best.pt"))
-        or glob.glob(os.path.join(args.data_root, "worker_*", "model_final.pt"))
     )
-    checkpoint_label = "model_best.pt" if "model_best" in (checkpoint_paths[0] if checkpoint_paths else "") else "model_final.pt"
     if len(checkpoint_paths) >= 2:
-        print(f"\nModel weight divergence (pairwise L2 distance — {checkpoint_label}):")
+        print(f"\nModel weight divergence (pairwise L2 distance — model_best.pt):")
         print("-" * 55)
         try:
             import torch
@@ -500,8 +498,8 @@ def main():
         except Exception as exc:
             print(f"  Could not compute weight divergence: {exc}")
     else:
-        print("\nNo final checkpoints found — skipping weight divergence analysis.")
-        print("  (checkpoints are saved automatically at the end of each experiment)")
+        print("\nNo model_best.pt checkpoints found — skipping weight divergence analysis.")
+        print("  (model_best.pt is saved automatically whenever val_loss improves during training)")
 
     print()
 

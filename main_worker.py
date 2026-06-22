@@ -428,15 +428,6 @@ def main():
                 )
 
     finally:
-        # Save the final model checkpoint to data_dir (visible on host via mount).
-        # Used by aggregate_metrics.py to compute inter-worker weight divergence.
-        checkpoint_path = os.path.join(data_dir, "model_final.pt")
-        try:
-            torch.save(model.state_dict(), checkpoint_path)
-            logger.info(f"Checkpoint saved → {checkpoint_path}")
-        except Exception as exc:
-            logger.warning(f"Could not save checkpoint: {exc}")
-
         # Always executed: sys.exit(), SystemExit, KeyboardInterrupt, and normal
         # loop completion all traverse finally. SIGTERM/SIGINT are routed through
         # sys.exit(0) by the signal handlers above. Only SIGKILL bypasses this block.

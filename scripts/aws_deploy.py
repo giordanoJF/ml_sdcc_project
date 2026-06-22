@@ -24,16 +24,14 @@ Supports two deployment modes:
   # 3. Provision the instance via Terraform (creates EC2 + installs Docker automatically)
   python scripts/aws_deploy.py provision_single
 
-  # 4. Upload project, install dependencies, start training
-  scp -r . ubuntu@<ip>:~/project
+  # 4. Upload project, install dependencies, start training (fully automated)
+  python scripts/aws_deploy.py deploy_single
+
+  # 5. Analyze results (still on EC2 host, via SSH)
   ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
     cd ~/project
-    pip install -r requirements.debug.txt
-    docker compose up --build
-
-  # 5. Analyze results (still on EC2 host)
-  python scripts/aggregate_metrics.py
-  python scripts/save_experiment.py <name>
+    python scripts/aggregate_metrics.py
+    python scripts/save_experiment.py <name>
 
   # 6. Destroy the instance to stop billing
   python scripts/aws_deploy.py destroy_single
@@ -248,6 +246,32 @@ def _create_source_archive() -> str:
     return tmp.name
 
 
+def _create_single_source_archive() -> str:
+    """Pack source files needed for single-EC2 docker compose deployment."""
+    src_files = [
+        "docker/Dockerfile.worker", "docker/Dockerfile.registry",
+        "requirements.worker.txt", "requirements.registry.txt",
+        "requirements.debug.txt",
+        "proto/gossip.proto", "main_worker.py", "registry_server.py",
+        "config.yaml", "docker-compose.yml",
+    ]
+    src_dirs = ["core", "network", "scripts"]
+    tmp = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
+    tmp.close()
+    with tarfile.open(tmp.name, "w:gz") as tar:
+        for f in src_files:
+            p = PROJECT_ROOT / f
+            if p.exists():
+                tar.add(p, arcname=f)
+        for d in src_dirs:
+            p = PROJECT_ROOT / d
+            if p.exists():
+                for item in sorted(p.rglob("*")):
+                    if "__pycache__" not in str(item) and item.suffix != ".pyc":
+                        tar.add(item, arcname=str(item.relative_to(PROJECT_ROOT)))
+    return tmp.name
+
+
 def _build_on_instance(ip: str, key_path: str, archive: str, role: str):
     """Upload source archive and docker build the appropriate image."""
     _scp_to(ip, key_path, Path(archive), "/home/ubuntu/src.tar.gz")
@@ -303,12 +327,64 @@ def cmd_provision_single(cfg: dict):
     else:
         print(f"  WARNING: instance may not be fully ready yet — wait a moment before connecting.")
 
-    print(f"\nNext steps:")
-    print(f"  scp -r . ubuntu@{ip}:~/project")
-    print(f"  ssh -i {key_path} ubuntu@{ip}")
-    print(f"    cd ~/project")
-    print(f"    pip install -r requirements.debug.txt")
-    print(f"    docker compose up --build")
+    print(f"\nNext step:")
+    print(f"  python scripts/aws_deploy.py deploy_single")
+
+
+def cmd_deploy_single(cfg: dict):
+    """Upload project and dataset, build images, start containers on the single EC2 instance."""
+    aws_cfg  = cfg.get("aws", {})
+    key_path = os.path.expanduser(aws_cfg.get("key_path", "~/Downloads/labsuser.pem"))
+
+    out = _terraform_output(TERRAFORM_SINGLE_DIR)
+    ip  = out["public_ip"]
+
+    # 1. Wait for SSH + Docker ready
+    print("[1/4] Waiting for SSH + Docker...")
+    if not _wait_for_docker(ip, key_path):
+        sys.exit(f"ERROR: {ip} never became ready (timeout)")
+    print(f"  {ip}: ready")
+
+    # 2. Upload source code (Dockerfiles, app code, docker-compose.yml, scripts)
+    print("\n[2/4] Uploading source code...")
+    archive = _create_single_source_archive()
+    try:
+        _ssh(ip, key_path, "mkdir -p /home/ubuntu/project")
+        _scp_to(ip, key_path, Path(archive), "/home/ubuntu/project.tar.gz")
+        _ssh(ip, key_path,
+             "tar -xzf /home/ubuntu/project.tar.gz -C /home/ubuntu/project && "
+             "rm /home/ubuntu/project.tar.gz")
+        print("  source uploaded and extracted")
+    finally:
+        os.unlink(archive)
+
+    # Install analysis dependencies (needed to run aggregate_metrics.py on EC2)
+    _ssh(ip, key_path,
+         "pip install -q -r /home/ubuntu/project/requirements.debug.txt")
+    print("  analysis deps installed")
+
+    # 3. Upload dataset (clean old data first to avoid stale files)
+    print("\n[3/4] Uploading dataset...")
+    if not DATA_ROOT.exists():
+        sys.exit(f"ERROR: {DATA_ROOT} not found — run split_dataset.py first")
+    _ssh(ip, key_path,
+         "rm -rf /home/ubuntu/project/data/femnist && "
+         "mkdir -p /home/ubuntu/project/data")
+    _scp_to(ip, key_path, DATA_ROOT, "/home/ubuntu/project/data/", recursive=True)
+    print("  dataset uploaded")
+
+    # 4. Build images and start containers in detached mode (stop any previous run first)
+    print("\n[4/4] Building images and starting containers...")
+    _ssh(ip, key_path,
+         "cd /home/ubuntu/project && docker compose down 2>/dev/null || true && "
+         "docker compose up --build -d")
+    print("  containers started")
+
+    print("\nDeploy complete.")
+    print(f"  Logs    : ssh -i {key_path} ubuntu@{ip} 'cd ~/project && docker compose logs -f'")
+    print(f"  Analyze : ssh -i {key_path} ubuntu@{ip} 'cd ~/project && "
+          f"python scripts/aggregate_metrics.py && python scripts/save_experiment.py <nome>'")
+    print(f"  Destroy : python scripts/aws_deploy.py destroy_single")
 
 
 def cmd_destroy_single():
@@ -605,7 +681,7 @@ def cmd_collect(cfg: dict):
         # Files are written to /app/data/femnist/ inside the container, which
         # maps to /home/ubuntu/data/femnist/worker_{i}/ on the host (the mount point).
         remote_dir = f"/home/ubuntu/data/femnist/worker_{i}"
-        for fname in ("metrics.csv", "local_test_result.json"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt"):
             probe = _ssh(ip, key_path,
                          f"test -f {remote_dir}/{fname} && echo yes || echo no",
                          capture=True)
@@ -683,6 +759,7 @@ def main():
 
     # Single EC2 commands
     sub.add_parser("provision_single", help="Create one EC2 instance via Terraform (docker-compose mode)")
+    sub.add_parser("deploy_single",    help="Upload project and dataset, build images, start containers (single EC2)")
     sub.add_parser("destroy_single",   help="Terminate the single EC2 instance")
     sub.add_parser("resume_single",    help="Refresh state after a session restart (single EC2)")
 
@@ -701,6 +778,7 @@ def main():
     cfg = _load_config()
 
     if   args.command == "provision_single": cmd_provision_single(cfg)
+    elif args.command == "deploy_single":    cmd_deploy_single(cfg)
     elif args.command == "destroy_single":   cmd_destroy_single()
     elif args.command == "resume_single":    cmd_resume_single()
     elif args.command == "provision":        cmd_provision(cfg)

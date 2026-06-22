@@ -150,7 +150,7 @@ def main():
             os.remove(p)
             cleaned.append(fname)
     for worker_dir in sorted(glob.glob(os.path.join(DATA_ROOT, "worker_*"))):
-        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt", "model_final.pt"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt"):
             p = os.path.join(worker_dir, fname)
             if os.path.exists(p):
                 os.remove(p)
