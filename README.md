@@ -306,7 +306,7 @@ python scripts/aws_deploy.py deploy
 
 <br>
 
-**Inter-worker communication:** workers register their private VPC IP with the registry at startup. Gossip gRPC calls go directly between workers via private IPs — the registry is used only for initial peer discovery. All instances are pinned to the same availability zone (`aws.availability_zone` in `config.yaml`), so intra-cluster traffic is free.
+**Inter-worker communication:** workers register their private VPC IP with the registry at startup. Each worker builds a local peer cache from the registry at startup and uses it directly for gossip gRPC pushes — no registry call in healthy rounds. If a gRPC push fails (peer unreachable or timed out), the cache is refreshed from the registry and a replacement peer is tried. On ungraceful crashes the registry entry is not removed (deregistration requires a clean shutdown), so the refreshed cache may still include the crashed node — in that case the replacement attempt simply targets another available peer. All instances are pinned to the same availability zone (`aws.availability_zone` in `config.yaml`), so intra-cluster traffic is free.
 
 <br>
 
