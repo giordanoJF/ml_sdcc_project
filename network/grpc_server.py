@@ -120,19 +120,17 @@ def start_grpc_server(
     shared_state: dict,
     max_staleness: int,
 ) -> grpc.Server:
-    """
-    Start the gRPC server in background threads and return the server instance.
-    The caller should invoke server.wait_for_termination() to keep the process
-    alive after the training loop exits.
-    """
     server = grpc.server(
         concurrent.futures.ThreadPoolExecutor(max_workers=10),
         options=[("grpc.max_receive_message_length", 50 * 1024 * 1024)],
     )
+    # Links our GossipServicer implementation to the GossipService contract
+    # defined in proto/gossip.proto. The generated add_* function registers
+    # the servicer so that incoming ReceiveModel RPCs are routed to it.
     gossip_pb2_grpc.add_GossipServiceServicer_to_server(
         GossipServicer(buffer, shared_state, max_staleness), server
     )
-    server.add_insecure_port(f"[::]:{port}")
-    server.start()
+    server.add_insecure_port(f"[::]:{port}")  # [::] = all interfaces (IPv4 + IPv6)
+    server.start()  # non-blocking: server runs in background thread pool
     logger.info(f"gRPC server listening on port {port}")
     return server
