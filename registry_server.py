@@ -1,10 +1,3 @@
-"""
-Discovery Server (Registry).
-
-Sole responsibility: service discovery.
-Keeps a live map of {worker_id -> grpc_address} and exposes three REST endpoints.
-Does NOT handle model weights, hyperparameters, or training state.
-"""
 import logging
 import os
 import threading
@@ -15,52 +8,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [REGISTRY] %(message
 
 app = Flask(__name__)
 
-# In-memory registry: {worker_id: "host:port"}
 _registry: dict[str, str] = {}
-_lock = threading.Lock()  # protects concurrent register/deregister calls
+_lock = threading.Lock()
 
-# Auto-shutdown: when all expected workers have finished and deregistered, the
-# registry exits so docker compose returns to the terminal automatically.
-# TOTAL_WORKERS is injected by generate_compose.py; if absent, auto-shutdown is disabled.
-_expected_workers: int = int(os.environ.get("TOTAL_WORKERS", "0"))
-_peak_registered: int = 0  # max simultaneous registrations seen
-
-# Inactivity watchdog: once all expected workers have been seen, if no deregistration
-# happens for _WATCHDOG_TIMEOUT seconds the registry forces shutdown. This handles
-# workers that exit ungracefully (SIGKILL, OOM) after registering — they never call
-# /deregister, so the registry would otherwise stall indefinitely.
-_WATCHDOG_TIMEOUT: int = 3600  # 60 minutes
-_watchdog_timer: threading.Timer | None = None
+_expected: int = int(os.environ.get("TOTAL_WORKERS", "0"))
+_peak: int = 0           # max simultaneous registrations; used to detect full-cluster events
+_WATCHDOG_TIMEOUT = 3600  # 60 min; handles workers that exit without calling /deregister
+_watchdog: threading.Timer | None = None
 
 
-def _watchdog_fire() -> None:
-    logging.warning(
-        f"WATCHDOG_TIMEOUT: no deregistration in {_WATCHDOG_TIMEOUT // 60} min — "
-        "forcing shutdown (ungraceful worker exits suspected)."
-    )
+def _on_watchdog_fire() -> None:
+    logging.warning(f"WATCHDOG: no deregistration in {_WATCHDOG_TIMEOUT // 60} min — forcing shutdown.")
     os._exit(1)
 
 
 def _arm_watchdog() -> None:
-    """Start or restart the inactivity watchdog."""
-    global _watchdog_timer
-    if _watchdog_timer is not None:
-        _watchdog_timer.cancel()
-    _watchdog_timer = threading.Timer(_WATCHDOG_TIMEOUT, _watchdog_fire)
-    _watchdog_timer.daemon = True
-    _watchdog_timer.start()
-
-
-def _cancel_watchdog() -> None:
-    global _watchdog_timer
-    if _watchdog_timer is not None:
-        _watchdog_timer.cancel()
-        _watchdog_timer = None
+    global _watchdog
+    if _watchdog:
+        _watchdog.cancel()
+    _watchdog = threading.Timer(_WATCHDOG_TIMEOUT, _on_watchdog_fire)
+    _watchdog.daemon = True
+    _watchdog.start()
 
 
 def _schedule_shutdown() -> None:
-    """Exit 2 s after the last worker deregisters (gives time to send the HTTP response)."""
-    _cancel_watchdog()
+    global _watchdog
+    if _watchdog:
+        _watchdog.cancel()
+        _watchdog = None
     def _exit():
         logging.info("RUN_TERMINATION: NORMAL — all workers deregistered cleanly.")
         os._exit(0)
@@ -69,50 +44,40 @@ def _schedule_shutdown() -> None:
 
 @app.post("/register")
 def register():
-    """Add a worker to the active registry."""
-    global _peak_registered
+    global _peak
     data = request.get_json()
-    worker_id = data["worker_id"]
-    address = data["address"]
     with _lock:
-        _registry[worker_id] = address
-        if len(_registry) > _peak_registered:
-            _peak_registered = len(_registry)
-            if _expected_workers > 0 and _peak_registered >= _expected_workers:
-                # All expected workers are now registered — arm the watchdog.
+        _registry[data["worker_id"]] = data["address"]
+        if len(_registry) > _peak:
+            _peak = len(_registry)
+            if _expected > 0 and _peak >= _expected:
                 _arm_watchdog()
-    logging.info(f"Registered: {worker_id} @ {address}")
+    logging.info(f"Registered: {data['worker_id']} @ {data['address']}")
     return jsonify({"status": "ok"})
 
 
 @app.post("/deregister")
 def deregister():
-    """Remove a worker from the active registry."""
     data = request.get_json()
-    worker_id = data["worker_id"]
     with _lock:
-        _registry.pop(worker_id, None)
-        empty = len(_registry) == 0
-        all_seen = _expected_workers > 0 and _peak_registered >= _expected_workers
-    logging.info(f"Deregistered: {worker_id} — active={len(_registry)}")
+        _registry.pop(data["worker_id"], None)
+        empty = not _registry
+        all_seen = _expected > 0 and _peak >= _expected
+        active = len(_registry)
+    logging.info(f"Deregistered: {data['worker_id']} — active={active}")
     if all_seen:
-        if empty:
-            _schedule_shutdown()
-        else:
-            _arm_watchdog()  # reset the timer: still waiting for remaining workers
+        _schedule_shutdown() if empty else _arm_watchdog()
     return jsonify({"status": "ok"})
 
 
 @app.get("/peers")
 def get_peers():
-    """Return the list of currently active gRPC addresses."""
     with _lock:
         return jsonify(list(_registry.values()))
 
 
 @app.get("/health")
 def health():
-    """Liveness probe used by Docker healthcheck — does not appear in worker traffic."""
     return jsonify({"status": "ok"})
 
 
