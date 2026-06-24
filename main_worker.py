@@ -166,11 +166,13 @@ def infinite_batches(loader):
 
 
 def main():
+    # --- config & device ---
     p = build_config(load_config())
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Starting on {p.my_address} | device={device} | total_workers={p.total_workers}")
 
+    # --- data ---
     train_loader, val_loader, local_test_loader, local_samples = load_partition(p.data_dir, p.batch_size)
     mode = "80/10/10 train/val/local_test" if local_test_loader is not None else "90/10 train/val"
     logger.info(f"Loaded {local_samples} local training samples ({mode})")
@@ -179,6 +181,7 @@ def main():
     if global_test_loader is not None:
         logger.info(f"Global test set loaded from {p.global_test_dir} ({len(global_test_loader.dataset)} samples)")
 
+    # --- model / optimizer / metrics ---
     model     = FEMNISTModel(dropout_conv=p.dropout_conv, dropout_fc=p.dropout_fc).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=p.learning_rate)
 
@@ -188,6 +191,7 @@ def main():
         metrics_writer = MetricsWriter(metrics_path, p.worker_id)
         logger.info(f"Metrics logging enabled → {metrics_path}")
 
+    # --- infrastructure: gRPC server + registry + signals ---
     buffer = AggregationBuffer()
     # Written by Thread 2 (Phase C), read by Thread 1 for staleness checks.
     # Plain dict is safe: Python's GIL makes integer assignment atomic for a single writer.
@@ -205,6 +209,7 @@ def main():
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
 
+    # --- training loop ---
     try:
         # Inside try so SIGTERM during startup polling still triggers finally → deregister.
         peer_cache = wait_for_all_peers(p.registry_url, p.total_workers)
@@ -357,6 +362,7 @@ def main():
         # SIGTERM/SIGINT → sys.exit(0) → finally runs. Only SIGKILL bypasses this.
         deregister_worker(p.registry_url, p.worker_id)
 
+    # --- post-training evaluation ---
     # Local test: run once after training, never influences training decisions.
     # Only present when local_test_set: true in config (80/10/10 split mode).
     if local_test_loader is not None:
