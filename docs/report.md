@@ -326,6 +326,12 @@ La letteratura FL ha sviluppato diverse strategie per affrontare questi problemi
 
 > **Nota su SCAFFOLD in un sistema P2P.** SCAFFOLD richiede che i control variates siano sincronizzati tra tutti i worker ad ogni round di aggregazione — un'operazione intrinsecamente centralizzata. In un sistema gossip asincrono dove ogni worker aggrega solo i modelli che riceve casualmente, non è possibile mantenere control variates globali coerenti. SCAFFOLD è quindi architetturalmente incompatibile con il nostro design, per la stessa ragione per cui l'outer optimizer di DiLoCo non può essere implementato.
 
+**Pre-processing locale dei dati — scelta di non implementare.**
+
+Una categoria di mitigazione non inclusa nella tabella sopra riguarda il pre-processing applicato localmente da ciascun worker prima del training, senza condivisione di dati tra nodi — quindi compatibile con il vincolo di confidenzialità del FL. Esempi concreti sarebbero: data augmentation (rotazioni, flipping, rumore gaussiano) per aumentare la variabilità visiva locale; ribilanciamento delle classi tramite oversampling o weighted sampling nel DataLoader; normalizzazione per-worker calcolata su media e deviazione standard della propria partizione.
+
+Queste tecniche non violano il modello federato — ogni worker opera esclusivamente sui propri dati locali — e potrebbero ridurre il bias introdotto dalla distribuzione non-i.i.d. migliorando la qualità dell'aggregazione FedAvg. Tuttavia, la traccia del progetto richiede di valutare il sistema su dataset LEAF in condizioni realistiche, il cui scenario di riferimento è proprio il non-i.i.d. naturale che emerge dalla struttura per-scrittore di FEMNIST. Applicare pre-processing che attenua l'eterogeneità ridurrebbe la fedeltà dello scenario sperimentale rispetto a quello descritto nella traccia. Per questa ragione si è scelto di mantenere il progetto strettamente in linea con quanto richiesto, operando sui dati così come prodotti da LEAF senza alcuna modifica alla distribuzione locale.
+
 ---
 
 ### 2.5 Fondamenti Teorici: Gossip FL come Discesa del Gradiente Decentralizzata
@@ -654,6 +660,31 @@ Quando `global_test_set: true`, ogni container riceve un secondo bind mount aggi
 
 Docker crea automaticamente il punto di mount `/app/data/femnist/global_test` come directory vuota nel filesystem del container prima di applicare il bind mount. Sul filesystem **host**, questa operazione produce una directory vuota `data/femnist/worker_k/global_test/` — un artefatto del meccanismo di mount, non un errore: la directory è vuota sull'host ma non all'interno del container, dove il bind mount sovrascrive quel punto con il contenuto reale di `data/femnist/global_test/`.
 
+#### Bind mount vs Docker volume — motivazione della scelta
+
+Il meccanismo di accesso ai dati da parte dei container è il **bind mount** (detto anche *host mount*): una directory dell'host viene collegata a un percorso del container a runtime, senza copiare nulla nell'immagine. Docker offre un'alternativa distinta, i **Docker volume** (volumi gestiti dal daemon), che merita una discussione esplicita per chiarire perché non sia stata adottata.
+
+| | Bind mount | Docker volume |
+|---|---|---|
+| **Dove stanno i dati** | Filesystem host, percorso noto | Area gestita da Docker (`/var/lib/docker/volumes/`) |
+| **Chi li ha creati** | Lo script `split_dataset.py` sull'host | Il daemon Docker o un container |
+| **Portabilità** | Dipende dal percorso host | Indipendente dalla struttura di directory |
+| **Ispezione diretta** | `ls data/femnist/worker_0/` | Richiede `docker volume inspect` o un container ausiliario |
+| **Uso tipico** | Dataset pre-esistenti, file di configurazione | Database, stato persistente generato a runtime |
+
+Nel contesto di questo progetto la scelta del bind mount è obbligata da due vincoli:
+
+1. **I dati esistono già sull'host prima dei container.** `split_dataset.py` produce le directory `worker_k/` direttamente nel filesystem dell'host. Un Docker volume si popola tipicamente dall'interno di un container; usarlo qui richiederebbe un passaggio aggiuntivo per trasferire i dati dal filesystem host al volume, senza alcun beneficio pratico.
+
+2. **L'isolamento per partizione è garantito dalla struttura di directory.** Ogni worker monta esclusivamente la propria sottocartella (`worker_k/`). Replicare questo schema con i volumi significherebbe creare un volume separato per ogni worker e una procedura di inizializzazione dei volumi — complessità operativa inutile.
+
+**Contro del bind mount (accettati consapevolmente):**
+
+- **Dipendenza dal percorso host:** se la directory `data/femnist/` non esiste al momento del `docker compose up`, il container parte con un punto di mount vuoto e il training fallisce immediatamente. Con un Docker volume pre-popolato questo errore sarebbe impossibile. In pratica la pipeline di preparazione (`download_femnist.py` → `split_dataset.py`) deve essere eseguita prima di avviare i container — requisito già documentato nel workflow operativo.
+- **Non portabile tra macchine senza trasferire i dati:** su AWS il dataset va caricato sull'istanza manualmente (via `scp` o simili) prima del deployment. Un volume Docker con un registry remoto (es. Amazon EFS) eliminerebbe questo passaggio, ma introdurrebbe dipendenze infrastrutturali sproporzionate per un progetto universitario.
+
+Il `.dockerignore` esclude `data/` e `leaf/` per coerenza con questa scelta: durante la `docker build` non ha senso copiare nell'immagine dati che verranno comunque sostituiti dal bind mount a runtime — farlo rallenterebbe la build e gonfilerebbe inutilmente il layer del filesystem dell'immagine.
+
 #### Garanzia della proprietà non-i.i.d.
 
 La partizione è non-i.i.d. per costruzione: LEAF organizza i dati per autore, ciascuno con uno stile di scrittura caratteristico. Assegnare utenti contigui a un worker garantisce che la sua distribuzione di classi rifletta gli stili di un sottoinsieme specifico di scrittori — diverso da quello di ogni altro worker. Questo simula fedelmente lo scenario FL reale in cui i dispositivi partecipanti hanno dati generati da utenti diversi con abitudini proprie.
@@ -742,7 +773,11 @@ Crucialmente, `train_iter` è inizializzato **una sola volta** all'avvio del wor
 
 **Shuffle al confine di epoca mid-round.** Quando il confine di epoca cade a metà round, `infinite_batches` rimescola tutti i campioni e riparte dall'inizio della nuova epoca. I campioni già visti nella prima parte del round potrebbero quindi riapparire nella seconda parte. Con 210k campioni e H=500 (16k campioni per round), la probabilità che un campione specifico della nuova permutazione sia già stato visto nel round corrente è al massimo ~7.6%, producendo circa 110 duplicati su 16.000 campioni totali (0.7%).
 
-Eliminare completamente i duplicati mid-round richiederebbe di tracciare gli indici già campionati nel round corrente ed escluderli dal nuovo shuffle — un meccanismo che accoppia la logica di iterazione del dataset con quella dei round FL, introduce stato aggiuntivo nel generatore, e complica la lettura del codice senza portare alcun beneficio misurabile. Il training su mini-batch SGD è già intrinsecamente stocastico e robusto a piccole irregolarità nella distribuzione dei campioni: la stima del gradiente su 16.000 campioni non è statisticamente distorta dallo 0.7% di duplicati, poiché questi appaiono in posizioni casuali e non sistematiche. In ML classico, il training multi-epoca su dataset fissi implica per costruzione che ogni campione venga visto più volte — la ripetizione controllata non è un problema ma una pratica normale. Anzi, è precisamente questo il caso analogo: tra un'epoca e la successiva, tutti i campioni si ripetono per intero, e nessuno considera questo un bug. Il caso mid-round è strutturalmente identico ma quantitativamente molto più limitato (0.7% di campioni vs 100% tra epoche). Se la ripetizione sistematica tra epoche è accettata per definizione, la ripetizione accidentale dello 0.7% dentro un round non può essere considerata un problema. Lo 0.7% di duplicati mid-round è quindi accettato come limite noto e trascurabile del design corrente.
+**Limitazione nota: duplicati mid-round.** Quando il confine di epoca cade a metà round, il nuovo shuffle può ripresentare campioni già visti nella prima parte dello stesso round. Con i valori di default ($H=500$, `batch_size=32`, $n_k \approx 210\text{k}$), la probabilità di rivedere un campione specifico è ~0.7% — circa 110 duplicati su 16.000 campioni per round. Questo non è gestito dal codice e costituisce un limite noto del design corrente.
+
+L'impatto pratico è trascurabile per due ragioni. Prima: il training multi-epoca su dataset fissi implica per costruzione che ogni campione venga visto più volte tra un'epoca e la successiva — la ripetizione controllata è la norma, non un'anomalia. Il caso mid-round è strutturalmente identico ma quantitativamente molto più limitato (0.7% vs 100% tra epoche). Seconda: il mini-batch SGD è intrinsecamente stocastico e robusto a piccole irregolarità nella distribuzione dei campioni; la stima del gradiente su 16.000 campioni non è statisticamente distorta dallo 0.7% di duplicati casuali.
+
+**Possibile soluzione.** Eliminare i duplicati richiederebbe che `infinite_batches` tracci gli indici già campionati nel round corrente e li escluda dal nuovo shuffle — svuotando il set a inizio round e costruendo la permutazione della nuova epoca sugli indici rimanenti. Il costo è l'accoppiamento tra la logica di iterazione del dataset e quella dei round FL: `infinite_batches` dovrebbe ricevere un segnale di "inizio round" esterno, introducendo stato condiviso e complicando l'interfaccia del generatore. Il trade-off non è favorevole: la complessità aggiunta è concreta, il beneficio statistico è trascurabile.
 
 I parametri di training configurabili sono quindi tre — `inner_steps_H`, `batch_size`, e `early_stopping_patience` — più `total_rounds` come tetto massimo di sicurezza (default 200), quasi mai raggiunto in pratica perché l'early stopping scatta prima. Le epoche emergono come conseguenza derivata, non come input:
 
@@ -1578,11 +1613,11 @@ Tre variabili distinte controllano tre aspetti ortogonali del sistema. È import
 
 La durata di un round è la somma di tre fasi:
 
-| Fase | Durata tipica (GPU locale) | Determinata da |
-|---|---|---|
-| Phase A (FedAvg) | 1.1–2.0s | Numero di modelli ricevuti nel buffer (operazione CPU) |
-| Phase B (training) | 2.7–3.5s | GPU scheduling; fisso a H=500 step |
-| Phase C (gossip push) | 50–95ms | Numero di peer contattati + latenza rete |
+| Fase | Stima previa (GPU) | Misurato (CPU/WSL2, campagna locale) | Determinata da |
+|---|---|---|---|
+| Phase A (FedAvg) | 1.1–2.0s | **5–8s** | Numero di modelli nel buffer + locking (CPU) |
+| Phase B (training) | 2.7–3.5s | **0.3s (H=100) — 4.0s (H=1000)** | H × tempo/step; scala linearmente con H |
+| Phase C (gossip push) | 50–95ms | **80–220ms** | Numero di peer + latenza rete locale |
 
 **Il dataset non influisce sulla velocità del round.** Ogni worker esegue esattamente `inner_steps_H=500` passi di ottimizzazione per round, indipendentemente dalla dimensione della sua partizione locale. La dimensione del dataset determina quante epoche vengono attraversate nel tempo, non la velocità del round. Questo è il motivo per cui H è misurato in step e non in epoche (Sezione 2.1).
 
@@ -3013,7 +3048,7 @@ FEMNIST è il benchmark FL non-i.i.d. più usato in letteratura. Con 62 classi (
 | FedProx (Li et al., 2020) | stesso setup di FedAvg | ~79–83% | μ=0.01 proximal term |
 | SCAFFOLD (Karimireddy et al., 2020) | riduzione del client drift | ~82–87% | controllo varianza del gradiente |
 | Local (no FL, LEAF paper [3]) | training isolato per client | ~60–70% | baseline LEAF su subset ridotto |
-| **Questo progetto** | **N=3, lr=1e-3, H=best_H, fanout=1–(N−1)** | **in corso** | Piano 8 run (Blocchi A/B/C, §13) |
+| **Questo progetto** | **N=3–8, lr=1e-3, H=100–1000, fanout=1–(N−1)** | **~87–91% (locale)** | Piano 8 run completato (Blocchi A/B/C, §14) |
 
 > **Nota metodologica.** I valori in letteratura sono spesso ottenuti su configurazioni diverse (numero di client, frazione di partecipazione, dimensione dei dati locali). Il confronto diretto richiede cautela: la nostra configurazione (3 worker, tutto il dataset diviso in 3) differisce significativamente da un deployment con 100+ client su subset piccoli. L'obiettivo non è superare lo stato dell'arte, ma dimostrare che il gossip P2P converge a risultati comparabili al FL centralizzato su questa scala.
 
@@ -3125,6 +3160,8 @@ Il sistema deve mantenere `mean_accuracy > 80%` con `drop_probability: 0.2`. Un 
 ---
 
 ### 12.6 Tabelle Risultati
+
+> I risultati completi sono in **§14 (locale)**. Le tabelle qui sotto sono il piano originale, ora compilato in §14.1.
 
 **Blocco A — Ablazione H (N=3, fanout=1, lr=1e-3)**
 
@@ -3254,11 +3291,13 @@ I run dello stesso blocco che condividono N possono essere eseguiti consecutivam
 
 ---
 
-## 14. Risultati Sperimentali
+## 14. Risultati Sperimentali (locale — Docker su WSL2)
+
+> **Nota.** Tutti i risultati di questa sezione sono prodotti da run in locale: container Docker su WSL2, CPU (no GPU), singola macchina. I run su EC2 singola e su infrastruttura multi-EC2 verranno aggiunti in sezioni successive.
 
 Tutti e 8 i run hanno terminato con `Run termination: NORMAL` — tutti i worker si sono deregistrati pulitamente senza crash. Il piano completo ha richiesto circa **2 ore e 7 minuti** di esecuzione sequenziale su hardware locale (CPU, Docker Desktop su WSL2).
 
-### 14.1 Tabella Riepilogativa
+### 14.1 Tabella Riepilogativa (locale)
 
 La tabella raccoglie per ogni run i parametri di input (blocco, N, fanout, H) e le metriche di output principali. Le colonne di output sono descritte sotto.
 
@@ -3282,7 +3321,7 @@ La tabella raccoglie per ogni run i parametri di input (blocco, N, fanout, H) e 
 
 > `best_H` è stato determinato automaticamente da `run_grid.py` confrontando i `summary.txt` del Blocco A: **H=1000** (`h1000`, val=0.9057) ha vinto su H=500 (0.8976) e H=100 (0.8736). Tutti i run dei Blocchi B e C usano quindi H=1000.
 
-### 14.2 Blocco A — Ablazione H
+### 14.2 Blocco A — Ablazione H (locale)
 
 Con N=3 e fanout=1 fissi, H governa il numero di passi di training locale tra due gossip consecutivi.
 
@@ -3290,7 +3329,7 @@ H=1000 produce la val accuracy più alta (0.9057) ma il **global test più basso
 
 La `std` di val accuracy scende al diminuire della comunicazione: h1000 ha std=0.0074 (worker molto uniformi nella val locale) ma global test std=0.0644 (meno uniformi sulla distribuzione globale). Il contrario per h100.
 
-### 14.3 Blocco B — Fanout a N=3
+### 14.3 Blocco B — Fanout a N=3 (locale)
 
 `f2` (fanout=2 = N−1, broadcast completo) vs `ref` (fanout=1), entrambi con H=1000:
 
@@ -3300,7 +3339,7 @@ La `std` di val accuracy scende al diminuire della comunicazione: h1000 ha std=0
 
 A N=3 il broadcast completo non paga: costo doppio, beneficio trascurabile. L'effetto del fanout diventa rilevante solo alle scale maggiori del Blocco C.
 
-### 14.4 Blocco C — Scalabilità
+### 14.4 Blocco C — Scalabilità (locale)
 
 #### Val accuracy vs N
 
@@ -3331,7 +3370,7 @@ Il broadcast completo cede meno di 1 punto percentuale di val accuracy ma guadag
 
 Nota sull'L2 distance: a N=8 con fanout=7, i modelli finali sono più vicini geometricamente (L2=94.7) che a N=5 con fanout=4 (L2=117.0), nonostante il numero maggiore di worker. Con più worker che si inviano modelli a vicenda ogni round, l'effetto di averaging è più aggressivo e converge più velocemente verso un punto comune.
 
-### 14.5 Osservazione Trasversale: val accuracy e global test misurano obiettivi opposti
+### 14.5 Osservazione Trasversale: val accuracy e global test misurano obiettivi opposti (locale)
 
 Il pattern più rilevante emerso dall'intera campagna sperimentale è che `val_accuracy` e `global_test_accuracy` sono sistematicamente influenzate in direzioni opposte dagli stessi parametri:
 
@@ -3345,7 +3384,7 @@ In termini di global test, la configurazione migliore dell'intera campagna è `n
 
 **Nota metodologica.** `best_H` è stato selezionato tramite `mean_best_val_accuracy`, che ha eletto H=1000. Se la selezione fosse avvenuta tramite `global_test_accuracy`, avrebbe eletto H=500 (global test 0.8059 vs 0.7462 di H=1000). Tuttavia, usare il global test per la selezione degli iperparametri lo contaminerebbe come metrica di valutazione finale, introducendo data leakage. La scelta metodologicamente corretta per ottimizzare la generalizzazione globale richiederebbe un quarto split dedicato: un validation set di writer mai visti, distinto dal global test, usato esclusivamente per la selezione degli iperparametri. Nel contesto di questo progetto la distinzione è documentata ma non implementata — il global test va interpretato come metrica di analisi post-hoc, non come criterio di selezione.
 
-### 14.6 Analisi della Convergenza: quale configurazione ha convergito?
+### 14.6 Analisi della Convergenza: quale configurazione ha convergito? (locale)
 
 #### Criterio e verdetto automatico
 
@@ -3397,7 +3436,7 @@ Il gossip protocol produce tre effetti misurabili e coerenti attraverso tutta la
 
 In un FL non-i.i.d. con partizioni fortemente eterogenee, la convergenza completa (L2→0, tutti i modelli identici) non è raggiungibile in numero finito di round con dati locali persistentemente diversi: ogni round di training locale re-introduce drift verso la distribuzione locale. La convergenza funzionale parziale osservata in `n8_fn` — 8 worker con dati completamente disgiunti che convergono a classificare writer mai visti con std=0.036 — è il risultato atteso e teoricamente motivato per questo tipo di sistema.
 
-### 14.7 Discussione: Scelte Algoritmiche, Confronto con DiLoCo e Possibili Estensioni
+### 14.7 Discussione: Scelte Algoritmiche, Confronto con DiLoCo e Possibili Estensioni (locale)
 
 #### Ispirazione a DiLoCo e differenze strutturali
 
