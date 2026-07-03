@@ -166,11 +166,11 @@ SSH_OPTS = [
 # Helpers: SSH / SCP
 # ---------------------------------------------------------------------------
 
-def _ssh(ip: str, key_path: str, cmd: str, *, check: bool = True, capture: bool = False):
+def _ssh(ip: str, key_path: str, cmd: str, *, check: bool = True, capture: bool = False, timeout: float | None = None):
     full = ["ssh", *SSH_OPTS, "-i", key_path, f"ubuntu@{ip}", cmd]
     if capture:
-        return subprocess.run(full, capture_output=True, text=True)
-    return subprocess.run(full, check=check)
+        return subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(full, check=check, timeout=timeout)
 
 
 def _scp_to(ip: str, key_path: str, local: Path, remote: str, *, recursive: bool = False):
@@ -215,9 +215,12 @@ def _wait_for_docker(ip: str, key_path: str, timeout: int = 300) -> bool:
     """Poll until SSH is reachable and Docker daemon is running."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = _ssh(ip, key_path, "docker info", check=False, capture=True)
-        if r.returncode == 0:
-            return True
+        try:
+            r = _ssh(ip, key_path, "docker info", check=False, capture=True, timeout=15)
+            if r.returncode == 0:
+                return True
+        except subprocess.TimeoutExpired:
+            pass
         time.sleep(10)
     return False
 
