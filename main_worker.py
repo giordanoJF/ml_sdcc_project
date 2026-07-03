@@ -322,7 +322,9 @@ def main():
             # Registry traffic is zero in healthy rounds — at most one call per round on failure.
             retried = 0
             if failed_targets:
-                peer_cache   = fetch_peers(p.registry_url)
+                fresh_peers  = fetch_peers(p.registry_url)
+                if fresh_peers:
+                    peer_cache = fresh_peers
                 replacements = [peer for peer in peer_cache if peer != p.my_address and peer not in tried]
                 for replacement in random.sample(replacements, min(len(failed_targets), len(replacements))):
                     tried.add(replacement)
