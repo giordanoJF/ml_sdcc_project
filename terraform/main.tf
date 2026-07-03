@@ -29,7 +29,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_security_group" "fl" {
   name        = "fl-sdcc"
-  description = "P2P Federated Learning — SDCC project"
+  description = "P2P Federated Learning - SDCC project"
 
   ingress {
     description = "SSH"

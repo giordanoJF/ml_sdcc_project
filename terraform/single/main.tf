@@ -29,7 +29,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_security_group" "fl_single" {
   name        = "fl-sdcc-single"
-  description = "P2P Federated Learning — single EC2 mode"
+  description = "P2P Federated Learning - single EC2 mode"
 
   # SSH access for project upload and management
   ingress {
