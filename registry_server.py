@@ -50,8 +50,6 @@ def register():
         _registry[data["worker_id"]] = data["address"]
         if len(_registry) > _peak:
             _peak = len(_registry)
-            if _expected > 0 and _peak >= _expected:
-                _arm_watchdog()
     logging.info(f"Registered: {data['worker_id']} @ {data['address']}")
     return jsonify({"status": "ok"})
 
