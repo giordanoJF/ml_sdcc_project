@@ -13,7 +13,7 @@ _lock = threading.Lock()
 
 _expected: int = int(os.environ.get("TOTAL_WORKERS", "0"))
 _peak: int = 0           # max simultaneous registrations; used to detect full-cluster events
-_WATCHDOG_TIMEOUT = 3600  # 60 min; handles workers that exit without calling /deregister
+_WATCHDOG_TIMEOUT = 13200  # 3h40m; handles workers that exit without calling /deregister
 _watchdog: threading.Timer | None = None
 
 
