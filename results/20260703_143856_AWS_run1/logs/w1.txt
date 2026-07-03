@@ -1,0 +1,341 @@
+% python scripts/aws_deploy.py logs 1 
+10:13:39 [Worker 1] INFO Starting on 172.31.18.184:50051 | device=cpu | total_workers=3
+10:13:42 [Worker 1] INFO Loaded 158540 local training samples (90/10 train/val)
+10:13:42 [Worker 1] INFO Global test set loaded from /app/data/femnist/global_test (127371 samples)
+10:13:45 [Worker 1] INFO Metrics logging enabled → /app/data/femnist/metrics.csv
+10:13:45 [Worker 1] INFO gRPC server listening on port 50051
+10:13:45 [Worker 1] INFO Registered at 172.31.18.184:50051
+10:13:45 [Worker 1] INFO Waiting for peers: 2/3 registered ...
+10:13:50 [Worker 1] INFO All 3 workers online — peer cache ready
+10:13:50 [Worker 1] INFO === Round 1/200 ===
+10:14:07 [Worker 1] INFO Validation — loss=4.1241, accuracy=0.49%
+10:16:30 [Worker 1] INFO Global test — accuracy=0.25%
+10:16:30 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=4.1241)
+10:17:21 [Worker 1] INFO Local training — avg_loss=1.9355 over 500 steps
+10:17:21 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:17:21 [Worker 1] INFO === Round 2/200 ===
+10:17:35 [Worker 1] INFO Validation — loss=0.7211, accuracy=81.06%
+10:19:17 [Worker 1] INFO Global test — accuracy=59.10%
+10:19:17 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.7211)
+10:20:09 [Worker 1] INFO Local training — avg_loss=1.4723 over 500 steps
+10:20:09 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:20:09 [Worker 1] INFO === Round 3/200 ===
+10:20:09 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:20:23 [Worker 1] INFO Validation — loss=3.7764, accuracy=0.88%
+10:22:04 [Worker 1] INFO Global test — accuracy=4.94%
+10:22:04 [Worker 1] INFO Early stopping patience: 1/10
+10:22:52 [Worker 1] INFO Local training — avg_loss=1.5326 over 500 steps
+10:22:53 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:22:53 [Worker 1] INFO === Round 4/200 ===
+10:23:07 [Worker 1] INFO Validation — loss=0.6090, accuracy=83.29%
+10:24:44 [Worker 1] INFO Global test — accuracy=61.61%
+10:24:44 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.6090)
+10:25:32 [Worker 1] INFO Local training — avg_loss=1.3930 over 500 steps
+10:25:32 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:25:32 [Worker 1] INFO === Round 5/200 ===
+10:25:32 [Worker 1] INFO FedAvg applied — local=158540, neighbors=461448 (2 models), combined=619988
+10:25:47 [Worker 1] INFO Validation — loss=3.9943, accuracy=7.77%
+10:27:28 [Worker 1] INFO Global test — accuracy=3.58%
+10:27:28 [Worker 1] INFO Early stopping patience: 1/10
+10:28:16 [Worker 1] INFO Local training — avg_loss=1.4434 over 500 steps
+10:28:16 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:28:16 [Worker 1] INFO === Round 6/200 ===
+10:28:16 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:28:30 [Worker 1] INFO Validation — loss=0.7389, accuracy=83.34%
+10:30:09 [Worker 1] INFO Global test — accuracy=61.98%
+10:30:09 [Worker 1] INFO Early stopping patience: 2/10
+10:31:01 [Worker 1] INFO Local training — avg_loss=1.3820 over 500 steps
+10:31:01 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:31:01 [Worker 1] INFO === Round 7/200 ===
+10:31:01 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:31:15 [Worker 1] INFO Validation — loss=0.6207, accuracy=84.77%
+10:32:55 [Worker 1] INFO Global test — accuracy=63.19%
+10:32:55 [Worker 1] INFO Early stopping patience: 3/10
+10:33:43 [Worker 1] INFO Local training — avg_loss=1.3140 over 500 steps
+10:33:43 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:33:43 [Worker 1] INFO === Round 8/200 ===
+10:33:57 [Worker 1] INFO Validation — loss=0.9805, accuracy=83.66%
+10:35:38 [Worker 1] INFO Global test — accuracy=70.32%
+10:35:38 [Worker 1] INFO Early stopping patience: 4/10
+10:36:25 [Worker 1] INFO Local training — avg_loss=1.2885 over 500 steps
+10:36:26 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:36:26 [Worker 1] INFO === Round 9/200 ===
+10:36:26 [Worker 1] INFO FedAvg applied — local=158540, neighbors=461448 (2 models), combined=619988
+10:36:40 [Worker 1] INFO Validation — loss=0.9561, accuracy=83.29%
+10:38:19 [Worker 1] INFO Global test — accuracy=78.49%
+10:38:19 [Worker 1] INFO Early stopping patience: 5/10
+10:39:12 [Worker 1] INFO Local training — avg_loss=1.2920 over 500 steps
+10:39:12 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:39:12 [Worker 1] INFO === Round 10/200 ===
+10:39:26 [Worker 1] INFO Validation — loss=0.4691, accuracy=86.40%
+10:41:03 [Worker 1] INFO Global test — accuracy=70.66%
+10:41:03 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4691)
+10:41:54 [Worker 1] INFO Local training — avg_loss=1.2585 over 500 steps
+10:41:55 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:41:55 [Worker 1] INFO === Round 11/200 ===
+10:41:55 [Worker 1] INFO FedAvg applied — local=158540, neighbors=461448 (2 models), combined=619988
+10:42:09 [Worker 1] INFO Validation — loss=0.7027, accuracy=85.38%
+10:43:48 [Worker 1] INFO Global test — accuracy=78.59%
+10:43:48 [Worker 1] INFO Early stopping patience: 1/10
+10:44:35 [Worker 1] INFO Local training — avg_loss=1.2353 over 500 steps
+10:44:35 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:44:35 [Worker 1] INFO === Round 12/200 ===
+10:44:49 [Worker 1] INFO Validation — loss=0.5218, accuracy=86.34%
+10:46:26 [Worker 1] INFO Global test — accuracy=70.33%
+10:46:26 [Worker 1] INFO Early stopping patience: 2/10
+10:47:12 [Worker 1] INFO Local training — avg_loss=1.2441 over 500 steps
+10:47:12 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:47:12 [Worker 1] INFO === Round 13/200 ===
+10:47:12 [Worker 1] INFO FedAvg applied — local=158540, neighbors=461448 (2 models), combined=619988
+10:47:26 [Worker 1] INFO Validation — loss=0.4765, accuracy=86.25%
+10:49:04 [Worker 1] INFO Global test — accuracy=81.40%
+10:49:04 [Worker 1] INFO Early stopping patience: 3/10
+10:49:48 [Worker 1] INFO Local training — avg_loss=1.2231 over 500 steps
+10:49:49 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:49:49 [Worker 1] INFO === Round 14/200 ===
+10:50:03 [Worker 1] INFO Validation — loss=0.4384, accuracy=87.15%
+10:51:39 [Worker 1] INFO Global test — accuracy=72.39%
+10:51:39 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4384)
+10:52:24 [Worker 1] INFO Local training — avg_loss=1.2176 over 500 steps
+10:52:24 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:52:24 [Worker 1] INFO === Round 15/200 ===
+10:52:24 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:52:38 [Worker 1] INFO Validation — loss=0.4291, accuracy=87.59%
+10:54:16 [Worker 1] INFO Global test — accuracy=68.95%
+10:54:16 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4291)
+10:55:03 [Worker 1] INFO Local training — avg_loss=1.2007 over 500 steps
+10:55:04 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:55:04 [Worker 1] INFO === Round 16/200 ===
+10:55:04 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:55:18 [Worker 1] INFO Validation — loss=0.6940, accuracy=87.55%
+10:56:57 [Worker 1] INFO Global test — accuracy=67.44%
+10:56:57 [Worker 1] INFO Early stopping patience: 1/10
+10:57:43 [Worker 1] INFO Local training — avg_loss=1.1920 over 500 steps
+10:57:43 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+10:57:43 [Worker 1] INFO === Round 17/200 ===
+10:57:43 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+10:57:57 [Worker 1] INFO Validation — loss=0.5766, accuracy=87.70%
+10:59:36 [Worker 1] INFO Global test — accuracy=68.65%
+10:59:36 [Worker 1] INFO Early stopping patience: 2/10
+11:00:24 [Worker 1] INFO Local training — avg_loss=1.1877 over 500 steps
+11:00:24 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:00:24 [Worker 1] INFO === Round 18/200 ===
+11:00:24 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+11:00:38 [Worker 1] INFO Validation — loss=0.4630, accuracy=87.71%
+11:02:16 [Worker 1] INFO Global test — accuracy=68.71%
+11:02:16 [Worker 1] INFO Early stopping patience: 3/10
+11:02:57 [Worker 1] INFO Local training — avg_loss=1.1846 over 500 steps
+11:02:57 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:02:57 [Worker 1] INFO === Round 19/200 ===
+11:02:57 [Worker 1] INFO FedAvg applied — local=158540, neighbors=296219 (1 models), combined=454759
+11:03:12 [Worker 1] INFO Validation — loss=1.0447, accuracy=82.13%
+11:04:52 [Worker 1] INFO Global test — accuracy=84.82%
+11:04:52 [Worker 1] INFO Early stopping patience: 4/10
+11:05:40 [Worker 1] INFO Local training — avg_loss=1.1886 over 500 steps
+11:05:40 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:05:40 [Worker 1] INFO === Round 20/200 ===
+11:05:54 [Worker 1] INFO Validation — loss=0.5196, accuracy=87.47%
+11:07:34 [Worker 1] INFO Global test — accuracy=76.81%
+11:07:34 [Worker 1] INFO Early stopping patience: 5/10
+11:08:20 [Worker 1] INFO Local training — avg_loss=1.1830 over 500 steps
+11:08:20 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:08:20 [Worker 1] INFO === Round 21/200 ===
+11:08:20 [Worker 1] INFO FedAvg applied — local=158540, neighbors=296219 (1 models), combined=454759
+11:08:34 [Worker 1] INFO Validation — loss=0.5217, accuracy=84.49%
+11:10:12 [Worker 1] INFO Global test — accuracy=87.11%
+11:10:12 [Worker 1] INFO Early stopping patience: 6/10
+11:10:53 [Worker 1] INFO Local training — avg_loss=1.1901 over 500 steps
+11:10:53 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:10:53 [Worker 1] INFO === Round 22/200 ===
+11:10:53 [Worker 1] INFO FedAvg applied — local=158540, neighbors=296219 (1 models), combined=454759
+11:11:07 [Worker 1] INFO Validation — loss=0.5311, accuracy=84.75%
+11:12:47 [Worker 1] INFO Global test — accuracy=86.99%
+11:12:47 [Worker 1] INFO Early stopping patience: 7/10
+11:13:32 [Worker 1] INFO Local training — avg_loss=1.1756 over 500 steps
+11:13:32 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:13:32 [Worker 1] INFO === Round 23/200 ===
+11:13:32 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+11:13:46 [Worker 1] INFO Validation — loss=0.4249, accuracy=88.10%
+11:15:22 [Worker 1] INFO Global test — accuracy=69.81%
+11:15:22 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4249)
+11:16:03 [Worker 1] INFO Local training — avg_loss=1.1636 over 500 steps
+11:16:03 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:16:03 [Worker 1] INFO === Round 24/200 ===
+11:16:17 [Worker 1] INFO Validation — loss=1.1868, accuracy=82.06%
+11:17:55 [Worker 1] INFO Global test — accuracy=66.59%
+11:17:55 [Worker 1] INFO Early stopping patience: 1/10
+11:18:36 [Worker 1] INFO Local training — avg_loss=1.1709 over 500 steps
+11:18:36 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:18:36 [Worker 1] INFO === Round 25/200 ===
+11:18:50 [Worker 1] INFO Validation — loss=0.7838, accuracy=87.70%
+11:20:28 [Worker 1] INFO Global test — accuracy=73.66%
+11:20:28 [Worker 1] INFO Early stopping patience: 2/10
+11:21:09 [Worker 1] INFO Local training — avg_loss=1.1671 over 500 steps
+11:21:09 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:21:09 [Worker 1] INFO === Round 26/200 ===
+11:21:23 [Worker 1] INFO Validation — loss=1.1539, accuracy=85.23%
+11:23:01 [Worker 1] INFO Global test — accuracy=66.89%
+11:23:01 [Worker 1] INFO Early stopping patience: 3/10
+11:23:42 [Worker 1] INFO Local training — avg_loss=1.1601 over 500 steps
+11:23:43 [Worker 1] INFO Gossip push — sent=1, dropped=0, failed=0, retried=0
+11:23:43 [Worker 1] INFO === Round 27/200 ===
+11:23:43 [Worker 1] INFO FedAvg applied — local=158540, neighbors=296219 (1 models), combined=454759
+11:23:56 [Worker 1] INFO Validation — loss=0.4719, accuracy=85.43%
+11:25:33 [Worker 1] INFO Global test — accuracy=86.96%
+11:25:33 [Worker 1] INFO Early stopping patience: 4/10
+11:26:17 [Worker 1] INFO Local training — avg_loss=1.1546 over 500 steps
+11:26:17 [Worker 1] WARNING Failed to send to 172.31.20.30:50051: StatusCode.UNAVAILABLE — failed to connect to all addresses; last error: UNKNOWN: ipv4:172.31.20.30:50051: Failed to connect to remote host: Connection refused
+11:26:17 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=1, retried=0
+11:26:17 [Worker 1] INFO === Round 28/200 ===
+11:26:17 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+11:26:31 [Worker 1] INFO Validation — loss=0.4765, accuracy=88.10%
+11:28:08 [Worker 1] INFO Global test — accuracy=69.95%
+11:28:08 [Worker 1] INFO Early stopping patience: 5/10
+11:28:50 [Worker 1] INFO Local training — avg_loss=1.1534 over 500 steps
+11:28:50 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:28:50 [Worker 1] INFO === Round 29/200 ===
+11:28:50 [Worker 1] INFO FedAvg applied — local=158540, neighbors=165229 (1 models), combined=323769
+11:29:04 [Worker 1] INFO Validation — loss=0.4154, accuracy=88.29%
+11:30:43 [Worker 1] INFO Global test — accuracy=69.87%
+11:30:43 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4154)
+11:31:27 [Worker 1] INFO Local training — avg_loss=1.1495 over 500 steps
+11:31:27 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:31:27 [Worker 1] INFO === Round 30/200 ===
+11:31:41 [Worker 1] INFO Validation — loss=0.7349, accuracy=87.88%
+11:33:21 [Worker 1] INFO Global test — accuracy=74.39%
+11:33:21 [Worker 1] INFO Early stopping patience: 1/10
+11:34:07 [Worker 1] INFO Local training — avg_loss=1.1537 over 500 steps
+11:34:07 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:34:07 [Worker 1] INFO === Round 31/200 ===
+11:34:21 [Worker 1] INFO Validation — loss=0.4427, accuracy=88.67%
+11:35:59 [Worker 1] INFO Global test — accuracy=75.67%
+11:35:59 [Worker 1] INFO Early stopping patience: 2/10
+11:36:46 [Worker 1] INFO Local training — avg_loss=1.1433 over 500 steps
+11:36:46 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:36:46 [Worker 1] INFO === Round 32/200 ===
+11:37:00 [Worker 1] INFO Validation — loss=0.4044, accuracy=88.79%
+11:38:36 [Worker 1] INFO Global test — accuracy=73.81%
+11:38:36 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.4044)
+11:39:24 [Worker 1] INFO Local training — avg_loss=1.1465 over 500 steps
+11:39:24 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:39:24 [Worker 1] INFO === Round 33/200 ===
+11:39:38 [Worker 1] INFO Validation — loss=0.6743, accuracy=87.49%
+11:41:17 [Worker 1] INFO Global test — accuracy=73.41%
+11:41:17 [Worker 1] INFO Early stopping patience: 1/10
+11:42:05 [Worker 1] INFO Local training — avg_loss=1.1352 over 500 steps
+11:42:05 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:42:05 [Worker 1] INFO === Round 34/200 ===
+11:42:20 [Worker 1] INFO Validation — loss=0.6174, accuracy=88.22%
+11:44:00 [Worker 1] INFO Global test — accuracy=71.97%
+11:44:00 [Worker 1] INFO Early stopping patience: 2/10
+11:44:47 [Worker 1] INFO Local training — avg_loss=1.1480 over 500 steps
+11:44:47 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:44:47 [Worker 1] INFO === Round 35/200 ===
+11:45:01 [Worker 1] INFO Validation — loss=0.3995, accuracy=88.57%
+11:46:38 [Worker 1] INFO Global test — accuracy=71.98%
+11:46:38 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.3995)
+11:47:25 [Worker 1] INFO Local training — avg_loss=1.1429 over 500 steps
+11:47:25 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:47:25 [Worker 1] INFO === Round 36/200 ===
+11:47:39 [Worker 1] INFO Validation — loss=0.4099, accuracy=88.44%
+11:49:17 [Worker 1] INFO Global test — accuracy=73.57%
+11:49:17 [Worker 1] INFO Early stopping patience: 1/10
+11:50:05 [Worker 1] INFO Local training — avg_loss=1.1358 over 500 steps
+11:50:05 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:50:05 [Worker 1] INFO === Round 37/200 ===
+11:50:19 [Worker 1] INFO Validation — loss=0.4145, accuracy=88.90%
+11:51:57 [Worker 1] INFO Global test — accuracy=75.17%
+11:51:57 [Worker 1] INFO Early stopping patience: 2/10
+11:52:44 [Worker 1] INFO Local training — avg_loss=1.1376 over 500 steps
+11:52:44 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:52:44 [Worker 1] INFO === Round 38/200 ===
+11:52:59 [Worker 1] INFO Validation — loss=0.8772, accuracy=87.22%
+11:54:39 [Worker 1] INFO Global test — accuracy=72.98%
+11:54:39 [Worker 1] INFO Early stopping patience: 3/10
+11:55:27 [Worker 1] INFO Local training — avg_loss=1.1340 over 500 steps
+11:55:27 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:55:27 [Worker 1] INFO === Round 39/200 ===
+11:55:41 [Worker 1] INFO Validation — loss=1.1072, accuracy=83.80%
+11:57:21 [Worker 1] INFO Global test — accuracy=67.98%
+11:57:21 [Worker 1] INFO Early stopping patience: 4/10
+11:58:09 [Worker 1] INFO Local training — avg_loss=1.1390 over 500 steps
+11:58:09 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+11:58:09 [Worker 1] INFO === Round 40/200 ===
+11:58:23 [Worker 1] INFO Validation — loss=0.6598, accuracy=88.31%
+12:00:01 [Worker 1] INFO Global test — accuracy=73.90%
+12:00:01 [Worker 1] INFO Early stopping patience: 5/10
+12:00:48 [Worker 1] INFO Local training — avg_loss=1.1398 over 500 steps
+12:00:48 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:00:48 [Worker 1] INFO === Round 41/200 ===
+12:01:02 [Worker 1] INFO Validation — loss=0.4333, accuracy=89.09%
+12:02:40 [Worker 1] INFO Global test — accuracy=72.55%
+12:02:40 [Worker 1] INFO Early stopping patience: 6/10
+12:03:25 [Worker 1] INFO Local training — avg_loss=1.1275 over 500 steps
+12:03:25 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:03:25 [Worker 1] INFO === Round 42/200 ===
+12:03:38 [Worker 1] INFO Validation — loss=0.3906, accuracy=88.87%
+12:05:15 [Worker 1] INFO Global test — accuracy=74.18%
+12:05:15 [Worker 1] INFO Best model saved → /app/data/femnist/model_best.pt (val_loss=0.3906)
+12:06:00 [Worker 1] INFO Local training — avg_loss=1.1145 over 500 steps
+12:06:00 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:06:00 [Worker 1] INFO === Round 43/200 ===
+12:06:14 [Worker 1] INFO Validation — loss=0.4186, accuracy=88.93%
+12:07:51 [Worker 1] INFO Global test — accuracy=73.70%
+12:07:51 [Worker 1] INFO Early stopping patience: 1/10
+12:08:37 [Worker 1] INFO Local training — avg_loss=1.1217 over 500 steps
+12:08:37 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:08:37 [Worker 1] INFO === Round 44/200 ===
+12:08:51 [Worker 1] INFO Validation — loss=0.5465, accuracy=88.75%
+12:10:29 [Worker 1] INFO Global test — accuracy=73.51%
+12:10:29 [Worker 1] INFO Early stopping patience: 2/10
+12:11:13 [Worker 1] INFO Local training — avg_loss=1.1265 over 500 steps
+12:11:13 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:11:13 [Worker 1] INFO === Round 45/200 ===
+12:11:27 [Worker 1] INFO Validation — loss=0.4171, accuracy=89.02%
+12:13:04 [Worker 1] INFO Global test — accuracy=73.28%
+12:13:04 [Worker 1] INFO Early stopping patience: 3/10
+12:13:48 [Worker 1] INFO Local training — avg_loss=1.1234 over 500 steps
+12:13:48 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:13:48 [Worker 1] INFO === Round 46/200 ===
+12:14:02 [Worker 1] INFO Validation — loss=0.6809, accuracy=88.24%
+12:15:41 [Worker 1] INFO Global test — accuracy=73.46%
+12:15:41 [Worker 1] INFO Early stopping patience: 4/10
+12:16:26 [Worker 1] INFO Local training — avg_loss=1.1117 over 500 steps
+12:16:26 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:16:26 [Worker 1] INFO === Round 47/200 ===
+12:16:41 [Worker 1] INFO Validation — loss=0.9579, accuracy=86.96%
+12:18:21 [Worker 1] INFO Global test — accuracy=73.30%
+12:18:21 [Worker 1] INFO Early stopping patience: 5/10
+12:19:06 [Worker 1] INFO Local training — avg_loss=1.1115 over 500 steps
+12:19:06 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:19:06 [Worker 1] INFO === Round 48/200 ===
+12:19:20 [Worker 1] INFO Validation — loss=2.1480, accuracy=57.76%
+12:21:01 [Worker 1] INFO Global test — accuracy=50.58%
+12:21:01 [Worker 1] INFO Early stopping patience: 6/10
+12:21:46 [Worker 1] INFO Local training — avg_loss=1.1114 over 500 steps
+12:21:46 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:21:46 [Worker 1] INFO === Round 49/200 ===
+12:22:00 [Worker 1] INFO Validation — loss=0.4103, accuracy=88.83%
+12:23:36 [Worker 1] INFO Global test — accuracy=76.46%
+12:23:36 [Worker 1] INFO Early stopping patience: 7/10
+12:24:21 [Worker 1] INFO Local training — avg_loss=1.1162 over 500 steps
+12:24:21 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:24:21 [Worker 1] INFO === Round 50/200 ===
+12:24:34 [Worker 1] INFO Validation — loss=0.4089, accuracy=89.15%
+12:26:13 [Worker 1] INFO Global test — accuracy=74.90%
+12:26:13 [Worker 1] INFO Early stopping patience: 8/10
+12:26:58 [Worker 1] INFO Local training — avg_loss=1.1019 over 500 steps
+12:26:58 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:26:58 [Worker 1] INFO === Round 51/200 ===
+12:27:12 [Worker 1] INFO Validation — loss=0.4205, accuracy=88.88%
+12:28:50 [Worker 1] INFO Global test — accuracy=77.51%
+12:28:50 [Worker 1] INFO Early stopping patience: 9/10
+12:29:35 [Worker 1] INFO Local training — avg_loss=1.0973 over 500 steps
+12:29:35 [Worker 1] INFO Gossip push — sent=0, dropped=0, failed=0, retried=0
+12:29:35 [Worker 1] INFO === Round 52/200 ===
+12:29:49 [Worker 1] INFO Validation — loss=1.4987, accuracy=77.09%
+12:31:30 [Worker 1] INFO Global test — accuracy=64.27%
+12:31:30 [Worker 1] INFO Early stopping patience: 10/10
+12:31:30 [Worker 1] INFO Early stopping triggered. Training loop stopped; gRPC server remains active.
+12:31:30 [Worker 1] INFO Training complete. Shutting down gRPC server.
+

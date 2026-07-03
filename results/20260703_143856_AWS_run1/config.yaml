@@ -26,7 +26,7 @@ federated_learning:
 
   # Local SGD steps per worker before gossip (H in DiLoCo). Higher H = less communication.
   # Experiment candidates: 100, 500, 1000
-  inner_steps_H: 100
+  inner_steps_H: 500
 
   aggregation_strategy: "FedAvg"
 
