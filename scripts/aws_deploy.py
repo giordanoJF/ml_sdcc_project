@@ -641,7 +641,7 @@ def cmd_deploy(cfg: dict):
     print("\n[4/5] Starting registry...")
     _ssh(reg_pub, key_path,
          f"docker rm -f fl-registry 2>/dev/null || true && "
-         f"docker run -d --name fl-registry --restart unless-stopped "
+         f"docker run -d --name fl-registry --restart on-failure "
          f"-p {reg_port}:{reg_port} "
          f"-e REGISTRY_PORT={reg_port} "
          f"-e TOTAL_WORKERS={num_workers} "
