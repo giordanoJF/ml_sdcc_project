@@ -1,0 +1,34 @@
+Experiment summary — 3 workers
+============================================================
+
+  Worker  0: 40 rounds | final_acc=0.9265 | best_acc=0.9265 | total_training_s=9015.8 | avg_peers_contacted=0.60 | avg_neighbors_aggregated=0.47
+           phase_a=127763.0ms  phase_b=97.50s  phase_c=98.1ms  grpc_latency=149.55ms/call
+  Worker  1: 21 rounds | final_acc=0.8479 | best_acc=0.8872 | total_training_s=4573.9 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.86
+           phase_a=117461.3ms  phase_b=100.22s  phase_c=114.9ms  grpc_latency=114.55ms/call
+  Worker  2: 22 rounds | final_acc=0.8281 | best_acc=0.8984 | total_training_s=5321.7 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=1.18
+           phase_a=132186.9ms  phase_b=109.57s  phase_c=127.8ms  grpc_latency=122.98ms/call
+
+mean_best_val_accuracy = 0.9040  std=0.0202
+  Worker  0: converged at round   40              wall-clock =  9016.1s
+  Worker  1: converged at round   21              wall-clock =  4573.9s
+  Worker  2: converged at round   22              wall-clock =  5321.7s
+
+System convergence: YES — all workers converged
+System wall-clock total: 9016.1s
+
+Mean pairwise L2 weight distance: 138.0311
+  Worker  0: final_global_test=0.8991  best_global_test=0.9007
+  Worker  1: final_global_test=0.8841  best_global_test=0.8841
+  Worker  2: final_global_test=0.8546  best_global_test=0.8546
+
+Global test — mean=0.8793, std=0.0227, spread=0.0446
+Verdict: MODERATE functional convergence (spread 2–5%)
+  Worker  0: round=  31  val_loss=0.3001  global_test=0.8969
+  Worker  1: round=  12  val_loss=0.4005  global_test=0.7315
+  Worker  2: round=  13  val_loss=0.3786  global_test=0.7020
+
+  Mean global test at model_best.pt: 0.7768  (std=0.1050)
+
+Total gossip messages sent: 67
+
+Run termination: UNKNOWN — registry log not found
