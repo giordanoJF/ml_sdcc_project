@@ -175,8 +175,11 @@ def load_global_test(global_test_dir: str, batch_size: int) -> DataLoader | None
 
     if os.path.exists(npy_x) and os.path.exists(npy_y):
         # Fast path: load from pre-generated numpy binary (created by split_dataset.py).
-        # mmap_mode='c' (copy-on-write) lets all workers share the same OS pages —
-        # ~400 MB total regardless of worker count, vs 3+ GB per worker from JSON.
+        # mmap_mode='c' (copy-on-write): on single-machine deployments (local or
+        # single EC2) all workers share the same OS pages — ~400 MB total regardless
+        # of worker count. On multi-instance EC2 each machine loads independently,
+        # so there is no cross-process sharing, but binary load is still much faster
+        # and lighter than JSON parsing (~4 bytes/float vs ~24 bytes as Python objects).
         x = np.load(npy_x, mmap_mode="c")
         y = np.load(npy_y, mmap_mode="c")
     else:
