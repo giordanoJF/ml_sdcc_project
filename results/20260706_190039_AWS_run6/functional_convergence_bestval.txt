@@ -1,0 +1,17 @@
+Functional convergence @ model_best.pt (per-worker best-val-loss checkpoint)
+=================================================================
+
+  (global_test_accuracy evaluated at each worker's own best-val-loss round,
+   i.e. the round actually saved as model_best.pt — not the final round)
+
+  Worker  0: global_test@model_best=0.9024
+  Worker  1: global_test@model_best=0.8383
+  Worker  2: global_test@model_best=0.7522
+  Worker  3: global_test@model_best=0.7385
+  Worker  4: global_test@model_best=0.7196
+
+  Mean global test @ model_best.pt : 0.7902
+  Std across workers                : 0.0775
+  Max spread (max - min)             : 0.1829
+
+  Verdict: WEAK functional convergence (spread > 5%) — models still diverge
