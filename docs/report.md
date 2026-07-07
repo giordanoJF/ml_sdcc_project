@@ -3498,6 +3498,87 @@ Il sistema implementato è un adattamento coerente e motivato di DiLoCo all'arch
 
 ---
 
+## 15. Risultati Sperimentali (AWS multi-istanza)
+
+> **Nota.** A differenza della Sezione 14, questi run girano su istanze EC2 separate (una per worker + una per il registry), collegate da rete reale (TCP/IP tra macchine fisiche diverse, non un bridge Docker locale), su istanze `t3.small`/`t3.micro` **senza GPU** (il flag `use_gpu: true` in `config.yaml` viene ignorato silenziosamente quando `torch.cuda.is_available()` è `False`). Questo introduce due differenze strutturali rispetto ai run locali: latenza di rete reale e non trascurabile tra worker, e il rischio che una sessione AWS Academy Learner Lab scada (o l'istanza venga fermata manualmente) a metà training.
+
+### 15.1 Verifica di Integrità dei Run
+
+Il secondo problema — interruzioni a metà training — richiede una verifica che i run locali non necessitano. Nessuna delle run AWS ha i log di registry/worker raccolti (`Run termination: UNKNOWN — registry log not found` in tutti i `summary.txt`, per un limite noto di `cmd_collect` che scarica solo `metrics.csv`/`model_best.pt`/`local_test_result.json`), quindi l'unico modo per verificare che un worker abbia raggiunto la convergenza naturale — e non sia stato interrotto da uno stop dell'istanza — è aritmetico.
+
+**Criterio.** Il codice (`main_worker.py`) non logga mai il round che fa scattare il `break` per patience esaurita: il logging di fine round avviene dopo le Fasi B e C, che il `break` salta. Quindi, se un worker converge naturalmente, l'ultimo round loggato in `metrics.csv` deve soddisfare esattamente:
+
+$$\text{last\_round} - \text{best\_round} = \text{patience} - 1$$
+
+Un gap diverso indica un'interruzione esterna (SIGTERM da stop dell'istanza/scadenza sessione) avvenuta prima che la patience si esaurisse da sola.
+
+Questo criterio è stato applicato a tutti i worker di tutte le run riportate in questa sezione: **tutti** soddisfano il gap atteso (9 per patience=10, 6 per patience=7 in `n8_fn`). Il criterio ha inoltre un precedente concreto: una run preliminare con `num_workers=8` è stata scartata durante la campagna perché 2 worker su 3 mostravano un gap inferiore di 3 unità a quello atteso, con gli ultimi round loggati a soli 3 minuti di distanza tra loro — segno di un'interruzione condivisa (stop dell'istanza), non di early stopping locale — ed è stata rieseguita da capo. In assenza di log di processo, questo controllo aritmetico è la garanzia di integrità dei dati per l'intera sezione.
+
+Come controllo secondario, la sequenza di `peers_contacted` per round è stata ispezionata per ciascun worker: in tutte le run è monotonicamente decrescente (mai uno zero seguito da una ripresa), coerente con worker che si deregistrano uno alla volta e mai con un blackout di gossip transitorio.
+
+### 15.2 Tabella Riepilogativa (AWS)
+
+| # | Label | N | fanout | H | patience | val_acc (mean±std) | global_test (mean±std) | spread | verdetto | L2 dist | Gossip msg | Wall-clock |
+|:---:|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|:---:|:---:|:---:|
+| 1 | `n3_h500`  | 3 | 1 | 500  | 10 | 0.9010 ± 0.0198 | 0.8730 ± 0.0240 | 4.8%  | MODERATE | 137.9 | 85   | 158 min |
+| 2 | `n3_h100`  | 3 | 1 | 100  | 10 | 0.8832 ± 0.0191 | 0.7912 ± 0.1079 | 20.5% | WEAK     | 75.9  | 119  | 133 min |
+| 3 | `n3_h1000` | 3 | 1 | 1000 | 10 | **0.9040** ± 0.0202 | **0.8793** ± 0.0227 | **4.5%**  | **MODERATE** | 138.0 | 67   | 150 min |
+| 4 | `n3_f2`    | 3 | 2 | 1000 | 10 | 0.8917 ± 0.0121 | 0.7282 ± 0.0679 | 12.8% | WEAK     | 88.9  | 171  | 161 min |
+| 5 | `n5_f1`    | 5 | 1 | 1000 | 10 | **0.9132** ± 0.0148 | 0.8045 ± 0.0919 | 21.4% | WEAK     | 88.3  | 193  | 145 min |
+| 6 | `n5_fn`    | 5 | 4 | 1000 | 10 | 0.9024 ± 0.0149 | 0.7855 ± 0.0974 | 26.0% | WEAK     | 105.7 | 646  | 248 min |
+| 7 | `n8_f1`    | 8 | 1 | 1000 | 10 | 0.9117 ± 0.0176 | 0.7949 ± 0.0936 | 21.8% | WEAK     | 93.9  | 267  | 194 min |
+| 8 | `n8_fn`*   | 8 | 7 | 1000 | **7**  | 0.9036 ± 0.0273 | 0.8599 ± 0.0552 | 14.8% | WEAK     | **57.1**  | 1296 | 143 min |
+
+\* `n8_fn` usa `early_stopping_patience=7` invece di 10 (unica run della campagna con questo valore) — il confronto con `n8_f1` non isola quindi la sola variabile fanout, va letto con questa riserva.
+
+**Verdetto e spread** seguono lo stesso criterio della Sezione 14.6: spread ≤5% sul global test tra worker → STRONG (nessuna run lo raggiunge qui), 2–5% → MODERATE, >5% → WEAK.
+
+### 15.3 Ablazione H (AWS, N=3, fanout=1)
+
+`n3_h500`, `n3_h100`, `n3_h1000` isolano H a parità di ogni altro parametro — è il confronto più pulito dell'intera campagna AWS.
+
+**H=1000 vince su entrambe le metriche**, non solo sulla val accuracy: val=0.9040 (massimo) e global_test=0.8793 (massimo), con lo spread più basso (4.5%, MODERATE). H=500 è vicinissimo secondo su tutti i fronti (val=0.9010, global_test=0.8730, spread 4.8%). **H=100 è nettamente il peggiore su entrambe le metriche**: val=0.8832 e soprattutto global_test=0.7912 con std=0.1079 — quasi 5× la varianza di H=1000. Round troppo brevi producono un segnale di val_loss troppo rumoroso: ispezionando `metrics.csv` round per round, la global_test_accuracy di `n3_h100` oscilla di 15-18 punti percentuali tra round consecutivi, mentre `n3_h1000` è quasi monotona (final ≈ best per tutti e 3 i worker).
+
+Questo risultato **diverge da quello locale** (Sezione 14.2), dove H=1000 aveva la miglior val accuracy ma il **peggior** global test (0.7462, il più basso del blocco locale), mentre H=500 era il punto di equilibrio. Vedi Sezione 15.5 per la discussione di questa discrepanza.
+
+### 15.4 Fanout a N Fissato (AWS)
+
+A differenza della Sezione 14.4 (dove il broadcast completo migliorava sistematicamente il global test a N≥5), qui il quadro è misto:
+
+| N | fanout | Label | global_test | L2 | Δ vs fanout=1 |
+|:---:|:---:|---|:---:|:---:|---|
+| 3 | 1 | `n3_h1000` | **0.8793** | 138.0 | — |
+| 3 | 2 | `n3_f2` | 0.7282 | 88.9 | **−15.1 pp** |
+| 5 | 1 | `n5_f1` | **0.8045** | 88.3 | — |
+| 5 | 4 (N−1) | `n5_fn` | 0.7855 | 105.7 | **−1.9 pp** |
+| 8 | 1 | `n8_f1` | 0.7949 | 93.9 | — |
+| 8 | 7 (N−1)* | `n8_fn`* | **0.8599** | **57.1** | **+6.5 pp** |
+
+A **N=3 e N=5, alzare il fanout peggiora il global test**, non lo migliora — l'opposto del pattern locale. Solo a **N=8** il broadcast completo mostra un guadagno, ma il confronto è confuso dal cambio di patience (7 invece di 10) in `n8_fn`, quindi non è una prova pulita a variabile singola come le altre due righe.
+
+Il traffico di gossip cresce comunque in modo prevedibile con N e fanout: da 67 messaggi (`n3_h1000`, la config con il traffico minore) a 1296 (`n8_fn`) — quasi 20× — senza un guadagno di convergenza proporzionale.
+
+### 15.5 Confronto Locale vs AWS: perché il trend del fanout si inverte
+
+Il pattern locale (Sezione 14.4: fanout alto migliora sempre il global test) e il pattern AWS (Sezione 15.4: fanout alto lo peggiora a N=3 e N=5) sono in contraddizione diretta. Tre fattori concorrono a spiegarlo, nessuno dei quali implica un errore nei dati (l'integrità è stata verificata in Sezione 15.1):
+
+**1. Un solo replicato per configurazione, e H=1000 lascia pochi round.** Con H=1000 i worker fanno pochissimi round totali prima di fermarsi (12-44 nell'intera campagna AWS) — poche occasioni di gossip effettivo. Con `gossip_fanout` alto e pochi worker, l'esito dipende fortemente da quali peer specifici si scambiano il modello e in quale round, un singolo run non è sufficiente a mediare questo rumore. Lo stesso limite si applica ai run locali (anch'essi un solo replicato per configurazione), quindi entrambi i risultati vanno letti come osservazioni preliminari, non conclusioni statisticamente robuste.
+
+**2. Mesh denso + H grande può diluire il training locale invece di stabilizzarlo.** Con fanout vicino a N−1, ogni worker riceve modelli da quasi tutti gli altri peer ogni round. La Fase A media questi contributi con il proprio stato locale; se il fanout è alto, il contributo di H=1000 step di training locale viene ripetutamente "annacquato" da un volume elevato di pesi altrui prima di potersi consolidare. A N=3/N=5 (dove fanout=N−1 satura rapidamente l'intero cluster) questo sembra introdurre più instabilità che beneficio — coerente con quanto osservato in `n8_fn` (Sezione 12 di analisi precedente): i worker più veloci a convergere in quella run mostravano i cali maggiori tra `best` e `final` sul global test, nonostante fossero rimasti connessi a tutti i peer per l'intera loro vita.
+
+**3. Latenza di rete reale e CPU eterogenea.** I worker locali girano sulla stessa macchina con latenza di gossip trascurabile e timing quasi sincrono tra loro. Su AWS, ogni worker è un'istanza EC2 fisicamente separata, con latenza di rete reale e CPU burstable (`t3.small`) potenzialmente soggetta a variazioni di prestazioni. Questo amplifica l'asincronia tra worker rispetto al caso locale, un fattore che la teoria del mixing time (Sezione 2.5) assume implicitamente omogeneo.
+
+In sintesi: il confronto locale vs AWS mostra che **il trend "fanout alto è sempre meglio" non è una legge universale del sistema, ma un'osservazione condizionata all'ambiente di esecuzione e a un singolo replicato per configurazione**. Per una conclusione più solida servirebbero più seed per configurazione, specialmente per H grande dove la varianza è strutturalmente più alta.
+
+### 15.6 Conclusioni (AWS)
+
+1. **H=1000 è la configurazione più solida per N=3, fanout=1** — unica run MODERATE della campagna AWS, migliore sia in val accuracy che in global test rispetto a H=500 e H=100. A differenza del risultato locale, qui non c'è ambiguità tra le due metriche.
+2. **Scalare N con fanout fisso a 1 degrada nettamente la convergenza**: spread 4.5% (N=3) → 21.4% (N=5) → 21.8% (N=8). Con fanout costante, ogni worker raggiunge una frazione decrescente del cluster per round al crescere di N.
+3. **Alzare il fanout non è una correzione automatica** a questa scala e con H=1000: peggiora a N=3 e N=5, migliora solo a N=8 (con un confondimento nella patience). Il fanout ottimale sembra dipendere da un'interazione con H e N che il set di run attuale non isola completamente.
+4. **Direzione consigliata per le prossime run**: valori di fanout intermedi (2-3) a N=5 e N=8, dato che sia il minimo che il massimo testati hanno deluso a quelle scale; e una ripetizione di `n8_fn` con `patience=10` per isolare correttamente l'effetto del fanout a N=8 senza il confondimento attuale.
+
+---
+
 ## Riferimenti
 
 [1] Douillard, A., Feng, Q., Ruder, S., Dieleman, S., Bousquet, O., & Houlsby, N. (2023). *DiLoCo: Distributed Low-Communication Training of Language Models*. arXiv:2311.08105.
