@@ -2994,11 +2994,14 @@ python scripts/save_experiment.py <nome>
 | **Per-worker summary** | accuracy finale e migliore, total training time (somma `round_duration_s`), breakdown medio per fase, latenza gRPC media |
 | **System convergence** | per ogni worker: *converged at round X* oppure *hit round limit* + wall-clock reale dal timestamp; poi: verdetto del sistema (*YES — all workers converged* o *PARTIAL*) e wall-clock totale del sistema (dal primo worker start all'ultimo worker end) |
 | **Weight divergence** | distanza L2 tra i pesi finali di ogni coppia di worker da `model_best.pt` (checkpoint con val_loss minima — assente → sezione saltata) |
+| **Global test set** (se `global_test_set: true`) | convergenza funzionale in due blocchi: **[A]** all'ultimo round di ciascun worker — solo di riferimento, rumoroso perché ogni worker si ferma in modo asincrono (early stopping indipendente); **[B]** al round di `model_best.pt` (val_loss minima) — metrica principale, checkpoint effettivamente selezionato/riportato. Entrambi con mean/std/spread e verdetto STRONG (<2%) / MODERATE (2–5%) / WEAK (>5%) sullo spread |
 | **Test set results** | `local_test_accuracy` per worker, solo se `local_test_set: true` |
 
 `global_metrics.csv` contiene le stesse colonne per-round e può essere usato per grafici di convergenza.
 
-`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/local_test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro (rimuove anche `model_best.pt` se presente) per il prossimo run. Va eseguito prima di `docker compose down`.
+`save_experiment.py` archivia in `results/<timestamp>_<nome>/`: `config.yaml`, `global_metrics.csv`, `summary.txt`, `worker_*/metrics.csv`, `worker_*/local_test_result.json`, `logs/<service>.log` per ogni container — poi pulisce la directory di lavoro (rimuove anche `model_best.pt` se presente) per il prossimo run. Va eseguito prima di `docker compose down`. **Nota:** `model_best.pt` non viene mai archiviato in `results/` — la weight divergence è quindi calcolabile solo per il run corrente, mai per un run già archiviato.
+
+**Ricalcolare l'analisi su un run già archiviato.** `aggregate_metrics.py --data-root results/<nome>` rilegge i `worker_*/metrics.csv` salvati e rigenera l'intero report — utile se cambia la logica di calcolo di una metrica, senza dover ripetere l'esperimento. In questa modalità lo script non sovrascrive mai nulla di già presente nella cartella: scrive un nuovo file `summary_recomputed.txt` a parte, e salta weight divergence/`--plot` (dati non archiviati).
 
 ### Confronto tra approccio 90/10 e 80/10/10
 

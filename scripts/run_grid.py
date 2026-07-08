@@ -59,17 +59,23 @@ PLAN = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _matches_label(entry: str, label: str) -> bool:
+    # Matches both "<timestamp>_<label>" and "<timestamp>_<label>_runN" — the
+    # latter is used for local runs archived alongside their parallel AWS run.
+    return entry.endswith(f"_{label}") or re.search(rf"_{re.escape(label)}_run\d+$", entry)
+
+
 def already_done(label: str) -> bool:
     if not RESULTS_ROOT.is_dir():
         return False
-    return any(e.endswith(f"_{label}") for e in os.listdir(RESULTS_ROOT))
+    return any(_matches_label(e, label) for e in os.listdir(RESULTS_ROOT))
 
 
 def find_result_dir(label: str) -> Path | None:
     if not RESULTS_ROOT.is_dir():
         return None
     for e in sorted(os.listdir(RESULTS_ROOT)):
-        if e.endswith(f"_{label}"):
+        if _matches_label(e, label):
             return RESULTS_ROOT / e
     return None
 

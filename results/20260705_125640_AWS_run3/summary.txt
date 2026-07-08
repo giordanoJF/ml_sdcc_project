@@ -16,19 +16,27 @@ mean_best_val_accuracy = 0.9040  std=0.0202
 System convergence: YES — all workers converged
 System wall-clock total: 9016.1s
 
-Mean pairwise L2 weight distance: 138.0311
-  Worker  0: final_global_test=0.8991  best_global_test=0.9007
-  Worker  1: final_global_test=0.8841  best_global_test=0.8841
-  Worker  2: final_global_test=0.8546  best_global_test=0.8546
+Global test set — functional convergence analysis (writers never seen by any worker):
 
-Global test — mean=0.8793, std=0.0227, spread=0.0446
-Verdict: MODERATE functional convergence (spread 2–5%)
-  Worker  0: round=  31  val_loss=0.3001  global_test=0.8969
-  Worker  1: round=  12  val_loss=0.4005  global_test=0.7315
-  Worker  2: round=  13  val_loss=0.3786  global_test=0.7020
+  [A] At final round (each worker's own stop point) — reference only, noisy:
+      Worker  0: final_global_test=0.8991  best_global_test=0.9007
+      Worker  1: final_global_test=0.8841  best_global_test=0.8841
+      Worker  2: final_global_test=0.8546  best_global_test=0.8546
 
-  Mean global test at model_best.pt: 0.7768  (std=0.1050)
+      mean=0.8793  std=0.0227  spread=0.0446
+      Verdict: MODERATE functional convergence (spread 2–5%)
+
+  [B] At model_best.pt round (min val_loss) — PRIMARY metric:
+      Worker  0: round=  31  val_loss=0.3001  global_test=0.8969
+      Worker  1: round=  12  val_loss=0.4005  global_test=0.7315
+      Worker  2: round=  13  val_loss=0.3786  global_test=0.7020
+
+      mean=0.7768  std=0.1050  spread=0.1949
+      Verdict: WEAK functional convergence (spread > 5%) — models still diverge
 
 Total gossip messages sent: 67
 
-Run termination: UNKNOWN — registry log not found
+Model weight divergence (pairwise L2 distance — model_best.pt):
+  (carried over from the original summary.txt — model_best.pt is not archived,
+   so this value cannot be recomputed from the saved run data)
+    Mean pairwise L2 weight distance: 138.0311

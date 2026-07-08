@@ -71,6 +71,10 @@ Two independent flags in `config.yaml` control how data is split for evaluation:
 
 **Comparison metric:** `mean_best_val_accuracy` — average across all workers of each worker's peak validation accuracy over all rounds. Used to compare configurations across runs. Saved to `data/femnist/summary.txt` by `aggregate_metrics.py`.
 
+<br>
+
+**Re-running the analysis on an archived run:** `aggregate_metrics.py --data-root results/<name>` recomputes the full report from that run's saved `worker_*/metrics.csv` — useful after changing how a metric is calculated, without re-running the experiment. It never overwrites anything already in that folder: it writes a new `summary_recomputed.txt` instead (weight divergence and `--plot` are skipped in this mode, since `model_best.pt` and the PNGs aren't archived by `save_experiment.py`).
+
 ---
 
 ## Local
