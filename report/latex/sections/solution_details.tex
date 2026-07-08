@@ -1,0 +1,200 @@
+\section{Solution Details}
+\label{sec:details}
+
+\subsection{Partizionamento non-i.i.d.\ del dataset}
+Il dataset FEMNIST scaricato in formato LEAF è partizionato per scrittore:
+gli scrittori sono raggruppati in blocchi contigui e ogni blocco è assegnato
+a un worker, cosicché ogni client riceva gli stili di scrittura e le
+distribuzioni di etichette di più utenti distinti, non di un singolo
+scrittore. Da ciascuna partizione locale è riservato un 10\% per la
+validazione (usata per early stopping e come metrica di accuratezza
+riportata). Una frazione separata di scrittori del test set LEAF, mai
+assegnata a nessun worker, è riservata come \emph{global test set} condiviso:
+valutare tutti i worker sullo stesso insieme di scrittori mai visti permette
+di misurare la convergenza \emph{funzionale} del protocollo gossip, non solo
+la vicinanza dei pesi.
+
+\subsection{Ciclo di training a tre fasi}
+Ogni round di ogni worker è composto da tre fasi, cronometrate
+indipendentemente e riportate nella Sezione~\ref{sec:results}:
+
+\begin{itemize}
+  \item \textbf{Fase A — aggregazione e valutazione.} Il worker applica
+        FedAvg (Eq.~\ref{eq:fedavg}) tra i propri pesi e la somma pesata
+        accumulata nel buffer di ricezione, quindi valuta il modello risultante
+        sul proprio validation set e, se abilitato, sul global test set. La
+        Fase A include quindi non solo la media dei pesi (costo trascurabile)
+        ma anche l'inferenza completa su questi due insiemi di dati.
+  \item \textbf{Fase B — addestramento locale.} Il worker esegue $H$ passi di
+        SGD (AdamW, batch size 32) su un iteratore che ricicla il proprio
+        training set indefinitamente, cosicché ogni round processi esattamente
+        $H \times \text{batch\_size}$ campioni indipendentemente dalla
+        dimensione della partizione locale.
+  \item \textbf{Fase C — gossip push.} Il worker seleziona $\min(k,
+        |\text{peer disponibili}|)$ vicini \emph{casualmente e in modo
+        indipendente a ogni round} (non c'è memoria della selezione dei round
+        precedenti) dalla propria cache di peer, e invia loro uno snapshot
+        dei pesi correnti via gRPC con timeout configurabile. La selezione
+        uniforme è un sostituto semplice di una politica più informata (es.\
+        basata su prossimità di rete o latenza storica), che non richiede
+        conoscenza della topologia sottostante; se un peer non risponde entro
+        il timeout, il worker aggiorna la propria cache interrogando di nuovo
+        il discovery server e ritenta una sola volta verso peer non ancora
+        contattati in quel round, senza bloccarsi sul nodo caduto.
+\end{itemize}
+
+Un controllo di \emph{staleness} lato ricevente scarta i messaggi il cui
+round di provenienza è più vecchio di \texttt{max\_staleness} round rispetto
+al round corrente del ricevente, evitando che aggiornamenti molto obsoleti
+degradino la convergenza. L'early stopping (pazienza configurabile) è una
+decisione puramente locale basata sulla validation loss del singolo worker:
+un worker può terminare il proprio training mentre altri continuano,
+riducendo nel tempo il numero di vicini disponibili per chi prosegue.
+
+\subsection{Modello e tolleranza ai guasti}
+Il modello (Tabella~\ref{tab:model}) è una CNN con due blocchi
+convoluzionali (32 e 64 canali, batch normalization, dropout spaziale) e un
+classificatore fully-connected, per un totale di 1\,704\,350 parametri
+float32 — circa 6,82\,MB per snapshot serializzato, la quantità di dati
+effettivamente trasmessa a ogni gossip push.
+
+\begin{table}[t]
+  \centering
+  \caption{Conteggio dei parametri della CNN.}
+  \label{tab:model}
+  \footnotesize
+  \begin{tabular}{lr}
+    \toprule
+    \textbf{Componente} & \textbf{Parametri} \\
+    \midrule
+    Blocco conv.\ 1 (1$\to$32, 32$\to$32 canali) & 9\,696 \\
+    Blocco conv.\ 2 (32$\to$64, 64$\to$64 canali) & 55\,680 \\
+    Classificatore (3136$\to$512$\to$62, con BN) & 1\,638\,974 \\
+    \midrule
+    \textbf{Totale} & \textbf{1\,704\,350} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Il sistema include meccanismi opzionali di fault injection configurabili
+(probabilità di crash simulato via \texttt{sys.exit} e di drop silenzioso di
+un messaggio gossip), implementati ma non esercitati in nessuno dei 16 run
+riportati (\texttt{crash\_probability} e \texttt{drop\_probability} sono nulle
+in tutta la campagna sperimentale, Sezione~\ref{sec:results}): la loro
+validazione empirica non è stata effettuata per mancanza di tempo e resta
+lavoro futuro. Il comportamento previsto dal codice è il seguente: un crash
+simulato interrompe il round corrente con \texttt{sys.exit}, che attraversa
+comunque il blocco di terminazione che deregistra il worker — un
+comportamento più vicino a un arresto pulito che a un crash reale; gli altri
+worker non vengono bloccati e si accorgono dell'assenza del peer al primo
+fallimento di invio verso di esso, aggiornando la propria cache. Solo un
+segnale SIGKILL, non intercettabile, produce un'uscita realmente non pulita,
+che lascia una entry non valida nel discovery server fino al successivo
+fallimento di invio — limitazione discussa nella
+Sezione~\ref{sec:discussion}.
+
+\subsection{Motivazione dell'architettura e degli iperparametri}
+La progressione di canali $1\to32\to64$ segue una regola di conservazione
+approssimata del volume di informazione: a ogni dimezzamento della
+risoluzione spaziale ($28\to14\to7$) il numero di canali raddoppia
+($1\times28^2=784$, $32\times14^2=6272$, $64\times7^2=3136$), così che i
+livelli più profondi possano rappresentare pattern via via più complessi
+senza un collasso precoce di informazione. Il kernel $3\times3$ è la scelta
+standard nelle CNN in stile VGG~\cite{simonyan2015vgg}: due convoluzioni
+$3\times3$ in cascata ottengono lo stesso campo ricettivo di una $5\times5$
+con meno parametri (18 contro 25 pesi per coppia di canali) e una
+non-linearità intermedia in più. Same
+padding (anziché valid padding, usato in una versione preliminare del
+modello) preserva la dimensione spaziale fino al pooling, evitando di perdere
+informazione ai bordi dei caratteri. Batch normalization dopo ogni
+convoluzione stabilizza il training e consente learning rate più alti; nel
+contesto federato solo i parametri appresi ($\gamma,\beta$) sono aggregati da
+FedAvg, mentre le statistiche correnti restano locali a ciascun worker — una
+scelta comune in letteratura, discussa come limitazione nella
+Sezione~\ref{sec:discussion}. Il dropout spaziale nei blocchi convoluzionali ($p=0{,}25$) e il dropout
+standard prima del classificatore ($p=0{,}5$, il valore proposto in origine
+da Srivastava et al.~\cite{srivastava2014dropout} per layer fully-connected,
+qui applicato al layer più esposto a overfitting locale con $\sim$1,6M
+parametri) regolarizzano le partizioni locali, tipicamente di poche migliaia
+di campioni per classe; il gradient clipping ($\|\nabla\|\le1$) limita la
+deriva massima dei pesi tra due aggregazioni successive; il label smoothing
+($\epsilon=0{,}1$, come in~\cite{szegedy2016rethinking}) attenua l'eccesso di
+confidenza su classi visivamente ambigue (es.\ \texttt{0}/\texttt{O},
+\texttt{1}/\texttt{l}/\texttt{I}), particolarmente rilevanti tra le 62 classi
+di FEMNIST.
+
+L'ottimizzatore è AdamW con learning rate $10^{-3}$ (valore di default,
+comune nei benchmark FEMNIST) e batch size 32, entrambi \emph{fissi} in ogni
+run: i due parametri sono legati dalla \emph{linear scaling rule} (uno
+aggiornamento su batch più grandi richiede, a parità di dinamica di
+training, un learning rate proporzionalmente più alto), per cui variarli
+insieme nella stessa griglia introdurrebbe una fonte di confondimento non
+separabile con il numero limitato di run a disposizione. Non è stata
+utilizzata cross-validation né ottimizzazione automatica degli iperparametri:
+la selezione è manuale, un run per configurazione.
+
+I parametri del sistema seguono quindi tre categorie distinte. \emph{Iperparametri
+ML fissi} in ogni run: learning rate, batch size, dropout, label smoothing,
+gradient clipping, architettura della CNN — nessuno di questi è stato
+oggetto della griglia sperimentale. \emph{Parametri di sistema variati} nella
+griglia (Sezione~\ref{sec:results}): il numero di passi locali $H\in\{100,
+500,1000\}$ (Blocco A, a $N=3$ fisso, per isolarne l'effetto; 500 è il valore
+usato da DiLoCo~\cite{douillard2023diloco} nella sua configurazione di
+riferimento, qui incluso come punto centrale della griglia), il grado di
+gossip $k$ e il numero di client $N\in\{3,5,8\}$ (Blocchi B e C) — questi tre
+sono i soli parametri di cui il presente lavoro misura l'effetto
+comparativo. \emph{Parametri strutturali fissi} per l'intero studio:
+strategia di aggregazione (FedAvg), \texttt{max\_staleness}=10, probabilità
+di fault injection (disattivate nei run riportati, come già indicato in
+questa sezione).
+
+\subsection{Piattaforma software}
+Il sistema è implementato in Python 3.11 con PyTorch (modello e training),
+gRPC/Protobuf (comunicazione gossip), Flask (discovery server), containerizzato
+con Docker e orchestrato con Docker Compose in locale. Il deployment su AWS
+usa Terraform per provisionare un'istanza EC2 per worker più una per il
+discovery server (modalità multi-istanza, rete reale tra macchine fisicamente
+separate), con build dell'immagine Docker in parallelo su ciascuna istanza.
+
+Il sistema non include una suite di test automatizzati (unit o integration
+test); la sua validazione è di tipo empirico, tramite esecuzione end-to-end
+sulle 16 configurazioni sperimentali di Sezione~\ref{sec:results}, con
+verifica incrociata delle metriche registrate (conteggio dei messaggi
+gossip, tempi di fase, coerenza tra round completati e pazienza configurata)
+contro i log grezzi prodotti da ciascun worker.
+
+\subsection{Riusabilità}
+Il sistema è progettato per non dipendere dalle specificità di FEMNIST. Il
+partizionamento non-i.i.d.\ e l'aggregazione pesata per numero di campioni
+(Eq.~\ref{eq:fedavg}) non assumono client bilanciati o distribuzioni simili
+tra loro: l'eterogeneità è il caso di base gestito dal progetto, non
+un'eccezione da accomodare — un dataset LEAF diverso (es.\ Shakespeare,
+Sentiment140) o una partizione non-i.i.d.\ più estrema richiederebbero solo
+un nuovo caricatore dati (\texttt{core/dataset.py}), non una riprogettazione
+della logica di training o di gossip. L'unica dipendenza strutturale esterna
+è il discovery server, che espone quattro soli endpoint REST: adattare il
+sistema a un'altra infrastruttura (altro cloud provider, rete locale, un
+mix di dispositivi edge) richiede solo di ripuntare l'URL del registro, non
+di modificare il protocollo di aggregazione. Il protocollo di gossip stesso è
+agnostico rispetto all'architettura del modello — serializza un intero
+\texttt{state\_dict} PyTorch senza logica specifica per \texttt{FEMNISTModel}
+— per cui sostituire la rete neurale richiede di cambiare un solo punto di
+istanziazione, non il livello di rete. Infine, il numero di client, il grado
+di gossip e tutti gli iperparametri sono parametrizzati in un unico file di
+configurazione: adattare il sistema a una nuova scala non richiede modifiche
+al codice, come dimostrato direttamente dai run a $N=3,5,8$ di
+Sezione~\ref{sec:results}. La scelta di gRPC su Protobuf (anziché, ad
+esempio, un protocollo proprietario su socket TCP grezzi) è motivata anche da
+questo obiettivo di riusabilità: lo schema \texttt{gossip.proto}
+(Sezione~\ref{sec:design}C) è definito in modo indipendente dal linguaggio e
+gRPC genera automaticamente client e server per numerosi linguaggi, per cui
+un worker scritto in un altro linguaggio o framework potrebbe in linea di
+principio interoperare con quelli Python di questo progetto in un contesto
+eterogeneo. Questo vale però a livello di trasporto e schema dei metadati
+(round, numero di campioni, identificatore del mittente); il campo
+\texttt{weights} resta oggi un payload opaco serializzato con
+\texttt{torch.save} (Sezione~\ref{sec:design}C), specifico di PyTorch/Python
+— un worker in un altro linguaggio dovrebbe implementare una deserializzazione
+compatibile o il progetto dovrebbe adottare un formato di tensori
+neutro rispetto al linguaggio (es.\ \texttt{safetensors}) per realizzare
+l'interoperabilità end-to-end.

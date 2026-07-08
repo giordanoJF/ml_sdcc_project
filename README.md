@@ -25,7 +25,7 @@
 
 ## Setup
 
-Steps 1–4 are common to all deployment modes and always run on the **local machine**.
+Steps 1–4 always run on the **local machine**. Steps 1–3 are common to all deployment modes; step 4 (`generate_compose.py`) is only needed for **Local** and **Single EC2**.
 
 <br>
 
@@ -47,7 +47,7 @@ python scripts/download_femnist.py
 python scripts/split_dataset.py
 ```
 
-**4. Generate `docker-compose.yml`** — re-run when `num_workers`, `use_gpu`, or `global_test_set` changes.
+**4. Generate `docker-compose.yml`** — re-run when `num_workers`, `use_gpu`, or `global_test_set` changes. Skip this step entirely for **Multi-instance EC2**.
 
 ```bash
 python scripts/generate_compose.py
@@ -65,15 +65,7 @@ Two independent flags in `config.yaml` control how data is split for evaluation:
 
 <br>
 
-**`global_test_set`** (default: `true`): reserves `global_test_fraction` of writers before any per-worker split. All workers evaluate on this shared set every round — a fully unbiased convergence metric across the whole federation.
-
-<br>
-
-**Comparison metric:** `mean_best_val_accuracy` — average across all workers of each worker's peak validation accuracy over all rounds. Used to compare configurations across runs. Saved to `data/femnist/summary.txt` by `aggregate_metrics.py`.
-
-<br>
-
-**Re-running the analysis on an archived run:** `aggregate_metrics.py --data-root results/<name>` recomputes the full report from that run's saved `worker_*/metrics.csv` — useful after changing how a metric is calculated, without re-running the experiment. It never overwrites anything already in that folder: it writes a new `summary_recomputed.txt` instead (weight divergence and `--plot` are skipped in this mode, since `model_best.pt` and the PNGs aren't archived by `save_experiment.py`).
+**`global_test_set`** (default: `true`): reserves `global_test_fraction` of writers before any per-worker split. All workers evaluate on this shared set every round — a fully unbiased convergence metric across the whole federation. 
 
 ---
 
@@ -225,7 +217,7 @@ python scripts/aggregate_metrics.py --plot && python scripts/save_experiment.py 
 python scripts/aws_deploy.py destroy_single
 # Case B — training was still running: partial metrics.csv and model_best.pt are on EBS.
 #           WARNING: deploy_single wipes data/femnist before re-uploading — collect_single first
-#           if you want to keep the partial data, otherwise it is permanently lost.
+#           , otherwise it is permanently lost.
 python scripts/aws_deploy.py collect_single  # optional: save partial data locally
 python scripts/aws_deploy.py deploy_single   # wipes EBS data, re-uploads, restarts
 ```
@@ -285,17 +277,24 @@ python scripts/aws_deploy.py destroy     # IMPORTANT: stop billing
 
 ---
 
-**If config changes between runs** — update `config.yaml` locally, re-run the relevant scripts, then call `deploy` again. It stops old containers, re-uploads data, and restarts. No need to `destroy` and re-`provision` between runs.
+**If config changes between runs** — update `config.yaml` locally, re-run the relevant scripts, then call `deploy` again. It stops old containers, re-uploads data, and restarts.
 
 <br>
 
-**`num_workers` or `global_test_set` changed:**
+**`num_workers` changed** — the number of EC2 worker instances is set by `provision` (`terraform apply` with `num_workers` from `config.yaml`); `deploy` only reads the instances that already exist, it doesn't create or remove any. Re-run `provision` first — Terraform adds or destroys worker instances to match the new count:
+```bash
+python scripts/split_dataset.py
+python scripts/aws_deploy.py provision
+python scripts/aws_deploy.py deploy
+```
+
+**`global_test_set` changed** (instance count unchanged) — no need to `destroy`/re-`provision`:
 ```bash
 python scripts/split_dataset.py
 python scripts/aws_deploy.py deploy
 ```
 
-**`local_test_set` changed** — requires re-download locally (git not installed on EC2):
+**`local_test_set` changed** — requires re-download locally (git not installed on EC2); instance count unchanged, no need to `destroy`/re-`provision`:
 ```bash
 python scripts/download_femnist.py
 python scripts/split_dataset.py
@@ -315,7 +314,7 @@ python scripts/aws_deploy.py resume     # updates Terraform state, prints new IP
 # Case A — training had already finished: collect, analyze, destroy as normal
 # Case B — training was still running: partial metrics.csv and model_best.pt are on EBS.
 #           WARNING: deploy wipes data/femnist on every worker before re-uploading — collect
-#           first if you want to keep the partial data, otherwise it is permanently lost.
+#           first, otherwise it is permanently lost.
 python scripts/aws_deploy.py collect         # optional: save partial data locally
 python scripts/aws_deploy.py deploy          # wipes EBS data on all workers, re-uploads, restarts
 ```

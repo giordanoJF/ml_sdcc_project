@@ -1,0 +1,19 @@
+\begin{abstract}
+Questo lavoro presenta la progettazione e la valutazione sperimentale di un
+sistema di Federated Learning completamente decentralizzato, basato su un
+protocollo di gossip peer-to-peer ispirato a DiLoCo, applicato al
+riconoscimento di caratteri manoscritti sul dataset non-i.i.d.\ FEMNIST del
+progetto LEAF. A differenza del FedAvg centralizzato classico, nessun nodo
+agisce da aggregatore per l'intera durata dell'addestramento: ciascun worker
+alterna fasi di training locale e di aggregazione online dei pesi ricevuti
+dai vicini, mentre un componente centralizzato leggero è impiegato solo per
+la service discovery. Il sistema è stato valutato con 16 configurazioni
+sperimentali (8 in esecuzione locale, 8 su istanze AWS EC2 separate, una per
+worker), variando il numero di client (3, 5, 8), il grado di gossip e il
+numero di passi locali tra due round di comunicazione. I risultati mostrano
+un'accuratezza di validazione tra l'87\% e il 91\%, un costo di comunicazione
+per round di circa 6,8\,MB per messaggio e una netta separazione tra il costo
+del training locale e quello, trascurabile, della fase di comunicazione,
+anche su rete reale. L'analisi evidenzia inoltre i limiti della convergenza
+funzionale del protocollo e li discute in modo trasparente.
+\end{abstract}

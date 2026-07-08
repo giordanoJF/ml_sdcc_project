@@ -1,0 +1,117 @@
+\section{Background}
+\label{sec:background}
+
+\subsection{FedAvg}
+FedAvg~\cite{mcmahan2017fedavg} aggiorna il modello globale come media dei
+pesi locali, pesata per il numero di campioni di ciascun client:
+\begin{equation}
+  w \leftarrow \sum_{i=1}^{K} \frac{n_i}{n} w_i, \qquad n = \sum_{i=1}^{K} n_i
+  \label{eq:fedavg}
+\end{equation}
+dove $w_i$ e $n_i$ sono rispettivamente i pesi e il numero di campioni di
+addestramento del client $i$. Sotto ipotesi di dati non-i.i.d., la velocità di
+convergenza di FedAvg degrada con il grado di eterogeneità tra le
+distribuzioni locali~\cite{li2020convergence}; questo motiva l'attenzione
+posta, nella Sezione~\ref{sec:results}, alla dispersione tra i modelli dei
+client oltre che alla sola accuratezza media.
+
+\subsection{DiLoCo e comunicazione sparsa}
+DiLoCo~\cite{douillard2023diloco} riduce la frequenza di comunicazione
+alternando $H$ passi di ottimizzazione locale (\emph{inner steps}) a un
+singolo passo di sincronizzazione globale, eseguito da un \emph{outer
+optimizer} con momentum mantenuto centralmente. Il sistema qui presentato
+adotta la stessa idea di comunicazione sparsa a $H$ passi, ma non può
+adottare l'outer optimizer di DiLoCo così com'è: quest'ultimo richiede uno
+stato di momentum globale coerente per tutti i client, il che presuppone
+implicitamente un coordinatore centrale — esattamente ciò che l'architettura
+decentralizzata qui proposta esclude per costruzione. Il sistema sostituisce
+quindi la sincronizzazione globale periodica di DiLoCo con un'aggregazione
+locale asincrona basata su gossip, descritta nella Sezione~\ref{sec:design}.
+
+\subsection{Dataset: LEAF e FEMNIST}
+FEMNIST~\cite{caldas2018leaf} è un dataset di caratteri manoscritti (cifre e
+lettere, 62 classi, immagini $28\times28$ in scala di grigi) partizionato per
+scrittore: ogni scrittore produce una distribuzione di stili ed etichette
+propria, rendendo il dataset naturalmente non-i.i.d.\ tra client quando ogni
+partizione corrisponde a scrittori diversi. Nel sistema qui presentato ogni
+client riceve dati di \emph{più} scrittori LEAF (non uno solo), per simulare
+uno scenario realistico in cui un partecipante rappresenta un piccolo gruppo
+di utenti piuttosto che un singolo individuo; i dettagli del partizionamento
+sono discussi nella Sezione~\ref{sec:details}.
+
+\subsection{Strategie alternative non implementate}
+La letteratura propone diverse estensioni di FedAvg per mitigare
+l'eterogeneità dei dati: FedProx~\cite{li2020fedprox} aggiunge un termine
+prossimale che vincola i pesi locali a non allontanarsi troppo dal modello
+globale; SCAFFOLD~\cite{karimireddy2020scaffold} corregge la direzione del
+gradiente locale con variabili di controllo per compensare il client drift;
+FedBN~\cite{li2021fedbn} mantiene le statistiche di Batch Normalization
+locali a ciascun client anziché aggregarle. Queste strategie non sono state
+implementate: il sistema qui presentato implementa esclusivamente FedAvg,
+scelto come strategia di riferimento più semplice da rendere verificabile in
+un contesto decentralizzato puro; l'assenza di correzioni per il client drift
+è discussa come limitazione nella Sezione~\ref{sec:discussion}. Non tutte le
+alternative sono equivalenti dal punto di vista architetturale: FedProx
+modifica solo la funzione di costo usata in Fase B (Sezione~\ref{sec:details}B)
+e potrebbe essere adottata senza alcuna modifica al buffer di aggregazione o
+al protocollo gRPC; SCAFFOLD richiederebbe di trasmettere anche variabili di
+controllo oltre ai pesi, aumentando la dimensione dei messaggi ma senza
+introdurre un aggregatore centrale. Solo strategie che richiedono uno stato
+globale mantenuto centralmente per l'intera durata del training, come l'outer
+optimizer di DiLoCo discusso in precedenza, sono incompatibili per
+costruzione con l'architettura qui proposta.
+
+\subsection{Varianti di gossip: k-push vs.\ rumor mongering}
+In letteratura esistono due famiglie distinte di protocolli gossip. La prima,
+il gossip epidemico o \emph{rumor mongering}~\cite{demers1987epidemic}, nasce
+per la disseminazione dell'informazione: un nodo che riceve un messaggio lo
+ritrasmette a sua volta a peer scelti casualmente, con probabilità o
+\emph{time-to-live} decrescente, fino a saturazione della rete — un singolo
+aggiornamento si propaga così a cascata su più hop. La seconda, il gossip di
+tipo \emph{averaging}~\cite{boyd2006randomized}, non dissemina un messaggio
+singolo ma fa convergere l'intera rete verso una media comune tramite
+scambi locali ripetuti: ogni nodo combina periodicamente il proprio stato
+corrente con quello di alcuni vicini, senza mai ritrasmettere un messaggio
+altrui così com'è.
+
+Il sistema qui presentato appartiene alla seconda famiglia, nella variante
+\emph{k-push a singolo hop}: ogni worker invia a $k$ peer casuali soltanto il
+proprio stato corrente (già frutto della propria aggregazione FedAvg locale),
+e chi riceve non lo ritrasmette — lo accumula soltanto nel proprio buffer
+(Sezione~\ref{sec:design}B). La propagazione multi-hop dell'informazione
+avviene comunque, ma implicitamente e su più round: lo stato che un worker
+invia in un round incorpora già, tramite la media pesata, ciò che ha ricevuto
+nei round precedenti. Non esiste quindi un singolo messaggio da inoltrare né
+un \emph{time-to-live} da gestire — concetti propri del rumor mongering ma
+non applicabili qui.
+
+Questo introduce un secondo trade-off, complementare a quello
+traffico/qualità di Sezione~\ref{sec:results}B: tra volume di comunicazione e
+granularità dell'informazione trasportata. Nel rumor mongering un messaggio
+viaggia intatto attraverso più hop — chi lo riceve a distanza osserva
+esattamente il contenuto originale, al prezzo di un traffico che cresce a
+ogni inoltro. Nel k-push a singolo hop accade l'opposto: un aggiornamento
+ricevuto in Fase A viene immediatamente fuso, tramite la media pesata, con lo
+stato locale del worker; ciò che viene ripropagato in Fase C nei round
+successivi non è più il messaggio originale, ma il modello risultante, già
+rimodellato da uno o più round di training locale e da altre aggregazioni
+intercorse. L'informazione di un evento remoto raggiunge quindi un worker
+distante non come copia fedele ma progressivamente ricombinata attraverso più
+cicli di aggregazione e addestramento: si scambia precisione e freschezza
+dell'informazione trasportata per un tetto di traffico costante e noto a
+priori, invece che esponenzialmente crescente con il numero di hop.
+
+La scelta del k-push rispetto al rumor mongering non è arbitraria. Primo,
+FedAvg richiede che ogni contributo sia conteggiato esattamente una volta per
+round: se un nodo ritrasmettesse un modello altrui, lo stesso contributo
+rischierebbe di essere aggregato più volte lungo catene di inoltro diverse,
+un'invarianza che il buffer di aggregazione online (Sezione~\ref{sec:design}B)
+assume implicitamente. Secondo, il traffico del k-push è deterministico e
+noto a priori ($N \times k \times \text{model\_size}$ per round), mentre il
+rumor mongering ha un volume di traffico variabile e difficile da limitare —
+un requisito esplicito di questo lavoro è invece mantenere il traffico sotto
+controllo (Sezione~\ref{sec:results}B). Il rumor mongering resterebbe
+preferibile su reti molto più grandi di quelle testate qui (centinaia o
+migliaia di nodi, come nelle reti di sensori o nei sistemi di membership
+distribuiti), dove un k-push a fanout ridotto lascerebbe intere zone della
+rete scoperte per molti round.

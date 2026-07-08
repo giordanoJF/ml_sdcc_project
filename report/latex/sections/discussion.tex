@@ -1,0 +1,102 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Il grado di gossip come compromesso esplicito}
+A $N$ fissato, un $k$ più alto porta più aggiornamenti per round e, nella
+maggior parte delle configurazioni testate ($N=5$ e $N=8$, sia in locale sia
+su AWS), un'accuratezza global-test più alta a parità di $H$ — coerente con
+l'attesa che un mixing più denso tra i pesi dei worker riduca la divergenza
+verso soluzioni funzionalmente diverse. A $N=3$ l'effetto è invece piatto o
+leggermente negativo in entrambi gli ambienti: con solo due vicini possibili,
+passare da $k=1$ a $k=2$ non introduce una differenza qualitativa nella
+topologia di comunicazione, e il rumore tra worker (tre soli campioni per
+configurazione) è dello stesso ordine di grandezza dell'effetto misurato.
+Questo guadagno non è gratuito: il traffico cresce nella stessa proporzione
+di $k$ (Sez.~\ref{sec:results}C), per cui la scelta di $k$ va sempre motivata
+rispetto al budget di banda disponibile, non solo rispetto all'accuratezza
+target.
+
+\subsection{Comunicazione non è il collo di bottiglia}
+Un risultato rilevante ai fini dell'efficienza di comunicazione è che, anche
+su rete reale tra istanze EC2 fisicamente separate, la Fase C resta
+un'operazione dell'ordine delle centinaia di millisecondi, mentre il
+rallentamento di oltre un ordine di grandezza osservato su AWS rispetto al
+locale è concentrato nella Fase A (Sez.~\ref{sec:results}D), compatibile con
+un limite di CPU burstable delle istanze \texttt{t3.small} piuttosto che con
+un costo di rete. Questo supporta la scelta progettuale di comunicare
+snapshot completi del modello a bassa frequenza ($H$ passi locali tra un
+invio e l'altro) invece di aggiornamenti più frequenti e piccoli: nel regime
+qui testato il costo di calcolo locale domina comunque quello di
+comunicazione, per cui ridurre ulteriormente la frequenza di gossip non
+avrebbe portato benefici proporzionali sul tempo totale.
+
+\subsection{Nota metodologica sulla metrica di convergenza funzionale}
+Lo strumento di analisi usato calcola lo spread di accuratezza sul global
+test set in due varianti: al round finale di ciascun worker (quella usata
+nella documentazione tecnica interna del progetto, ma esplicitamente
+etichettata come riferimento rumoroso) e al round del checkpoint migliore di
+ciascun worker (la metrica dichiarata primaria). Le due varianti possono
+discordare sensibilmente per lo stesso run: per due delle configurazioni a
+$N=3$, la variante \emph{riferimento} suggeriva uno spread contenuto
+(4,5--4,8\%), mentre la metrica primaria mostra per le stesse run uno spread
+del 19,5--21,1\%, in linea con tutte le altre 14 configurazioni. In questo
+lavoro si è scelto di riportare sempre e solo la metrica primaria
+(Tabella~\ref{tab:master}), proprio per evitare di presentare come
+rappresentativo un valore isolato e più favorevole ottenuto con la metrica
+esplicitamente definita come rumorosa.
+
+\subsection{Limitazioni}
+\begin{itemize}
+  \item \textbf{Convergenza funzionale incompleta.} In nessuna delle 16
+        configurazioni lo spread di accuratezza sul global test set scende
+        sotto il 14\%: il protocollo gossip riduce ma non elimina la
+        divergenza tra i modelli dei worker nel budget di round testato. I
+        dati grezzi mostrano inoltre oscillazioni marcate round-su-round per
+        singoli worker (in un caso, l'accuratezza global-test di un worker
+        scende di 28 punti percentuali tra il proprio checkpoint migliore e
+        il round finale), sintomo di instabilità subito dopo un merge FedAvg
+        con vicini divergenti.
+  \item \textbf{Singola replica per configurazione.} Nessun run è stato
+        ripetuto con seed diverso: la deviazione standard riportata è
+        \emph{tra worker} dello stesso run, non \emph{tra run} della stessa
+        configurazione, e non permette di separare con certezza l'effetto di
+        un iperparametro dalla variabilità intrinseca del processo.
+  \item \textbf{Confondimento in una configurazione AWS.} Il run
+        \texttt{n8\_fn} su AWS usa \texttt{early\_stopping\_patience=7}
+        anziché 10 come tutti gli altri 15 run, per un errore di
+        configurazione: il confronto diretto di questa configurazione con le
+        altre a $N=8$ va quindi interpretato con cautela.
+  \item \textbf{Peer effettivamente contattati sotto il target.} Il numero
+        medio di vicini contattati da un worker può scendere sotto il valore
+        di $k$ configurato quando altri worker terminano in anticipo
+        (early stopping locale) e si deregistrano, riducendo il pool di peer
+        disponibili — un effetto emergente dell'asincronia tra worker, non
+        un difetto del meccanismo di selezione.
+  \item \textbf{Assenza di heartbeat.} Il sistema rileva un peer caduto solo
+        al primo fallimento di invio verso di esso; un crash non pulito
+        (SIGKILL, OOM) lascia una entry non valida nel discovery server fino
+        a quel momento, senza un meccanismo di TTL attivo. Questa è una
+        scelta deliberata, non una svista: un heartbeat periodico verso il
+        discovery server introdurrebbe traffico di coordinamento che cresce
+        con $N$ e con la frequenza del battito, in diretto contrasto con
+        l'obiettivo di traffico ridotto che guida le altre scelte
+        protocollari di questo lavoro (cache dei peer, k-push a singolo hop);
+        il costo è stato giudicato non giustificato per un caso d'uso — il
+        crash non pulito — fuori dal perimetro sperimentale di questo lavoro.
+  \item \textbf{Statistiche di Batch Normalization non aggregate.} Solo i
+        parametri appresi (scala e bias) sono mediati da FedAvg; le
+        statistiche correnti di media e varianza restano locali a ciascun
+        worker, una scelta nota in letteratura per introdurre un
+        disallineamento tra i client dopo l'aggregazione~\cite{li2021fedbn}.
+\end{itemize}
+
+\subsection{Confronto con la letteratura}
+FedAvg centralizzato su FEMNIST è tipicamente riportato in letteratura
+attorno al 77--80\% di accuratezza di test~\cite{li2020fedprox}. Le
+configurazioni qui testate raggiungono un'accuratezza di validazione più alta
+(87--91\%) ma un'accuratezza global-test più bassa (75--85\%): il confronto
+diretto non è però del tutto omogeneo, poiché la validazione qui misurata
+avviene su campioni tenuti da parte dagli stessi scrittori visti in training,
+mentre il global test set contiene scrittori mai visti da nessun worker — un
+compito di generalizzazione più severo, e più vicino allo scenario reale in
+cui il modello deve funzionare su utenti non rappresentati nell'addestramento.

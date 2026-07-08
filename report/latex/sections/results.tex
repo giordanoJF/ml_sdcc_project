@@ -1,0 +1,125 @@
+\section{Results}
+\label{sec:results}
+
+Sono stati eseguiti 16 esperimenti su una griglia comune di configurazioni
+(numero di client $N \in \{3,5,8\}$, grado di gossip $k$, passi locali $H$),
+metà in esecuzione locale (container Docker sulla stessa macchina) e metà su
+AWS EC2 in modalità multi-istanza (un'istanza \texttt{t3.small} per worker
+più una \texttt{t3.micro} per il discovery server, collegate da rete reale).
+In entrambi gli ambienti l'esecuzione è avvenuta su CPU. Per ogni
+configurazione sono riportati: l'accuratezza di validazione media tra i
+worker, l'accuratezza sul global test set (calcolata al round del checkpoint
+migliore di ciascun worker — la metrica indicata come primaria dallo
+strumento di analisi, più stabile della misura al solo round finale) con il
+relativo \emph{spread} (differenza massimo$-$minimo tra worker, in punti
+percentuali), la distanza L2 media tra i pesi finali dei worker, il numero
+totale di messaggi gossip scambiati e il wall-clock di sistema. La
+Tabella~\ref{tab:master} riporta tutti e 16 i run.
+
+\begin{table*}[t]
+  \centering
+  \caption{Risultati per tutte le 16 configurazioni sperimentali ($k$=grado di gossip, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref{sec:results}).}
+  \label{tab:master}
+  \scriptsize
+  \begin{tabular}{llrrrrrrrrr}
+    \toprule
+    \textbf{Config} & \textbf{Ambiente} & $N$ & $k$ & $H$ & \textbf{Val.\ acc.} & \textbf{Global-test acc.} & \textbf{Spread} & \textbf{L2} & \textbf{Msg gossip} & \textbf{Wall-clock} \\
+    \midrule
+    ref      & locale & 3 & 1 & 500  & 0.898$\pm$0.010 & 0.769$\pm$0.101 & 19.1\% & 102.9 & 88   & 5.2 min \\
+    h100     & locale & 3 & 1 & 100  & 0.874$\pm$0.024 & 0.760$\pm$0.126 & 24.9\% & 235.4 & 66   & 5.0 min \\
+    h1000    & locale & 3 & 1 & 1000 & 0.906$\pm$0.007 & 0.786$\pm$0.091 & 17.9\% & 184.3 & 87   & 8.7 min \\
+    f2       & locale & 3 & 2 & 1000 & 0.890$\pm$0.017 & 0.784$\pm$0.089 & 15.4\% & 107.7 & 172  & 8.1 min \\
+    n5\_f1   & locale & 5 & 1 & 1000 & 0.914$\pm$0.011 & 0.773$\pm$0.110 & 21.2\% & 90.7  & 228  & 15.8 min \\
+    n5\_fn   & locale & 5 & 4 & 1000 & 0.908$\pm$0.025 & 0.792$\pm$0.104 & 21.8\% & 117.0 & 491  & 12.6 min \\
+    n8\_f1   & locale & 8 & 1 & 1000 & 0.910$\pm$0.016 & 0.760$\pm$0.098 & 22.4\% & 174.0 & 295  & 19.9 min \\
+    n8\_fn   & locale & 8 & 7 & 1000 & 0.905$\pm$0.032 & 0.835$\pm$0.068 & 15.2\% & 94.7  & 1863 & 24.0 min \\
+    \addlinespace
+    n3\_h500  & AWS & 3 & 1 & 500  & 0.901$\pm$0.020 & 0.756$\pm$0.119 & 21.1\% & 137.9 & 85   & 158.1 min \\
+    n3\_h100  & AWS & 3 & 1 & 100  & 0.883$\pm$0.019 & 0.734$\pm$0.116 & 20.3\% & 75.9  & 119  & 133.1 min \\
+    n3\_h1000 & AWS & 3 & 1 & 1000 & 0.904$\pm$0.020 & 0.777$\pm$0.105 & 19.5\% & 138.0 & 67   & 150.3 min \\
+    n3\_f2    & AWS & 3 & 2 & 1000 & 0.892$\pm$0.012 & 0.753$\pm$0.082 & 14.3\% & 88.9  & 171  & 160.8 min \\
+    n5\_f1    & AWS & 5 & 1 & 1000 & 0.913$\pm$0.015 & 0.773$\pm$0.112 & 20.8\% & 88.3  & 193  & 144.8 min \\
+    n5\_fn    & AWS & 5 & 4 & 1000 & 0.902$\pm$0.015 & 0.790$\pm$0.078 & 18.3\% & 105.7 & 646  & 247.6 min \\
+    n8\_f1    & AWS & 8 & 1 & 1000 & 0.912$\pm$0.018 & 0.767$\pm$0.106 & 22.1\% & 93.9  & 267  & 194.1 min \\
+    n8\_fn    & AWS & 8 & 7 & 1000 & 0.904$\pm$0.027 & 0.846$\pm$0.054 & 14.0\% & 57.1  & 1296 & 142.9 min \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Scalabilità: accuratezza e tempo vs.\ $N$}
+La Fig.~\ref{fig:accuracy_vs_n} mostra accuratezza di validazione e
+global-test al variare di $N$, per $H=1000$ fissato, confrontando $k=1$
+(gossip minimo) con $k=N-1$ (broadcast completo). L'accuratezza di
+validazione resta stabile tra l'89\% e il 91\% per ogni $N$ testato, con
+variazioni contenute entro un punto percentuale tra $k=1$ e $k=N-1$: il
+sistema scala senza perdita di qualità sul dato visto localmente. Sul
+global test set l'effetto di $k$ è più marcato: a $N=8$, passare da $k=1$ a
+$k=N-1$ porta l'accuratezza global-test dal 76,0\% all'83,5\% in locale e dal
+76,7\% all'84,6\% su AWS — un guadagno di 7--8 punti percentuali attribuibile
+a un numero maggiore di aggiornamenti ricevuti per round.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{accuracy_vs_n}
+  \caption{Accuratezza di validazione (sinistra) e sul global test set
+  (destra) al variare di $N$, per $k=1$ e $k=N-1$, locale vs.\ AWS.}
+  \label{fig:accuracy_vs_n}
+\end{figure}
+
+\subsection{Overhead di comunicazione}
+Ogni messaggio gossip trasporta l'intero \texttt{state\_dict} del modello
+(1\,704\,350 parametri float32, $\approx$6,82\,MB). Il traffico totale
+stimato (Fig.~\ref{fig:communication}) cresce con $N$ e, soprattutto, con
+$k$: a $N=8$, passare da $k=1$ a $k=N-1$ porta il numero di messaggi
+scambiati da 295 a 1863 in locale (6,3$\times$) e da 267 a 1296 su AWS
+(4,9$\times$). Questo è il costo diretto, e prevedibile, della scelta di $k$:
+l'aumento di accuratezza global-test osservato con $k$ alto
+(Fig.~\ref{fig:accuracy_vs_n}) va quindi letto come un compromesso esplicito
+comunicazione/qualità, non come un miglioramento gratuito.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{communication_overhead}
+  \caption{Traffico gossip totale stimato (messaggi $\times$ 6,82\,MB) per
+  configurazione.}
+  \label{fig:communication}
+\end{figure}
+
+\subsection{Dove viene speso il tempo}
+La Fig.~\ref{fig:phase_timing} scompone la durata media di un round nelle tre
+fasi definite in Sezione~\ref{sec:details}B. In locale la Fase A (merge e
+doppia valutazione) dura 5--13\,s, la Fase B (H passi locali) 0,3--6,9\,s in
+funzione di $H$, la Fase C (invio gossip) resta sotto i 340\,ms anche con
+$k=N-1$. Su AWS la Fase A si stabilizza attorno a 105--130\,s
+indipendentemente da $N$ e da $H$ — un valore pressoché costante compatibile
+con un collo di bottiglia sul throughput di inferenza delle istanze
+\texttt{t3.small} (CPU burstable condivisa) piuttosto che con un effetto del
+workload. La Fase C, invece, resta nello stesso ordine di grandezza del caso
+locale (42--292\,ms) anche attraverso rete reale tra istanze EC2 separate:
+l'overhead di comunicazione del protocollo gossip non è la causa del
+rallentamento osservato su AWS.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{phase_timing}
+  \caption{Durata media delle fasi A, B, C per round, locale vs.\ AWS.}
+  \label{fig:phase_timing}
+\end{figure}
+
+\subsection{Locale vs.\ AWS multi-istanza}
+Per le 8 configurazioni condivise dai due ambienti, la
+Fig.~\ref{fig:local_vs_aws} confronta wall-clock di sistema e spread
+global-test. Il wall-clock su AWS è 6--30$\times$ superiore a quello locale
+per la stessa configurazione (dominato dalla Fase A, come discusso sopra),
+mentre lo spread global-test resta nella stessa banda (14--25\%) in entrambi
+gli ambienti, senza un vantaggio sistematico dell'uno sull'altro: la qualità
+della convergenza funzionale non dipende in modo evidente dall'ambiente di
+esecuzione, mentre il tempo di completamento sì.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{local_vs_aws}
+  \caption{Wall-clock di sistema (scala log) e spread di accuratezza
+  global-test, per le 8 configurazioni condivise da locale e AWS.}
+  \label{fig:local_vs_aws}
+\end{figure}

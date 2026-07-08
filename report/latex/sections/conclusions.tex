@@ -1,0 +1,38 @@
+\section{Conclusions}
+\label{sec:conclusions}
+
+Questo lavoro ha presentato un sistema di Federated Learning decentralizzato
+peer-to-peer, in cui FedAvg è eseguito tramite aggregazione online e gossip
+$k$-push senza alcun aggregatore centrale per l'intera durata
+dell'addestramento, e in cui la centralizzazione è confinata alla sola
+discovery dei client. Il sistema è stato valutato su FEMNIST (LEAF) con
+partizionamento non-i.i.d.\ per scrittore, in 16 configurazioni tra esecuzione
+locale e deployment reale su AWS multi-istanza, raggiungendo un'accuratezza
+di validazione dell'87--91\% e mostrando che, nel regime testato, il costo di
+comunicazione del protocollo gossip resta trascurabile rispetto al costo del
+calcolo locale, anche su rete reale. L'analisi ha inoltre evidenziato, in
+modo trasparente, i limiti della convergenza funzionale ottenuta e le
+condizioni sperimentali (singola replica, un confondimento di configurazione)
+sotto cui i risultati vanno interpretati.
+
+Sviluppi futuri naturali includono: l'introduzione di una strategia di
+aggregazione alternativa a FedAvg (ad es.\ FedProx) per mitigare
+esplicitamente il client drift osservato; una politica di $k$ adattivo che
+tenga conto del numero di peer ancora attivi; e la ripetizione delle
+configurazioni con seed multipli per quantificare rigorosamente la varianza
+run-to-run qui non misurata.
+
+Due estensioni indirizzerebbero più a fondo la tolleranza ai guasti, oggi
+solo parzialmente coperta (Sezione~\ref{sec:discussion}D). Per il rientro
+dopo un crash, il checkpoint locale già salvato a ogni miglioramento della
+validation loss potrebbe essere esteso con il numero di round: un worker
+riavviato si ri-registrerebbe con lo stesso identificativo e riprenderebbe
+da quel checkpoint invece che da zero, mentre il controllo di staleness già
+presente assorbirebbe naturalmente il disallineamento di round rispetto agli
+altri worker. Per l'ingresso live di un client nuovo, il discovery server
+accetta già registrazioni in qualunque momento, ma oggi il nuovo worker
+partirebbe da pesi casuali; aggiungendo al protocollo gRPC una RPC di
+\emph{pull} accanto all'attuale \emph{push}, un worker entrante potrebbe
+richiedere una sola volta i pesi correnti a un peer attivo come
+inizializzazione, per poi partecipare ai round successivi come tutti gli
+altri.
