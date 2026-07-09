@@ -16,6 +16,19 @@ percentuali), la distanza L2 media tra i pesi finali dei worker, il numero
 totale di messaggi gossip scambiati e il wall-clock di sistema. La
 Tabella~\ref{tab:master} riporta tutti e 16 i run.
 
+Questa griglia non è un fattoriale completo su $N$, $k$ e $H$: ammettendo
+$k$ fino a $N-1$ per ciascun $N \in \{3,5,8\}$ e 3 valori di $H$, un
+fattoriale completo richiederebbe 39 configurazioni per ambiente (78 in
+totale) — con run AWS di oltre 4 ore ciascuno (Tabella~\ref{tab:master}),
+settimane di esecuzione. È stato quindi adottato un disegno sequenziale a
+blocchi, un fattore alla volta: il Blocco A (3 run, $N=3$, $k=1$) isola
+l'effetto di $H \in \{100,500,1000\}$, individuando $H=1000$ come migliore;
+il Blocco B (1 run) isola un piccolo aumento di $k$; il Blocco C (4 run,
+$H=1000$) incrocia $N \in \{5,8\}$ con $k \in \{1, N{-}1\}$, i due estremi
+del grado di gossip, isolando l'effetto congiunto di scala e fanout — il
+compromesso centrale di questo lavoro. Il costo: un'assunzione non
+verificata, che l'$H$ migliore a $N=3$ resti valido a $N=5,8$.
+
 \begin{table*}[t]
   \centering
   \caption{Risultati per tutte le 16 configurazioni sperimentali ($k$=grado di gossip, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref{sec:results}).}

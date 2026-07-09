@@ -31,7 +31,14 @@ aggiuntivo è un \emph{watchdog} che forza la terminazione del cluster se un
 worker non si deregistra correttamente entro un timeout — una funzione di
 coordinamento della terminazione, non di training. Questo confina la
 centralizzazione ai soli compiti di avvio/terminazione e identificazione dei
-client, come richiesto dalla traccia.
+client, come richiesto dalla traccia. Il raggio d'azione di questo singolo
+componente centralizzato è inoltre limitato nel tempo: la lista dei peer è
+letta una sola volta all'avvio (Sezione~\ref{sec:details}C) e sia
+\texttt{fetch\_peers} sia \texttt{deregister\_worker} degradano senza
+propagare l'errore se il discovery server non risponde. Un guasto del
+discovery server dopo l'avvio blocca quindi solo l'ingresso di nuovi client,
+non il gossip già in corso tra quelli attivi, che continuano a operare sulla
+propria cache locale.
 
 \begin{figure}[t]
   \centering

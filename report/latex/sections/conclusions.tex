@@ -15,6 +15,21 @@ modo trasparente, i limiti della convergenza funzionale ottenuta e le
 condizioni sperimentali (singola replica, un confondimento di configurazione)
 sotto cui i risultati vanno interpretati.
 
+Tra le 16 configurazioni testate, $N=8$, $k=N{-}1=7$, $H=1000$ emerge come
+quella con la miglior convergenza funzionale: la più alta accuratezza sul
+global test set e il più basso spread tra worker, in entrambi gli ambienti
+indipendentemente (83,5\%/15,2\% in locale, 84,6\%/14,0\% su AWS) — l'unico
+risultato di questo lavoro confermato in modo identico da entrambe le
+campagne sperimentali, e quindi la raccomandazione più solida che se ne
+possa trarre. Ha però anche il volume di traffico più alto di tutta la
+campagna (Tabella~\ref{tab:master}): resta una raccomandazione condizionata
+a un budget di banda ampio, non un ottimo assoluto. Se il traffico è
+vincolante, $N=5$, $k=N{-}1=4$, $H=1000$ offre un'accuratezza global-test e
+uno spread solo leggermente peggiori a una frazione del volume di
+comunicazione. In entrambi i casi, $H=1000$ resta il valore di passi locali
+raccomandato, l'unico iperparametro ML esplicitamente confrontato in
+questo lavoro (Sezione~\ref{sec:results}).
+
 Sviluppi futuri naturali includono: l'introduzione di una strategia di
 aggregazione alternativa a FedAvg (ad es.\ FedProx) per mitigare
 esplicitamente il client drift osservato; una politica di $k$ adattivo che
@@ -22,17 +37,26 @@ tenga conto del numero di peer ancora attivi; e la ripetizione delle
 configurazioni con seed multipli per quantificare rigorosamente la varianza
 run-to-run qui non misurata.
 
-Due estensioni indirizzerebbero più a fondo la tolleranza ai guasti, oggi
-solo parzialmente coperta (Sezione~\ref{sec:discussion}D). Per il rientro
-dopo un crash, il checkpoint locale già salvato a ogni miglioramento della
-validation loss potrebbe essere esteso con il numero di round: un worker
-riavviato si ri-registrerebbe con lo stesso identificativo e riprenderebbe
-da quel checkpoint invece che da zero, mentre il controllo di staleness già
-presente assorbirebbe naturalmente il disallineamento di round rispetto agli
-altri worker. Per l'ingresso live di un client nuovo, il discovery server
-accetta già registrazioni in qualunque momento, ma oggi il nuovo worker
-partirebbe da pesi casuali; aggiungendo al protocollo gRPC una RPC di
-\emph{pull} accanto all'attuale \emph{push}, un worker entrante potrebbe
-richiedere una sola volta i pesi correnti a un peer attivo come
-inizializzazione, per poi partecipare ai round successivi come tutti gli
-altri.
+Va inoltre osservato che il sistema non prevede alcun meccanismo di
+\emph{restart} automatico, né per i worker né per il discovery server: un
+crash richiede un intervento manuale, o un orchestratore esterno non
+implementato in questo lavoro (es. una restart policy Docker), per
+rilanciare il processo — i meccanismi seguenti presuppongono che il riavvio
+avvenga, non lo innescano. Due estensioni indirizzerebbero più a fondo la
+tolleranza ai guasti, oggi solo parzialmente coperta
+(Sezione~\ref{sec:discussion}D). Per il rientro dopo un crash, il checkpoint
+locale già salvato a ogni miglioramento della
+validation loss potrebbe includere il numero di round: un worker riavviato
+si ri-registrerebbe con lo stesso identificativo e riprenderebbe da lì
+invece che da zero, con lo staleness check esistente ad assorbire il
+disallineamento rispetto agli altri. Per l'ingresso live di un client nuovo
+— il discovery server accetta già registrazioni in qualunque momento, ma
+oggi si partirebbe da pesi casuali — una RPC di \emph{pull} accanto
+all'attuale \emph{push} permetterebbe di richiedere una volta i pesi
+correnti a un peer attivo come inizializzazione. Questo risolverebbe però
+solo il problema dei pesi, non quello dei dati: il partizionamento
+(Sezione~\ref{sec:details}A) è precalcolato per un numero fisso di worker
+prima del deployment, quindi un nodo davvero nuovo non avrebbe una
+partizione propria — servirebbe riservare in anticipo dati per client
+futuri (spreco se non usati) o un re-sharding a runtime, più complesso e in
+tensione con il principio di non spostare mai dati grezzi tra nodi.

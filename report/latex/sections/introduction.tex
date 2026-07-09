@@ -5,11 +5,10 @@ Il Federated Learning (FL) permette a un insieme di nodi client, ciascuno in
 possesso di un dataset locale privato, di addestrare collaborativamente un
 modello condiviso senza scambiare i dati grezzi. Nella formulazione classica
 di FedAvg~\cite{mcmahan2017fedavg} un server centrale raccoglie i pesi locali
-di ogni client, li media e ridistribuisce il modello aggiornato. Questa
-architettura presenta tre limiti strutturali: il server è un singolo punto di
-guasto, la sua banda di rete è un collo di bottiglia che cresce linearmente
+di ogni client, li media e ridistribuisce il modello aggiornato: il server è
+un singolo punto di guasto, la sua banda è un collo di bottiglia che cresce
 con il numero di client, e ogni round richiede una sincronizzazione globale
-che rallenta l'intero sistema al passo del client più lento.
+al passo del client più lento.
 
 Il presente lavoro affronta questi limiti progettando un sistema di FL
 \emph{interamente decentralizzato}: l'aggregazione dei modelli avviene tramite
@@ -37,10 +36,8 @@ I contributi di questo lavoro sono i seguenti:
         con il costo del training locale.
 \end{itemize}
 
-Il resto dell'articolo è organizzato come segue: la Sezione~\ref{sec:background}
-richiama FedAvg, l'ispirazione a DiLoCo e il dataset LEAF/FEMNIST; le
-Sezioni~\ref{sec:design} e~\ref{sec:details} descrivono rispettivamente
-l'architettura e i dettagli implementativi del sistema; la
-Sezione~\ref{sec:results} presenta i risultati sperimentali; la
-Sezione~\ref{sec:discussion} li discute criticamente, incluse le limitazioni
-riscontrate; la Sezione~\ref{sec:conclusions} conclude il lavoro.
+Il resto dell'articolo: Sezione~\ref{sec:background} richiama FedAvg, DiLoCo
+e LEAF/FEMNIST; Sezioni~\ref{sec:design}--\ref{sec:details} descrivono
+architettura e implementazione; Sezione~\ref{sec:results} presenta i
+risultati; Sezione~\ref{sec:discussion} li discute criticamente, incluse le
+limitazioni; Sezione~\ref{sec:conclusions} conclude.
