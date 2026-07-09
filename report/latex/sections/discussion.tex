@@ -1,11 +1,14 @@
-\section{Discussion}
+\section{Discussione}
 \label{sec:discussion}
 
 Due osservazioni di sintesi guidano l'interpretazione dei risultati. Sulle
-prestazioni: la validation accuracy resta piatta (89--91\%) in tutte le
-configurazioni perché riflette soprattutto l'adattamento di ciascun worker
-ai propri dati locali dopo la Fase B, un segnale poco sensibile al
-protocollo gossip; global-test accuracy e spread, invece, variano
+prestazioni: la validation accuracy resta piatta (89--91\%) nelle
+configurazioni con $H\ge500$ perché riflette soprattutto l'adattamento di
+ciascun worker ai propri dati locali dopo la Fase B, un segnale poco
+sensibile al protocollo di comunicazione; scende invece a 87--88\% nei due
+run a $H=100$ (locale e AWS, Tabella~\ref{tab:master}), dove ogni round
+processa un decimo dei campioni prima dell'aggregazione. Global-test accuracy
+e spread, invece, variano
 sistematicamente con $k$ e $N$ perché misurano la reale convergenza
 collaborativa e non il solo adattamento locale — sono quindi le metriche
 rilevanti per giudicare la strategia di distribuzione, discussa di seguito.
@@ -13,7 +16,7 @@ Sui tempi: il wall-clock è dominato dal calcolo locale (Fase A/B) e non
 dalla comunicazione (Fase C), come discusso più sotto — l'ambiente di
 esecuzione incide più della configurazione stessa.
 
-\subsection{Il grado di gossip come compromesso esplicito}
+\subsection{Il fanout $k$ come compromesso esplicito}
 A $N=5$ e $N=8$ (locale e AWS), un $k$ più alto porta più aggiornamenti per
 round e un'accuratezza global-test più alta a parità di $H$ — coerente con
 un mixing più denso che riduce la divergenza verso soluzioni funzionalmente
@@ -33,7 +36,7 @@ compatibile con un limite di CPU burstable delle \texttt{t3.small} più che
 con un costo di rete. Questo supporta la scelta di comunicare snapshot
 completi a bassa frequenza invece di aggiornamenti più frequenti e piccoli:
 il costo di calcolo locale domina comunque quello di comunicazione, per cui
-ridurre ulteriormente la frequenza di gossip non avrebbe portato benefici
+ridurre ulteriormente la frequenza di comunicazione non avrebbe portato benefici
 proporzionali sul tempo totale.
 
 \subsection{Nota metodologica sulla metrica di convergenza funzionale}
@@ -50,8 +53,10 @@ valore isolato ottenuto con la metrica esplicitamente definita rumorosa.
 \subsection{Limitazioni}
 \begin{itemize}
   \item \textbf{Convergenza funzionale incompleta.} In nessuna configurazione
-        lo spread sul global test set scende sotto il 14\%: il gossip riduce
-        ma non elimina la divergenza tra worker nel budget testato. I dati
+        lo spread sul global test set scende sotto il 14\%, nemmeno a
+        connettività one-hop massima ($k=N-1$, Sezione~\ref{sec:background}E):
+        il push one-hop riduce ma non elimina la divergenza tra worker nel
+        budget testato. I dati
         grezzi mostrano anche oscillazioni round-su-round marcate (in un
         caso, $-28$ punti percentuali tra checkpoint migliore e round finale
         di un worker), sintomo di instabilità dopo un merge FedAvg con
@@ -79,6 +84,19 @@ valore isolato ottenuto con la metrica esplicitamente definita rumorosa.
         scala e bias sono mediati da FedAvg; media e varianza correnti
         restano locali, nota causa di disallineamento post-aggregazione in
         letteratura~\cite{li2021fedbn}.
+  \item \textbf{Nessuna metrica per classe.} \texttt{validate()}
+        (Sezione~\ref{sec:details}) calcola solo loss aggregata e accuratezza
+        top-1; non vengono salvate predizioni, logit o una confusion matrix.
+        FEMNIST ha 62 classi con frequenze naturalmente sbilanciate (cifre vs.
+        lettere, maiuscole vs.\ minuscole), e con partizionamento non-i.i.d.\
+        per scrittore alcuni worker vedono pochi esempi di certe classi:
+        un'accuratezza aggregata alta può quindi mascherare una scarsa
+        accuratezza sulle classi rare. Il dato non è recuperabile a
+        posteriori sulle 16 run già eseguite: \texttt{model\_best.pt} non
+        viene archiviato da \texttt{save\_experiment.py} — è cancellato dalla
+        working directory subito dopo la copia delle metriche, per lasciare
+        pulito l'ambiente alla run successiva — per cui un'analisi per classe
+        richiederebbe di ripetere almeno una configurazione.
 \end{itemize}
 
 \subsection{Confronto con la letteratura}

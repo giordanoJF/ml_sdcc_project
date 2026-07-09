@@ -1,4 +1,4 @@
-\section{Background}
+\section{Contesto}
 \label{sec:background}
 
 \subsection{FedAvg}
@@ -26,7 +26,9 @@ stato di momentum globale coerente per tutti i client, il che presuppone
 implicitamente un coordinatore centrale — esattamente ciò che l'architettura
 decentralizzata qui proposta esclude per costruzione. Il sistema sostituisce
 quindi la sincronizzazione globale periodica di DiLoCo con un'aggregazione
-locale asincrona basata su gossip, descritta nella Sezione~\ref{sec:design}.
+locale asincrona basata su un push one-hop a fanout fisso tra vicini,
+descritta nella Sezione~\ref{sec:design} e motivata per contrasto con le
+alternative del corso nella Sezione~\ref{sec:background}E.
 
 \subsection{Dataset: LEAF e FEMNIST}
 FEMNIST~\cite{caldas2018leaf} è un dataset di caratteri manoscritti (cifre e
@@ -61,57 +63,146 @@ globale mantenuto centralmente per l'intera durata del training, come l'outer
 optimizer di DiLoCo discusso in precedenza, sono incompatibili per
 costruzione con l'architettura qui proposta.
 
-\subsection{Varianti di gossip: k-push vs.\ rumor mongering}
-In letteratura esistono due famiglie distinte di protocolli gossip. La prima,
-il gossip epidemico o \emph{rumor mongering}~\cite{demers1987epidemic}, nasce
-per la disseminazione dell'informazione: un nodo che riceve un messaggio lo
-ritrasmette a sua volta a peer scelti casualmente, con probabilità o
-\emph{time-to-live} decrescente, fino a saturazione della rete — un singolo
-aggiornamento si propaga così a cascata su più hop. La seconda, il gossip di
-tipo \emph{averaging}~\cite{boyd2006randomized}, non dissemina un messaggio
-singolo ma fa convergere l'intera rete verso una media comune tramite
-scambi locali ripetuti: ogni nodo combina periodicamente il proprio stato
-corrente con quello di alcuni vicini, senza mai ritrasmettere un messaggio
-altrui così com'è.
+\subsection{Scelta del protocollo di comunicazione: perché non flooding,
+random walk o gossip epidemico}
+Il corso di riferimento presenta tre famiglie di disseminazione a livello
+applicativo su overlay non strutturato: \emph{flooding} (un nodo inoltra il
+messaggio a tutti i propri vicini, con \emph{time-to-live} decrescente),
+\emph{random walk} (un singolo messaggio salta da un vicino scelto a caso al
+successivo, un hop alla volta) e \emph{gossip epidemico}, a sua volta nelle
+varianti \emph{anti-entropy} (due nodi scelti a caso si scambiano l'intero
+stato per renderlo identico) e \emph{rumor mongering}~\cite{demers1987epidemic}
+(un nodo "infetto" da un aggiornamento lo ritrasmette a $F$ vicini scelti a
+caso, e chi lo riceve fa lo stesso, fino a perdere interesse
+probabilisticamente o dopo un numero fisso di contatti). Il sistema qui
+presentato non implementa nessuna delle tre: usa invece un
+\textbf{push one-hop a fanout fisso $k$} (Sezione~\ref{sec:details}B, indicato
+anche come \emph{k-push}), motivato di seguito per contrasto esplicito con
+ciascuna alternativa, non per omissione.
 
-Il sistema qui presentato appartiene alla seconda famiglia, nella variante
-\emph{k-push a singolo hop}: ogni worker invia a $k$ peer casuali soltanto il
-proprio stato corrente (già frutto della propria aggregazione FedAvg locale),
-e chi riceve non lo ritrasmette — lo accumula soltanto nel proprio buffer
-(Sezione~\ref{sec:design}B). La propagazione multi-hop dell'informazione
-avviene comunque, ma implicitamente e su più round: lo stato che un worker
-invia in un round incorpora già, tramite la media pesata, ciò che ha ricevuto
-nei round precedenti. Non esiste quindi un singolo messaggio da inoltrare né
-un \emph{time-to-live} da gestire — concetti propri del rumor mongering ma
-non applicabili qui.
+\textbf{Perché non flooding.} Il flooding garantisce copertura totale, ma il
+numero di trasmissioni cresce con il grado medio dei vicini e con il
+\emph{time-to-live}. Il grafo dei peer alle scale testate qui ($N\le8$,
+Sezione~\ref{sec:results}) è già quasi completo — ogni worker conosce quasi
+tutti gli altri tramite il discovery server — per cui anche un solo round di
+flooding con \emph{time-to-live}$=1$ produrrebbe un volume di traffico già
+paragonabile al caso limite $k=N-1$ effettivamente testato (broadcast
+completo a singolo hop, Sezione~\ref{sec:results}A), senza il beneficio
+aggiuntivo di raggiungere nodi a più di un hop di distanza: a queste scale
+non ci sono zone della rete irraggiungibili in un hop da dover coprire con
+ulteriori inoltri.
 
-Questo introduce un secondo trade-off, complementare a quello
-traffico/qualità di Sezione~\ref{sec:results}B: tra volume di comunicazione e
-granularità dell'informazione trasportata. Nel rumor mongering un messaggio
-viaggia intatto attraverso più hop — chi lo riceve a distanza osserva
-esattamente il contenuto originale, al prezzo di un traffico che cresce a
-ogni inoltro. Nel k-push a singolo hop accade l'opposto: un aggiornamento
-ricevuto in Fase A viene immediatamente fuso, tramite la media pesata, con lo
-stato locale del worker; ciò che viene ripropagato in Fase C nei round
-successivi non è più il messaggio originale, ma il modello risultante, già
-rimodellato da uno o più round di training locale e da altre aggregazioni
-intercorse. L'informazione di un evento remoto raggiunge quindi un worker
-distante non come copia fedele ma progressivamente ricombinata attraverso più
-cicli di aggregazione e addestramento: si scambia precisione e freschezza
-dell'informazione trasportata per un tetto di traffico costante e noto a
-priori, invece che esponenzialmente crescente con il numero di hop.
+\textbf{Perché non random walk.} Il random walk instrada un unico messaggio
+verso un solo vicino per hop: in un dato istante un solo worker (o $k$
+worker, nella variante \emph{k-random-walk}~\cite{lv2002search}) è in transito
+di ricezione, mentre tutti gli altri restano scoperti fino a quando il walker
+non li raggiunge, dopo un numero di hop proporzionale al diametro della rete.
+Questo è in tensione diretta con il ciclo a round sincroni di ogni singolo
+worker (Sezione~\ref{sec:details}B): la Fase A di ogni round richiede un
+segnale di aggregazione ad ogni worker ad ogni round, non un aggiornamento
+che arriva dopo un numero imprevedibile di hop. Il random walk, inoltre, non
+offre una leva di fanout continua paragonabile a $k$ — trasmettere a un solo
+vicino per volta non permette di calibrare il compromesso
+traffico/qualità che è al centro della Sezione~\ref{sec:results}B.
 
-La scelta del k-push rispetto al rumor mongering non è arbitraria. Primo,
-FedAvg richiede che ogni contributo sia conteggiato esattamente una volta per
-round: se un nodo ritrasmettesse un modello altrui, lo stesso contributo
-rischierebbe di essere aggregato più volte lungo catene di inoltro diverse,
-un'invarianza che il buffer di aggregazione online (Sezione~\ref{sec:design}B)
-assume implicitamente. Secondo, il traffico del k-push è deterministico e
-noto a priori ($N \times k \times \text{model\_size}$ per round), mentre il
-rumor mongering ha un volume di traffico variabile e difficile da limitare —
-un requisito esplicito di questo lavoro è invece mantenere il traffico sotto
-controllo (Sezione~\ref{sec:results}B). Il rumor mongering resterebbe
-preferibile su reti molto più grandi di quelle testate qui (centinaia o
-migliaia di nodi, come nelle reti di sensori o nei sistemi di membership
-distribuiti), dove un k-push a fanout ridotto lascerebbe intere zone della
-rete scoperte per molti round.
+\textbf{Perché non gossip epidemico (anti-entropy o rumor mongering).}
+Entrambe le varianti richiedono che il nodo ricevente ritrasmetta ciò che ha
+ricevuto, non solo il proprio stato — un vincolo in conflitto diretto con
+l'invariante su cui si basa il buffer di aggregazione online
+(Sezione~\ref{sec:design}B): FedAvg richiede che ogni contributo, pesato per
+$n_i$, sia sommato \emph{esattamente una volta} per round. Se un worker
+ritrasmettesse un modello altrui, quel contributo rischierebbe di essere
+ri-sommato lungo più cammini di inoltro indipendenti — un rischio concreto,
+non solo teorico, perché lo stato ricevuto da un worker è già a sua volta
+frutto di aggregazioni precedenti (Sezione~\ref{sec:design}B), quindi
+"contiene" implicitamente contributi di altri worker senza un modo semplice
+per distinguerli. Evitarlo richiederebbe un meccanismo di deduplica per
+riconoscere contributi già visti — banale per un rumore di poche decine di
+byte identificato da un ID univoco, tutt'altro che banale per uno
+\texttt{state\_dict} di 6,82\,MB (Sezione~\ref{sec:details}C), dove
+"riconoscere lo stesso contributo" richiederebbe propagare e mantenere
+metadati aggiuntivi (worker di origine, round di origine) a ogni hop. Lo
+stesso vale per il controllo di staleness (Sezione~\ref{sec:details}B): oggi
+confronta il round del mittente diretto con il round corrente del ricevente
+in un singolo hop; con un relay multi-hop andrebbe esteso per preservare il
+round di \emph{origine} attraverso ogni inoltro, altrimenti un aggiornamento
+vecchio ma appena re-inoltrato apparirebbe artificialmente fresco — un
+problema di loop e cicli di re-inoltro non banale su un overlay quasi
+completo come quello qui testato. Anche il case study del corso più vicino a
+questo scenario, il bimodal multicast~\cite{birman1999bimodal}, evita il
+problema separando i due canali: il gossip periodico scambia solo un
+\emph{digest} economico, e il payload vero e proprio viene richiesto
+(\emph{pull}) solo per le entry mancanti. Replicare questo schema avrebbe
+richiesto una seconda RPC e uno stato di sincronizzazione aggiuntivo, senza
+un beneficio evidente alla scala qui testata, dove il grafo one-hop è già
+quasi completo.
+
+\textbf{La fama del gossip per il traffico basso non si applica a questa
+scala.} Il gossip epidemico è efficiente sul traffico \emph{rispetto al
+flooding} per un problema preciso: raggiungere copertura totale in una rete
+grande, a topologia parzialmente o del tutto sconosciuta a ogni nodo, senza
+richiedere una membership globale — è per questo che sistemi come Cassandra o
+Dynamo, con centinaia o migliaia di nodi, lo adottano per il group
+membership. Nessuna di queste condizioni vale qui: il discovery server
+fornisce a ogni worker una membership completa e nota
+(Sezione~\ref{sec:design}A), e a $N\le8$ un grafo one-hop completo
+($k=N-1$) è economico e già stato testato direttamente
+(Sezione~\ref{sec:results}A) — non ci sono zone della rete irraggiungibili in
+un hop da dover coprire con un relay. La proprietà di traffico che il gossip
+garantisce davvero — un invio per nodo indipendente da $N$ — resta comunque
+intatta nel push one-hop a fanout fisso $k$, senza bisogno del relay per
+ottenerla. Il relay, inoltre, qui non ridurrebbe il traffico: ne moltiplica
+il costo per il fattore di ramificazione a ogni hop, un compromesso
+conveniente solo per payload minuscoli come un rumore o un digest — da cui il
+risparmio del gossip rispetto al flooding — non per uno \texttt{state\_dict}
+da 6,82\,MB rigenerato a ogni round. Anche il case study del corso più
+favorevole al gossip, il \emph{blind counter rumor mongering} ($B=F=2$),
+risparmia solo $\sim$50\% di traffico rispetto al flooding a fronte di una
+copertura incompleta ($\sim$90\%) e una diffusione $\sim$2$\times$ più lenta:
+un compromesso pensato per payload economici da ritrasmettere, non per un
+modello neurale.
+
+\textbf{Cosa succede senza relay multi-hop.} Rinunciare al relay non
+significa rinunciare alla propagazione a distanza, ed è qui che il dominio
+del Federated Learning offre un'opportunità che un sistema di disseminazione
+generico non ha. In un sistema di disseminazione puro (una cache replicata,
+un annuncio di membership) un dato fermo su un nodo resta immutato ed
+estraneo a tutti gli altri finché qualcuno non lo ritrasmette esplicitamente
+— è per questo che flooding, random walk e gossip epidemico esistono, e
+devono necessariamente inoltrare il messaggio altrui per farlo viaggiare. In
+un sistema FedAvg-based, invece, ogni round di training è già di per sé
+un'occasione di mescolamento: lo stato che un worker invia in Fase C è il
+risultato della propria aggregazione FedAvg (Fase A) con quanto ricevuto nei
+round precedenti, quindi incorpora transitivamente — seppure ricombinato, non
+come copia fedele — i contributi di worker mai contattati direttamente,
+\emph{senza che nessuno debba inoltrare nulla}. La disseminazione multi-hop
+dell'informazione avviene così implicitamente nel \emph{tempo} (più round di
+training, un meccanismo che l'algoritmo di apprendimento esegue comunque),
+non nello \emph{spazio} del singolo round (più hop di rete, che richiederebbe
+traffico dedicato aggiuntivo): un compromesso deliberato tra freschezza
+dell'informazione e traffico generato, discusso in dettaglio nella
+sottosezione seguente. Lo stesso schema — media locale periodica con un
+sottoinsieme casuale di vicini, senza relay del payload altrui — è adottato
+anche dalla letteratura sul \emph{decentralized
+SGD}~\cite{lian2017can,boyd2006randomized} proprio per questa ragione: quando
+il payload scambiato è l'intero stato di un modello e non un piccolo
+messaggio, il costo di un relay multi-hop cresce con il fattore di
+ramificazione a ogni hop, mentre l'aggregazione locale ottiene una
+propagazione equivalente sfruttando i round di training già previsti
+dall'algoritmo, senza traffico aggiuntivo dedicato al solo inoltro.
+
+\textbf{Verifica empirica.} Il grafo one-hop raggiunge comunque la
+connettività completa alle scale qui testate: con $k=N-1$ ogni worker
+contatta \emph{tutti} i propri peer a ogni round, il limite superiore
+raggiungibile in un singolo hop. I risultati (Sezione~\ref{sec:results}A,
+Sezione~\ref{sec:discussion}A) mostrano che questo da solo chiude la
+maggior parte del divario osservato a fanout basso (+7--8 punti di
+accuratezza global-test tra $k=1$ e $k=N-1$ a $N=8$, spread quasi dimezzato);
+ma anche a $k=N-1$ lo spread non scende mai sotto il 14\%
+(Sezione~\ref{sec:discussion}D). Poiché $k=N-1$ è già la copertura massima
+raggiungibile in un hop, un relay multi-hop non avrebbe potuto ridurre
+ulteriormente questo residuo: la causa più probabile non è la portata del
+protocollo di comunicazione, ma l'assenza di un meccanismo esplicito di
+correzione del client drift (FedProx, SCAFFOLD, Sezione~\ref{sec:background}D)
+— una limitazione indipendente dalla scelta tra one-hop e multi-hop, discussa
+in Sezione~\ref{sec:discussion}D.

@@ -64,6 +64,22 @@ A.~Demers, D.~Greene, C.~Hauser, W.~Irish, J.~Larson, S.~Shenker, H.~Sturgis,
   maintenance,'' in \emph{Proceedings of the 6th Annual ACM Symposium on
   Principles of Distributed Computing (PODC)}, 1987, pp. 1--12.
 
+\bibitem{lv2002search}
+Q.~Lv, P.~Cao, E.~Cohen, K.~Li, and S.~Shenker, ``Search and replication in
+  unstructured peer-to-peer networks,'' in \emph{Proceedings of the 16th
+  International Conference on Supercomputing (ICS)}, 2002, pp. 84--95.
+
+\bibitem{birman1999bimodal}
+K.~P. Birman, M.~Hayden, O.~Ozkasap, Z.~Xiao, M.~Budiu, and Y.~Minsky,
+  ``Bimodal multicast,'' \emph{ACM Transactions on Computer Systems (TOCS)},
+  vol.~17, no.~2, pp. 41--88, 1999.
+
+\bibitem{lian2017can}
+X.~Lian, C.~Zhang, H.~Zhang, C.-J. Hsieh, W.~Zhang, and J.~Liu, ``Can
+  decentralized algorithms outperform centralized algorithms? a case study for
+  decentralized parallel stochastic gradient descent,'' in \emph{Advances in
+  Neural Information Processing Systems (NeurIPS)}, vol.~30, 2017.
+
 \bibitem{boyd2006randomized}
 S.~Boyd, A.~Ghosh, B.~Prabhakar, and D.~Shah, ``Randomized gossip algorithms,''
   \emph{IEEE Transactions on Information Theory}, vol.~52, no.~6, pp.

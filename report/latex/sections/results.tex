@@ -1,8 +1,8 @@
-\section{Results}
+\section{Risultati}
 \label{sec:results}
 
 Sono stati eseguiti 16 esperimenti su una griglia comune di configurazioni
-(numero di client $N \in \{3,5,8\}$, grado di gossip $k$, passi locali $H$),
+(numero di client $N \in \{3,5,8\}$, fanout $k$, passi locali $H$),
 metà in esecuzione locale (container Docker sulla stessa macchina) e metà su
 AWS EC2 in modalità multi-istanza (un'istanza \texttt{t3.small} per worker
 più una \texttt{t3.micro} per il discovery server, collegate da rete reale).
@@ -13,7 +13,7 @@ migliore di ciascun worker — la metrica indicata come primaria dallo
 strumento di analisi, più stabile della misura al solo round finale) con il
 relativo \emph{spread} (differenza massimo$-$minimo tra worker, in punti
 percentuali), la distanza L2 media tra i pesi finali dei worker, il numero
-totale di messaggi gossip scambiati e il wall-clock di sistema. La
+totale di messaggi scambiati e il wall-clock di sistema. La
 Tabella~\ref{tab:master} riporta tutti e 16 i run.
 
 Questa griglia non è un fattoriale completo su $N$, $k$ e $H$: ammettendo
@@ -25,18 +25,18 @@ blocchi, un fattore alla volta: il Blocco A (3 run, $N=3$, $k=1$) isola
 l'effetto di $H \in \{100,500,1000\}$, individuando $H=1000$ come migliore;
 il Blocco B (1 run) isola un piccolo aumento di $k$; il Blocco C (4 run,
 $H=1000$) incrocia $N \in \{5,8\}$ con $k \in \{1, N{-}1\}$, i due estremi
-del grado di gossip, isolando l'effetto congiunto di scala e fanout — il
+del fanout, isolando l'effetto congiunto di scala e grado di connettività — il
 compromesso centrale di questo lavoro. Il costo: un'assunzione non
 verificata, che l'$H$ migliore a $N=3$ resti valido a $N=5,8$.
 
 \begin{table*}[t]
   \centering
-  \caption{Risultati per tutte le 16 configurazioni sperimentali ($k$=grado di gossip, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref{sec:results}).}
+  \caption{Risultati per tutte le 16 configurazioni sperimentali ($k$=fanout, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref{sec:results}).}
   \label{tab:master}
   \scriptsize
   \begin{tabular}{llrrrrrrrrr}
     \toprule
-    \textbf{Config} & \textbf{Ambiente} & $N$ & $k$ & $H$ & \textbf{Val.\ acc.} & \textbf{Global-test acc.} & \textbf{Spread} & \textbf{L2} & \textbf{Msg gossip} & \textbf{Wall-clock} \\
+    \textbf{Config} & \textbf{Ambiente} & $N$ & $k$ & $H$ & \textbf{Val.\ acc.} & \textbf{Global-test acc.} & \textbf{Spread} & \textbf{L2} & \textbf{Msg inviati} & \textbf{Wall-clock} \\
     \midrule
     ref      & locale & 3 & 1 & 500  & 0.898$\pm$0.010 & 0.769$\pm$0.101 & 19.1\% & 102.9 & 88   & 5.2 min \\
     h100     & locale & 3 & 1 & 100  & 0.874$\pm$0.024 & 0.760$\pm$0.126 & 24.9\% & 235.4 & 66   & 5.0 min \\
@@ -62,7 +62,7 @@ verificata, che l'$H$ migliore a $N=3$ resti valido a $N=5,8$.
 \subsection{Scalabilità: accuratezza e tempo vs.\ $N$}
 La Fig.~\ref{fig:accuracy_vs_n} mostra accuratezza di validazione e
 global-test al variare di $N$, per $H=1000$ fissato, confrontando $k=1$
-(gossip minimo) con $k=N-1$ (broadcast completo). L'accuratezza di
+(fanout minimo) con $k=N-1$ (broadcast completo a singolo hop). L'accuratezza di
 validazione resta stabile tra l'89\% e il 91\% per ogni $N$ testato, con
 variazioni contenute entro un punto percentuale tra $k=1$ e $k=N-1$: il
 sistema scala senza perdita di qualità sul dato visto localmente. Sul
@@ -80,7 +80,7 @@ a un numero maggiore di aggiornamenti ricevuti per round.
 \end{figure}
 
 \subsection{Overhead di comunicazione}
-Ogni messaggio gossip trasporta l'intero \texttt{state\_dict} del modello
+Ogni messaggio push trasporta l'intero \texttt{state\_dict} del modello
 (1\,704\,350 parametri float32, $\approx$6,82\,MB). Il traffico totale
 stimato (Fig.~\ref{fig:communication}) cresce con $N$ e, soprattutto, con
 $k$: a $N=8$, passare da $k=1$ a $k=N-1$ porta il numero di messaggi
@@ -93,7 +93,7 @@ comunicazione/qualità, non come un miglioramento gratuito.
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{communication_overhead}
-  \caption{Traffico gossip totale stimato (messaggi $\times$ 6,82\,MB) per
+  \caption{Traffico totale stimato (messaggi $\times$ 6,82\,MB) per
   configurazione.}
   \label{fig:communication}
 \end{figure}
@@ -102,14 +102,14 @@ comunicazione/qualità, non come un miglioramento gratuito.
 La Fig.~\ref{fig:phase_timing} scompone la durata media di un round nelle tre
 fasi definite in Sezione~\ref{sec:details}B. In locale la Fase A (merge e
 doppia valutazione) dura 5--13\,s, la Fase B (H passi locali) 0,3--6,9\,s in
-funzione di $H$, la Fase C (invio gossip) resta sotto i 340\,ms anche con
+funzione di $H$, la Fase C (invio push) resta sotto i 340\,ms anche con
 $k=N-1$. Su AWS la Fase A si stabilizza attorno a 105--130\,s
 indipendentemente da $N$ e da $H$ — un valore pressoché costante compatibile
 con un collo di bottiglia sul throughput di inferenza delle istanze
 \texttt{t3.small} (CPU burstable condivisa) piuttosto che con un effetto del
 workload. La Fase C, invece, resta nello stesso ordine di grandezza del caso
 locale (42--292\,ms) anche attraverso rete reale tra istanze EC2 separate:
-l'overhead di comunicazione del protocollo gossip non è la causa del
+l'overhead di comunicazione del protocollo di push non è la causa del
 rallentamento osservato su AWS.
 
 \begin{figure}[t]

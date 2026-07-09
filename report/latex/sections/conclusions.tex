@@ -1,16 +1,16 @@
-\section{Conclusions}
+\section{Conclusioni}
 \label{sec:conclusions}
 
 Questo lavoro ha presentato un sistema di Federated Learning decentralizzato
-peer-to-peer, in cui FedAvg è eseguito tramite aggregazione online e gossip
-$k$-push senza alcun aggregatore centrale per l'intera durata
-dell'addestramento, e in cui la centralizzazione è confinata alla sola
-discovery dei client. Il sistema è stato valutato su FEMNIST (LEAF) con
-partizionamento non-i.i.d.\ per scrittore, in 16 configurazioni tra esecuzione
-locale e deployment reale su AWS multi-istanza, raggiungendo un'accuratezza
-di validazione dell'87--91\% e mostrando che, nel regime testato, il costo di
-comunicazione del protocollo gossip resta trascurabile rispetto al costo del
-calcolo locale, anche su rete reale. L'analisi ha inoltre evidenziato, in
+peer-to-peer, in cui FedAvg è eseguito tramite aggregazione online su pesi
+scambiati con un protocollo di comunicazione push one-hop a fanout fisso $k$,
+senza alcun aggregatore centrale per l'intera durata dell'addestramento, e in
+cui la centralizzazione è confinata alla sola discovery dei client. Il sistema è stato valutato su
+FEMNIST (LEAF) con partizionamento non-i.i.d.\ per scrittore, in 16
+configurazioni tra esecuzione locale e deployment reale su AWS multi-istanza,
+raggiungendo un'accuratezza di validazione dell'87--91\% e mostrando che, nel
+regime testato, il costo di comunicazione del protocollo resta trascurabile
+rispetto al costo del calcolo locale, anche su rete reale. L'analisi ha inoltre evidenziato, in
 modo trasparente, i limiti della convergenza funzionale ottenuta e le
 condizioni sperimentali (singola replica, un confondimento di configurazione)
 sotto cui i risultati vanno interpretati.

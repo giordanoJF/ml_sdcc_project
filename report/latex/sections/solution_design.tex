@@ -1,4 +1,4 @@
-\section{Solution Design}
+\section{Progettazione della soluzione}
 \label{sec:design}
 
 \subsection{Panoramica architetturale}
@@ -37,7 +37,7 @@ letta una sola volta all'avvio (Sezione~\ref{sec:details}C) e sia
 \texttt{fetch\_peers} sia \texttt{deregister\_worker} degradano senza
 propagare l'errore se il discovery server non risponde. Un guasto del
 discovery server dopo l'avvio blocca quindi solo l'ingresso di nuovi client,
-non il gossip già in corso tra quelli attivi, che continuano a operare sulla
+non gli scambi già in corso tra quelli attivi, che continuano a operare sulla
 propria cache locale.
 
 \begin{figure}[t]
@@ -56,7 +56,7 @@ propria cache locale.
     \draw[dashed, ->] (w1) -- (reg);
     \draw[dashed, ->] (w2) -- node[right, font=\tiny]{register/peers} (reg);
 
-    \draw[<->, thick] (w0) -- node[below, font=\tiny]{gossip push (gRPC)} (w1);
+    \draw[<->, thick] (w0) -- node[below, font=\tiny]{push modello (gRPC)} (w1);
     \draw[<->, thick] (w1) -- (w2);
     \draw[<->, thick] (w0) to[bend right=25] (w2);
   \end{tikzpicture}
@@ -71,12 +71,17 @@ propria cache locale.
 
 \subsection{Aggregazione decentralizzata}
 Ogni worker mantiene un buffer di aggregazione protetto da lock. Quando un
-messaggio gossip arriva, il server gRPC non lo accoda: lo somma
+messaggio arriva, il server gRPC non lo accoda: lo somma
 immediatamente, pesato per il numero di campioni del mittente, a un
 accumulatore già esistente (\emph{online aggregation}). Il costo in memoria e
 in tempo di questa operazione è quindi $O(\text{dimensione del modello})$ e
 non $O(K \cdot \text{dimensione del modello})$ come sarebbe mantenendo una
-lista di tutti i modelli ricevuti. All'inizio del round successivo, il thread
+lista di tutti i modelli ricevuti: il buffer conserva sempre un solo modello
+accumulato, non uno per ciascun vicino da cui è arrivato un aggiornamento. A
+$N=8$ con $k=N-1=7$ (Sezione~\ref{sec:results}), un worker può ricevere fino
+a 7 messaggi in un round: mantenerli distinti richiederebbe
+$7\times6{,}82\approx47{,}7$\,MB, contro i $\approx$6,82\,MB costanti
+dell'accumulatore, a prescindere da quanti messaggi arrivino. All'inizio del round successivo, il thread
 di training applica FedAvg (Eq.~\ref{eq:fedavg}) tra il proprio modello e la
 somma pesata accumulata, quindi svuota il buffer. In nessun momento un nodo
 possiede o osserva i pesi di \emph{tutti} gli altri $K-1$ client
@@ -96,7 +101,8 @@ tenuta in una cache locale per l'intera durata del training: se il worker
 la reinterrogasse a ogni round, il traffico verso il discovery server
 crescerebbe linearmente con il numero di round anziché restare $O(1)$ per
 l'intera run, vanificando in parte l'obiettivo di traffico ridotto che
-motiva anche la scelta del k-push (Sezione~\ref{sec:background}E). La cache
+motiva anche la scelta del push one-hop a fanout fisso
+(Sezione~\ref{sec:background}E). La cache
 viene aggiornata solo lazily, cioè non periodicamente ma esclusivamente
 quando serve: ogni invio ha un timeout configurabile e, in caso di
 fallimento, il worker interroga di nuovo il discovery server e ritenta una
@@ -131,7 +137,8 @@ Cloud Computing) sia stato affrontato.
       register/deregister/peers/health, mai pesi del modello
       (Sez.~\ref{sec:design}A). \\
     Aggregazione P2P, no aggregatore singolo & Aggregazione online nel
-      buffer di ciascun worker, gossip $k$-push (Sez.~\ref{sec:design}B). \\
+      buffer di ciascun worker, push one-hop a fanout $k$
+      (Sez.~\ref{sec:design}B). \\
     LEAF, più utenti per client & FEMNIST partizionato per scrittore, blocchi
       di scrittori per worker (Sez.~\ref{sec:details}A). \\
     Scalabilità: accuracy e tempi vs $N$ & $N \in \{3,5,8\}$ testati sia in

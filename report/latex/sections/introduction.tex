@@ -1,43 +1,20 @@
-\section{Introduction}
+\section{Introduzione}
 \label{sec:introduction}
 
-Il Federated Learning (FL) permette a un insieme di nodi client, ciascuno in
+Il Federated Learning permette a un insieme di nodi client, ciascuno in
 possesso di un dataset locale privato, di addestrare collaborativamente un
-modello condiviso senza scambiare i dati grezzi. Nella formulazione classica
-di FedAvg~\cite{mcmahan2017fedavg} un server centrale raccoglie i pesi locali
-di ogni client, li media e ridistribuisce il modello aggiornato: il server è
-un singolo punto di guasto, la sua banda è un collo di bottiglia che cresce
+modello condiviso senza scambiare i dati grezzi. Nella formulazione centralizzata,
+un server raccoglie i pesi locali
+di ogni client, li aggrega secondo un particolare algoritmo e ridistribuisce il modello aggiornato: il server è
+un single point of failure, la sua banda è un collo di bottiglia che cresce
 con il numero di client, e ogni round richiede una sincronizzazione globale
 al passo del client più lento.
 
 Il presente lavoro affronta questi limiti progettando un sistema di FL
-\emph{interamente decentralizzato}: l'aggregazione dei modelli avviene tramite
-un protocollo di gossip peer-to-peer, in cui ciascun client scambia
-periodicamente i propri pesi con un sottoinsieme di vicini scelti casualmente,
-senza che alcun nodo assuma mai il ruolo di aggregatore per l'intera durata
-dell'addestramento. Un componente centralizzato leggero, un discovery server,
+\emph{decentralizzato}: i pesi vengono scambiati tra i client tramite un
+protocollo di comunicazione peer-to-peer a push one-hop e fanout fisso, in
+cui ciascun client invia periodicamente i propri pesi a un sottoinsieme di
+vicini scelti casualmente, e vengono aggregati localmente da chi li riceve
+tramite FedAvg. Un componente centralizzato, il discovery server,
 resta limitato esclusivamente alla registrazione e alla scoperta reciproca dei
-client: non riceve, non memorizza e non media alcun peso del modello.
-
-I contributi di questo lavoro sono i seguenti:
-\begin{itemize}
-  \item un'implementazione di FedAvg eseguita in modo decentralizzato tramite
-        aggregazione online e gossip \emph{k-push}, con costo di memoria e di
-        calcolo per messaggio ricevuto indipendente dal numero di client;
-  \item una valutazione sperimentale su FEMNIST (progetto LEAF), con
-        partizionamento non-i.i.d.\ per scrittore e più utenti LEAF assegnati
-        a ciascun client, per simulare uno scenario realistico;
-  \item un'analisi di scalabilità che confronta accuratezza e tempi di
-        addestramento al variare del numero di client (3, 5, 8) e del grado
-        di gossip, sia in esecuzione locale sia su infrastruttura AWS
-        multi-istanza reale (un'istanza EC2 per client);
-  \item una misura diretta, e non solo stimata, dell'overhead di
-        comunicazione introdotto dal protocollo di coordinamento, confrontato
-        con il costo del training locale.
-\end{itemize}
-
-Il resto dell'articolo: Sezione~\ref{sec:background} richiama FedAvg, DiLoCo
-e LEAF/FEMNIST; Sezioni~\ref{sec:design}--\ref{sec:details} descrivono
-architettura e implementazione; Sezione~\ref{sec:results} presenta i
-risultati; Sezione~\ref{sec:discussion} li discute criticamente, incluse le
-limitazioni; Sezione~\ref{sec:conclusions} conclude.
+client.

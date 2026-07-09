@@ -1,4 +1,4 @@
-\section{Solution Details}
+\section{Dettagli implementativi}
 \label{sec:details}
 
 \subsection{Partizionamento non-i.i.d.\ del dataset}
@@ -11,8 +11,8 @@ validazione (usata per early stopping e come metrica di accuratezza
 riportata). Una frazione separata di scrittori del test set LEAF, mai
 assegnata a nessun worker, è riservata come \emph{global test set} condiviso:
 valutare tutti i worker sullo stesso insieme di scrittori mai visti permette
-di misurare la convergenza \emph{funzionale} del protocollo gossip, non solo
-la vicinanza dei pesi. Non è applicato alcun pre-processing o data
+di misurare la convergenza \emph{funzionale} del protocollo di comunicazione,
+non solo la vicinanza dei pesi. Non è applicato alcun pre-processing o data
 augmentation oltre alla normalizzazione $[0,1]$ già presente nel formato
 LEAF: introdurre trasformazioni casuali (rotazioni, rumore) per worker
 altererebbe artificialmente l'eterogeneità naturale degli stili di
@@ -34,7 +34,7 @@ indipendentemente e riportate nella Sezione~\ref{sec:results}:
         training set indefinitamente, cosicché ogni round processi esattamente
         $H \times \text{batch\_size}$ campioni indipendentemente dalla
         dimensione della partizione locale.
-  \item \textbf{Fase C — gossip push.} Il worker seleziona $\min(k,
+  \item \textbf{Fase C — push one-hop.} Il worker seleziona $\min(k,
         |\text{peer disponibili}|)$ vicini \emph{casualmente e in modo
         indipendente a ogni round} (non c'è memoria della selezione dei round
         precedenti) dalla propria cache di peer, e invia loro uno snapshot
@@ -60,7 +60,7 @@ Il modello (Tabella~\ref{tab:model}) è una CNN con due blocchi
 convoluzionali (32 e 64 canali, batch normalization, dropout spaziale) e un
 classificatore fully-connected, per un totale di 1\,704\,350 parametri
 float32 — circa 6,82\,MB per snapshot serializzato, la quantità di dati
-effettivamente trasmessa a ogni gossip push.
+effettivamente trasmessa a ogni push.
 
 \begin{table}[t]
   \centering
@@ -82,7 +82,7 @@ effettivamente trasmessa a ogni gossip push.
 
 Il sistema include meccanismi opzionali di fault injection configurabili
 (probabilità di crash simulato via \texttt{sys.exit} e di drop silenzioso di
-un messaggio gossip), implementati ma non esercitati in nessuno dei 16 run
+un messaggio), implementati ma non esercitati in nessuno dei 16 run
 riportati (\texttt{crash\_probability} e \texttt{drop\_probability} sono nulle
 in tutta la campagna sperimentale, Sezione~\ref{sec:results}): la loro
 validazione empirica non è stata effettuata per mancanza di tempo e resta
@@ -124,14 +124,14 @@ learning rate, batch size, dropout, label smoothing, gradient clipping,
 architettura della CNN — mai oggetto della griglia. \emph{Parametri di
 sistema variati} (Sezione~\ref{sec:results}): $H\in\{100,500,1000\}$ (Blocco
 A, $N=3$ fisso; 500 è il valore di riferimento di
-DiLoCo~\cite{douillard2023diloco}), il grado di gossip $k$ e $N\in\{3,5,8\}$
+DiLoCo~\cite{douillard2023diloco}), il fanout $k$ e $N\in\{3,5,8\}$
 (Blocchi B e C) — i soli tre parametri di cui questo lavoro misura l'effetto
 comparativo. \emph{Parametri strutturali fissi}: FedAvg,
 \texttt{max\_staleness}=10, fault injection disattivata.
 
 \subsection{Piattaforma software}
 Il sistema è implementato in Python 3.11 con PyTorch (modello e training),
-gRPC/Protobuf (comunicazione gossip), Flask (discovery server), containerizzato
+gRPC/Protobuf (comunicazione push tra worker), Flask (discovery server), containerizzato
 con Docker e orchestrato con Docker Compose in locale. Il deployment su AWS
 usa Terraform per provisionare un'istanza EC2 per worker più una per il
 discovery server (modalità multi-istanza, rete reale tra macchine fisicamente
@@ -141,8 +141,47 @@ Il sistema non include una suite di test automatizzati (unit o integration
 test); la sua validazione è di tipo empirico, tramite esecuzione end-to-end
 sulle 16 configurazioni sperimentali di Sezione~\ref{sec:results}, con
 verifica incrociata delle metriche registrate (conteggio dei messaggi
-gossip, tempi di fase, coerenza tra round completati e pazienza configurata)
+scambiati, tempi di fase, coerenza tra round completati e pazienza configurata)
 contro i log grezzi prodotti da ciascun worker.
+
+\subsection{Vincolo di RAM e caricamento del dataset}
+Il caricamento del dataset non è \emph{lazy}: \texttt{FEMNISTDataset.\_\_init\_\_}
+converte l'intero split di training in tensori tenuti in memoria all'avvio,
+una scelta di semplicità che però si scontra con il vincolo di RAM delle
+istanze \texttt{t3.small} usate su AWS (2\,GB, Sezione~\ref{sec:results}). Il
+formato LEAF serializza i pixel come numeri in JSON: durante il parsing, ogni
+valore diventa un oggetto \texttt{float} Python, che occupa $\sim$24\,byte per
+via dell'overhead dell'interprete, contro i 4\,byte di un \texttt{float32}
+compatto. Con $N=8$ worker ($\sim$100\,000 immagini ciascuno, 784 pixel per
+immagine) il picco di RAM durante il solo parsing JSON era
+$100\,000 \times 784 \times 24\,\text{byte} \approx 1{,}9$\,GB per singolo
+worker; con $N=3$ ($\sim$267\,000 immagini ciascuno) saliva a
+$\sim$4{,}6\,GB — ben oltre i 2\,GB disponibili. Il sintomo era un OOM kill
+(\texttt{SIGKILL}) su worker scelti a caso durante l'avvio, con il cluster
+bloccato a $N{-}1$ worker registrati su $N$ attesi.
+
+La correzione separa il parsing dal caricamento a runtime.
+\texttt{split\_dataset.py} esegue ora una terza passata che rilegge il JSON
+già scritto per ciascun worker e lo converte, una sola volta, in array NumPy
+tipizzati (\texttt{float32} + \texttt{int64}), salvati come
+\texttt{data.npy}/\texttt{labels.npy} accanto al JSON originale.
+\texttt{dataset.py} carica questi binari con \texttt{np.load} quando
+presenti, con fallback al JSON per gli split generati prima della modifica:
+niente più oggetti \texttt{float} Python intermedi, il picco di RAM scende
+alla sola dimensione dell'array ($\sim$310\,MB a $N=8$, $\sim$830\,MB a
+$N=3$), e \texttt{torch.from\_numpy} condivide la memoria con l'array NumPy
+senza copie aggiuntive. Il \emph{global test set}, letto in sola lettura da
+tutti i worker, usa inoltre \texttt{np.load(mmap\_mode=\textquotesingle
+c\textquotesingle)}: nelle modalità in cui più worker condividono la stessa
+macchina (locale, single-EC2) il sistema operativo mappa le stesse pagine
+fisiche per tutti i processi che aprono il file, azzerando la duplicazione
+che si avrebbe altrimenti per worker; in modalità multi-istanza, dove ogni
+EC2 ospita un solo worker, questo beneficio di condivisione non si applica,
+ma \texttt{mmap} resta comunque corretto ed evita il parsing JSON. Le
+partizioni per-worker non usano \texttt{mmap}: ogni worker legge un file
+diverso, quindi nessuna condivisione tra processi è possibile, e un array
+contiguo in RAM resta preferibile per l'accesso casuale del training loop con
+shuffle.
 
 \subsection{Riusabilità}
 Il sistema è progettato per non dipendere dalle specificità di FEMNIST. Il
@@ -152,16 +191,17 @@ tra loro: l'eterogeneità è il caso di base gestito dal progetto, non
 un'eccezione da accomodare — un dataset LEAF diverso (es.\ Shakespeare,
 Sentiment140) o una partizione non-i.i.d.\ più estrema richiederebbero solo
 un nuovo caricatore dati (\texttt{core/dataset.py}), non una riprogettazione
-della logica di training o di gossip. L'unica dipendenza strutturale esterna
+della logica di training o di comunicazione. L'unica dipendenza strutturale esterna
 è il discovery server, che espone quattro soli endpoint REST: adattare il
 sistema a un'altra infrastruttura (altro cloud provider, rete locale, un
 mix di dispositivi edge) richiede solo di ripuntare l'URL del registro, non
-di modificare il protocollo di aggregazione. Il protocollo di gossip stesso è
-agnostico rispetto all'architettura del modello — serializza un intero
-\texttt{state\_dict} PyTorch senza logica specifica per \texttt{FEMNISTModel}
-— per cui sostituire la rete neurale richiede di cambiare un solo punto di
-istanziazione, non il livello di rete. Infine, il numero di client, il grado
-di gossip e tutti gli iperparametri sono parametrizzati in un unico file di
+di modificare il protocollo di aggregazione. Il protocollo di comunicazione
+stesso è agnostico rispetto all'architettura del modello — serializza un
+intero \texttt{state\_dict} PyTorch senza logica specifica per
+\texttt{FEMNISTModel} — per cui sostituire la rete neurale richiede di
+cambiare un solo punto di istanziazione, non il livello di rete. Infine, il
+numero di client, il fanout $k$ e tutti gli iperparametri sono parametrizzati
+in un unico file di
 configurazione: adattare il sistema a una nuova scala non richiede modifiche
 al codice, come dimostrato direttamente dai run a $N=3,5,8$ di
 Sezione~\ref{sec:results}. La scelta di gRPC su Protobuf è motivata anche da questo obiettivo di
