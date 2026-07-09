@@ -246,6 +246,7 @@ def main():
         "global_test_accuracy" in (all_rows[0] if all_rows else {})
         and any(r.get("global_test_accuracy", "") != "" for r in all_rows)
     )
+    has_macro_metrics = "val_macro_f1" in (all_rows[0] if all_rows else {})
 
     # ---------------------------------------------------------------------------
     # Per-round global statistics
@@ -290,6 +291,23 @@ def main():
                 std_gt = statistics.stdev(gt_accs) if len(gt_accs) > 1 else 0.0
                 row_data["mean_global_test_accuracy"] = round(mean_gt, 6)
                 row_data["std_global_test_accuracy"] = round(std_gt, 6)
+
+        if has_macro_metrics:
+            # Cross-worker mean/std per round for macro precision/recall/F1,
+            # mirroring the accuracy aggregation above — computed from the
+            # per-worker raw CSVs, which already carry these columns every
+            # round (core/metrics.py); only the aggregated view was missing.
+            for prefix, label in (("val", "val"), ("global_test", "global_test")):
+                if prefix == "global_test" and not has_global_test:
+                    continue
+                for metric in ("macro_precision", "macro_recall", "macro_f1"):
+                    key = f"{prefix}_{metric}"
+                    vals = [float(e[key]) for e in entries if e.get(key, "") != ""]
+                    if vals:
+                        row_data[f"mean_{label}_{metric}"] = round(statistics.mean(vals), 6)
+                        row_data[f"std_{label}_{metric}"] = round(
+                            statistics.stdev(vals) if len(vals) > 1 else 0.0, 6
+                        )
 
         if has_timing:
             mean_pa = statistics.mean(float(e.get("phase_a_s", 0)) for e in entries)
@@ -484,6 +502,12 @@ def main():
                          "max_accuracy", "mean_val_loss", "workers_reporting"]
         if has_global_test:
             global_fields += ["mean_global_test_accuracy", "std_global_test_accuracy"]
+        if has_macro_metrics:
+            for prefix in ("val", "global_test"):
+                if prefix == "global_test" and not has_global_test:
+                    continue
+                for metric in ("macro_precision", "macro_recall", "macro_f1"):
+                    global_fields += [f"mean_{prefix}_{metric}", f"std_{prefix}_{metric}"]
         if has_timing:
             global_fields += ["mean_phase_a_s", "mean_phase_b_s", "mean_phase_c_s"]
         with open(global_csv_path, "w", newline="") as f:

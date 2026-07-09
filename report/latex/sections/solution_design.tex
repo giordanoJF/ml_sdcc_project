@@ -2,46 +2,38 @@
 \label{sec:design}
 
 \subsection{Panoramica architetturale}
-Il sistema è composto da $K$ nodi \emph{worker} paritari e da un
-\emph{discovery server} leggero (Fig.~\ref{fig:architecture}). Ogni worker
+Il sistema è composto da $K$ nodi \emph{worker}
+(con la stessa architettura del modello di ml e dati differenti privati) e da un
+\emph{discovery server} (Fig.~\ref{fig:architecture}). Ogni worker
 esegue due thread indipendenti: un server gRPC che riceve i modelli inviati
 dai vicini (Fase C di un altro worker) e li accumula in un buffer condiviso,
 e un ciclo di training che, a ogni round, aggrega quanto ricevuto, esegue
 addestramento locale e invia i propri pesi a un sottoinsieme di vicini.
-Qualunque worker può avviare il proprio processo di training in autonomia,
-leggendo iperparametri e riferimenti dei peer coinvolti da una configurazione
-condivisa (\texttt{config.yaml}) e dal discovery server; non esiste un nodo
-che comandi l'avvio degli altri. Questo soddisfa la decentralizzazione
-dell'\emph{avvio} richiesta dalla traccia — nessun coordinatore privilegiato
-è necessario. Il sistema resta però un job sincronizzato all'avvio, non un
-servizio always-on: prima di iniziare il training, ogni worker attende
-(Sezione~\ref{sec:details}A) che l'intera coorte di $K$ client configurati
-sia online, con un timeout oltre il quale procede comunque con i peer
-disponibili; un client non può quindi iniziare una nuova sessione in un
-istante arbitrario senza un nuovo deployment, un limite condiviso con la
-generalità dei job di training distribuito (analogamente a un job
-SLURM/MPI) e discusso in Sezione~\ref{sec:conclusions} come possibile
-estensione.
+Qualunque worker può avviare il proprio processo di training in autonomia.
 
 Il discovery server espone quattro sole operazioni REST
 (\texttt{/register}, \texttt{/deregister}, \texttt{/peers}, \texttt{/health}),
+implementate in Flask invece che in gRPC: una scelta di semplicità,
+giustificata dal fatto che il suo traffico resta minimo rispetto ai
+messaggi gRPC scambiati tra worker — la lista dei peer è letta dai worker
+una sola volta all'avvio (o su richiesta, in caso di timeout verso un
+peer), contro gli $N \times k$ messaggi gRPC per round dedicati al trasporto
+dei pesi (Sezione~\ref{sec:results}). Il discovery server
 mantiene in memoria una mappa \texttt{worker\_id~$\to$~indirizzo} e non
 riceve, memorizza o media mai un peso del modello. Il suo unico compito
 aggiuntivo è un \emph{watchdog} che forza la terminazione del cluster se un
 worker non si deregistra correttamente entro un timeout — una funzione di
-coordinamento della terminazione, non di training. Questo confina la
-centralizzazione ai soli compiti di avvio/terminazione e identificazione dei
-client, come richiesto dalla traccia. Il raggio d'azione di questo singolo
-componente centralizzato è inoltre limitato nel tempo: la lista dei peer è
-letta una sola volta all'avvio (Sezione~\ref{sec:details}C) e sia
-\texttt{fetch\_peers} sia \texttt{deregister\_worker} degradano senza
-propagare l'errore se il discovery server non risponde. Un guasto del
-discovery server dopo l'avvio blocca quindi solo l'ingresso di nuovi client,
+coordinamento della terminazione, che ci è stata utile nel debug. Il raggio d'azione del registry
+è inoltre limitato nel tempo: la lista dei peer è
+letta una sola volta all'avvio (Sezione~\ref{sec:details}B) oppure quando si vuole riaggiornare la cache in caso
+di timeout da parte dei worker. Un guasto del
+discovery server dopo l'avvio blocca solo l'ingresso di nuovi client,
 non gli scambi già in corso tra quelli attivi, che continuano a operare sulla
 propria cache locale.
 
 \begin{figure}[t]
   \centering
+  \resizebox{\linewidth}{!}{%
   \begin{tikzpicture}[
       node distance=0.9cm and 1.1cm,
       box/.style={draw, rounded corners, minimum width=2.1cm, minimum height=0.8cm, align=center, font=\footnotesize},
@@ -59,13 +51,25 @@ propria cache locale.
     \draw[<->, thick] (w0) -- node[below, font=\tiny]{push modello (gRPC)} (w1);
     \draw[<->, thick] (w1) -- (w2);
     \draw[<->, thick] (w0) to[bend right=25] (w2);
-  \end{tikzpicture}
+
+    \begin{scope}[on background layer]
+      \node[draw, dashed, rounded corners, fit=(reg)(w0)(w1)(w2),
+            inner xsep=0.4cm, inner ysep=0.6cm,
+            label={[font=\small, align=left]above left:AWS (istanze EC2)}] (awsbox) {};
+    \end{scope}
+
+    \node[box, above=2.2cm of awsbox.north] (term) {Terminale locale};
+    \draw[<->, thick] (term) -- node[right, font=\small, align=left]{deploy\\collect + metriche} (awsbox.north);
+  \end{tikzpicture}%
+  }
   \caption{Architettura logica: il discovery server gestisce solo la
   registrazione (linee tratteggiate REST); i modelli viaggiano esclusivamente
   peer-to-peer via gRPC (frecce continue). Il grafo tra worker è
   \emph{potenziale}, non fisso: a ogni round ciascun worker sceglie
   casualmente $k$ destinatari tra i peer disponibili, senza inoltro da parte
-  di chi riceve (Sezione~\ref{sec:background}E).}
+  di chi riceve (Sezione~\ref{sec:background}E). Il riquadro tratteggiato
+  rappresenta le istanze AWS; il terminale locale lancia il deployment,
+  raccoglie i risultati e calcola le metriche aggregate a fine training.}
   \label{fig:architecture}
 \end{figure}
 
@@ -73,7 +77,7 @@ propria cache locale.
 Ogni worker mantiene un buffer di aggregazione protetto da lock. Quando un
 messaggio arriva, il server gRPC non lo accoda: lo somma
 immediatamente, pesato per il numero di campioni del mittente, a un
-accumulatore già esistente (\emph{online aggregation}). Il costo in memoria e
+accumulatore già esistente. Il costo in memoria e
 in tempo di questa operazione è quindi $O(\text{dimensione del modello})$ e
 non $O(K \cdot \text{dimensione del modello})$ come sarebbe mantenendo una
 lista di tutti i modelli ricevuti: il buffer conserva sempre un solo modello
@@ -83,12 +87,7 @@ a 7 messaggi in un round: mantenerli distinti richiederebbe
 $7\times6{,}82\approx47{,}7$\,MB, contro i $\approx$6,82\,MB costanti
 dell'accumulatore, a prescindere da quanti messaggi arrivino. All'inizio del round successivo, il thread
 di training applica FedAvg (Eq.~\ref{eq:fedavg}) tra il proprio modello e la
-somma pesata accumulata, quindi svuota il buffer. In nessun momento un nodo
-possiede o osserva i pesi di \emph{tutti} gli altri $K-1$ client
-contemporaneamente: ciascun worker aggrega solo ciò che i suoi vicini gli
-hanno inviato, realizzando un'aggregazione FedAvg genuinamente
-peer-to-peer e priva di un aggregatore singolo per l'intera durata del
-processo.
+somma pesata accumulata, quindi svuota il buffer.
 
 \subsection{Motivazione delle scelte protocollari}
 La comunicazione tra worker usa gRPC su Protobuf anziché REST/JSON: la
@@ -109,45 +108,3 @@ fallimento, il worker interroga di nuovo il discovery server e ritenta una
 sola volta con peer non ancora contattati in quel round — evitando sia
 blocchi su nodi caduti sia un sovraccarico di richieste al discovery server
 nei round in cui tutto funziona normalmente.
-
-\subsection{Aderenza ai requisiti}
-La Tabella~\ref{tab:requirements} riassume come ciascun requisito della
-traccia (progetto ML e vincoli imposti per il corso di Sistemi Distribuiti e
-Cloud Computing) sia stato affrontato.
-
-\begin{table}[t]
-  \centering
-  \caption{Mappatura requisiti $\to$ soluzione adottata.}
-  \label{tab:requirements}
-  \footnotesize
-  \begin{tabular}{p{2.3cm}p{5.3cm}}
-    \toprule
-    \textbf{Requisito} & \textbf{Come è soddisfatto} \\
-    \midrule
-    Team di 2 studenti & Progetto sviluppato da 2 autori; la modalità
-      centralizzata con parameter server è opzionale solo per team da 3 e
-      non è stata implementata. \\
-    $K$ client, avvio autonomo & Ogni worker legge \texttt{config.yaml} e
-      avvia il proprio ciclo di training senza comando esterno
-      (Sez.~\ref{sec:design}A). \\
-    Scelta della strategia di aggregazione & FedAvg selezionabile via
-      \texttt{aggregation\_strategy} in configurazione; unica strategia
-      implementata (Sez.~\ref{sec:background}D). \\
-    Centralizzazione limitata al coordinamento & Discovery server: solo
-      register/deregister/peers/health, mai pesi del modello
-      (Sez.~\ref{sec:design}A). \\
-    Aggregazione P2P, no aggregatore singolo & Aggregazione online nel
-      buffer di ciascun worker, push one-hop a fanout $k$
-      (Sez.~\ref{sec:design}B). \\
-    LEAF, più utenti per client & FEMNIST partizionato per scrittore, blocchi
-      di scrittori per worker (Sez.~\ref{sec:details}A). \\
-    Scalabilità: accuracy e tempi vs $N$ & $N \in \{3,5,8\}$ testati sia in
-      locale sia su AWS multi-istanza (Sez.~\ref{sec:results}). \\
-    Efficienza di comunicazione & Dimensione messaggio, traffico stimato e
-      tempo di Fase C misurati separatamente dal training
-      (Sez.~\ref{sec:results}). \\
-    Fault tolerance (opzionale) & Crash/drop injection, timeout, retry,
-      staleness check (Sez.~\ref{sec:details}C). \\
-    \bottomrule
-  \end{tabular}
-\end{table}

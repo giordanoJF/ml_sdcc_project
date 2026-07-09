@@ -1,8 +1,5 @@
 \relax 
-\citation{mcmahan2017fedavg}
-\citation{li2020convergence}
 \citation{douillard2023diloco}
-\citation{caldas2018leaf}
 \citation{li2020fedprox}
 \citation{karimireddy2020scaffold}
 \citation{li2021fedbn}
@@ -15,54 +12,48 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}DiLoCo e comunicazione sparsa}{1}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}Dataset: LEAF e FEMNIST}{1}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-D}}Strategie alternative non implementate}{1}{}\protected@file@percent }
-\citation{demers1987epidemic}
-\citation{lv2002search}
-\citation{birman1999bimodal}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-E}}Scelta del protocollo di comunicazione: perché non flooding, random walk o gossip epidemico}{2}{}\protected@file@percent }
-\citation{lian2017can,boyd2006randomized}
-\@writefile{toc}{\contentsline {section}{\numberline {III}Progettazione della soluzione}{3}{}\protected@file@percent }
-\newlabel{sec:design}{{III}{3}{}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}Panoramica architetturale}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-E}}Scelta del protocollo di comunicazione}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Progettazione della soluzione}{2}{}\protected@file@percent }
+\newlabel{sec:design}{{III}{2}{}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}Panoramica architetturale}{2}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Architettura logica: il discovery server gestisce solo la registrazione (linee tratteggiate REST); i modelli viaggiano esclusivamente peer-to-peer via gRPC (frecce continue). Il grafo tra worker è \emph  {potenziale}, non fisso: a ogni round ciascun worker sceglie casualmente $k$ destinatari tra i peer disponibili, senza inoltro da parte di chi riceve (Sezione~\ref {sec:background}E). Il riquadro tratteggiato rappresenta le istanze AWS; il terminale locale lancia il deployment, raccoglie i risultati e calcola le metriche aggregate a fine training.}}{3}{}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{3}{}{figure.1}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-B}}Aggregazione decentralizzata}{3}{}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Architettura logica: il discovery server gestisce solo la registrazione (linee tratteggiate REST); i modelli viaggiano esclusivamente peer-to-peer via gRPC (frecce continue). Il grafo tra worker è \emph  {potenziale}, non fisso: a ogni round ciascun worker sceglie casualmente $k$ destinatari tra i peer disponibili, senza inoltro da parte di chi riceve (Sezione~\ref {sec:background}E).}}{4}{}\protected@file@percent }
-\newlabel{fig:architecture}{{1}{4}{}{figure.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-C}}Motivazione delle scelte protocollari}{4}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-D}}Aderenza ai requisiti}{4}{}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Mappatura requisiti $\to $ soluzione adottata.}}{4}{}\protected@file@percent }
-\newlabel{tab:requirements}{{I}{4}{}{table.1}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {IV}Dettagli implementativi}{4}{}\protected@file@percent }
-\newlabel{sec:details}{{IV}{4}{}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Partizionamento non-i.i.d.\ del dataset}{4}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Ciclo di training a tre fasi}{4}{}\protected@file@percent }
-\citation{simonyan2015vgg}
-\citation{srivastava2014dropout}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-C}}Motivazione delle scelte protocollari}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {IV}Dettagli implementativi}{3}{}\protected@file@percent }
+\newlabel{sec:details}{{IV}{3}{}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Partizionamento non-i.i.d.\ del dataset}{3}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Ciclo di training a tre fasi}{3}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Conteggio dei parametri della CNN.}}{4}{}\protected@file@percent }
+\newlabel{tab:model}{{I}{4}{}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Modello}{4}{}\protected@file@percent }
+\citation{he2015delving}
 \citation{szegedy2016rethinking}
+\citation{loshchilov2019decoupled}
 \citation{douillard2023diloco}
-\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Conteggio dei parametri della CNN.}}{5}{}\protected@file@percent }
-\newlabel{tab:model}{{II}{5}{}{table.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Modello e tolleranza ai guasti}{5}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Motivazione dell'architettura e degli iperparametri}{5}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Piattaforma software}{5}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-F}}Vincolo di RAM e caricamento del dataset}{6}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-G}}Riusabilità}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Tolleranza ai guasti}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Motivazione degli iperparametri di training}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-F}}Piattaforma software}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-G}}Vincolo di RAM e caricamento del dataset}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-H}}Riusabilità}{6}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {V}Risultati}{6}{}\protected@file@percent }
 \newlabel{sec:results}{{V}{6}{}{section.5}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Risultati per tutte le 16 configurazioni sperimentali ($k$=fanout, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref {sec:results}).}}{7}{}\protected@file@percent }
-\newlabel{tab:master}{{III}{7}{}{table.3}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Accuratezza di validazione (sinistra) e sul global test set (destra) al variare di $N$, per $k=1$ e $k=N-1$, locale vs.\ AWS.}}{7}{}\protected@file@percent }
 \newlabel{fig:accuracy_vs_n}{{2}{7}{}{figure.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Scalabilità: accuratezza e tempo vs.\ $N$}{7}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Overhead di comunicazione}{7}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Dove viene speso il tempo}{7}{}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Traffico totale stimato (messaggi $\times $ 6,82\,MB) per configurazione.}}{7}{}\protected@file@percent }
 \newlabel{fig:communication}{{3}{7}{}{figure.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Dove viene speso il tempo}{7}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Durata media delle fasi A, B, C per round, locale vs.\ AWS.}}{7}{}\protected@file@percent }
+\newlabel{fig:phase_timing}{{4}{7}{}{figure.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-D}}Locale vs.\ AWS multi-istanza}{7}{}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Durata media delle fasi A, B, C per round, locale vs.\ AWS.}}{8}{}\protected@file@percent }
-\newlabel{fig:phase_timing}{{4}{8}{}{figure.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Discussione}{7}{}\protected@file@percent }
+\newlabel{sec:discussion}{{VI}{7}{}{section.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Risultati per tutte le 16 configurazioni sperimentali ($k$=fanout, $H$=passi locali; spread e L2 sul global test set — Sez.~\ref {sec:results}).}}{8}{}\protected@file@percent }
+\newlabel{tab:master}{{II}{8}{}{table.2}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Wall-clock di sistema (scala log) e spread di accuratezza global-test, per le 8 configurazioni condivise da locale e AWS.}}{8}{}\protected@file@percent }
 \newlabel{fig:local_vs_aws}{{5}{8}{}{figure.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {VI}Discussione}{8}{}\protected@file@percent }
-\newlabel{sec:discussion}{{VI}{8}{}{section.6}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Il fanout $k$ come compromesso esplicito}{8}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-B}}Comunicazione non è il collo di bottiglia}{8}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-C}}Nota metodologica sulla metrica di convergenza funzionale}{8}{}\protected@file@percent }
@@ -71,23 +62,16 @@
 \citation{li2020fedprox}
 \bibstyle{IEEEtran}
 \bibdata{references}
-\bibcite{mcmahan2017fedavg}{1}
+\bibcite{douillard2023diloco}{1}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-E}}Confronto con la letteratura}{9}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {VII}Conclusioni}{9}{}\protected@file@percent }
 \newlabel{sec:conclusions}{{VII}{9}{}{section.7}{}}
-\@writefile{toc}{\contentsline {section}{References}{9}{}\protected@file@percent }
-\bibcite{li2020convergence}{2}
-\bibcite{douillard2023diloco}{3}
-\bibcite{caldas2018leaf}{4}
-\bibcite{li2020fedprox}{5}
-\bibcite{karimireddy2020scaffold}{6}
-\bibcite{li2021fedbn}{7}
-\bibcite{demers1987epidemic}{8}
-\bibcite{lv2002search}{9}
-\bibcite{birman1999bimodal}{10}
-\bibcite{lian2017can}{11}
-\bibcite{boyd2006randomized}{12}
-\bibcite{simonyan2015vgg}{13}
-\bibcite{srivastava2014dropout}{14}
-\bibcite{szegedy2016rethinking}{15}
+\bibcite{li2020fedprox}{2}
+\bibcite{karimireddy2020scaffold}{3}
+\bibcite{li2021fedbn}{4}
+\bibcite{srivastava2014dropout}{5}
+\bibcite{he2015delving}{6}
+\bibcite{loshchilov2019decoupled}{7}
+\bibcite{szegedy2016rethinking}{8}
+\@writefile{toc}{\contentsline {section}{References}{10}{}\protected@file@percent }
 \gdef \@abspage@last{10}

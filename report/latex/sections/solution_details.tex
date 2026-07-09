@@ -12,15 +12,52 @@ riportata). Una frazione separata di scrittori del test set LEAF, mai
 assegnata a nessun worker, è riservata come \emph{global test set} condiviso:
 valutare tutti i worker sullo stesso insieme di scrittori mai visti permette
 di misurare la convergenza \emph{funzionale} del protocollo di comunicazione,
-non solo la vicinanza dei pesi. Non è applicato alcun pre-processing o data
-augmentation oltre alla normalizzazione $[0,1]$ già presente nel formato
-LEAF: introdurre trasformazioni casuali (rotazioni, rumore) per worker
+non solo la vicinanza dei pesi. Va detto che un global test set di questo
+tipo non è detto sia disponibile in uno scenario reale: resta comunque un
+agglomerato di dati privati. In questo lavoro lo si
+è reso necessario per uno scopo puramente valutativo, misurare la
+convergenza funzionale del sistema durante la sperimentazione. Non è applicato alcun pre-processing o data
+augmentation: introdurre trasformazioni casuali (rotazioni, rumore) per worker
 altererebbe artificialmente l'eterogeneità naturale degli stili di
 scrittura, che è proprio l'oggetto di studio di un sistema FL non-i.i.d.
+E' chiaro come in uno scenario reale, i veri proprietari dei dati, potrebbero applicare tecniche di data augmentation localmente,
+col fine di combattere la reale natura non iid dei dati. Il sistema implementa
+anche un \emph{local test set} opzionale (\texttt{local\_test\_set: true}):
+un'ulteriore frazione di campioni riservata all'interno della partizione di
+ciascun worker, dagli \emph{stessi} scrittori già presenti in train/val di
+quel worker ma con campioni distinti, tenuti fuori dagli aggiornamenti del
+gradiente — misura la generalizzazione su campioni mai visti di scrittori
+già noti al worker, non su scrittori nuovi. Non è stato usato nella campagna sperimentale di questo
+lavoro (Sezione~\ref{sec:results}): il global test set risponde già alla
+domanda più rilevante per un sistema FL P2P — la convergenza
+\emph{funzionale tra worker} su scrittori ignoti a tutti — mentre il local
+test set misurerebbe una generalizzazione più ristretta, sugli stili di
+scrittura già visti da un singolo worker.
 
 \subsection{Ciclo di training a tre fasi}
 Ogni round di ogni worker è composto da tre fasi, cronometrate
-indipendentemente e riportate nella Sezione~\ref{sec:results}:
+indipendentemente e riportate nella Sezione~\ref{sec:results}.
+
+La sincronizzazione avviene su un numero fisso di passi $H$, non su epoche:
+le partizioni non sono bilanciate tra worker (Sezione~\ref{sec:details}A),
+quindi un criterio "un round = un'epoca" farebbe comunicare più spesso i
+worker con meno dati, rendendo la frequenza di comunicazione una
+conseguenza indiretta del partizionamento anziché un parametro controllato
+direttamente — a parità di $H$, tutti i worker comunicano alla stessa
+cadenza indipendentemente da quanti dati hanno (ma sempre in funzione dell'hardware).
+
+La struttura è a tre livelli annidati, dal più piccolo al più grande. Il
+\emph{minibatch} è l'unità elementare: \texttt{batch\_size}$=32$ campioni,
+un passo di SGD (\texttt{train\_step}). L'\emph{epoca} è un giro completo
+sulla partizione locale del worker — l'ultimo minibatch incompleto viene
+scartato (\texttt{drop\_last=True}), per non avere batch di dimensione
+variabile che destabilizzerebbero le statistiche di Batch Normalization. Il
+\emph{round} — l'unità su cui il sistema sincronizza — è $H$ minibatch
+consecutivi: gli \emph{inner step} di DiLoCo (Sezione~\ref{sec:background}B)
+sono letteralmente $H$ ripetizioni di un minibatch, non $H$ epoche, e
+possono quindi coprire una piccola frazione di un'epoca, un'epoca esatta, o
+più epoche a seconda di come $H\times32$ si confronta con la dimensione
+della partizione — il caso concreto è discusso in Fase B qui sotto.
 
 \begin{itemize}
   \item \textbf{Fase A — aggregazione e valutazione.} Il worker applica
@@ -33,18 +70,39 @@ indipendentemente e riportate nella Sezione~\ref{sec:results}:
         SGD (AdamW, batch size 32) su un iteratore che ricicla il proprio
         training set indefinitamente, cosicché ogni round processi esattamente
         $H \times \text{batch\_size}$ campioni indipendentemente dalla
-        dimensione della partizione locale.
+        dimensione della partizione locale. L'iteratore è un generatore
+        continuo (\texttt{while True: yield from loader}), creato una sola
+        volta prima del ciclo dei round: se
+        un'epoca termina durante
+        i passi $H$ di un round, il generatore prosegue trasparentemente
+        nell'epoca successiva con un nuovo shuffle, senza che il confine di
+        round interferisca. Nelle configurazioni qui testate un'epoca non si
+        esaurisce comunque mai entro un singolo round, quindi non si
+        verificano letture ripetute dello stesso campione
+        \emph{all'interno} di un round: anche al valore massimo $H=1000$
+        (32\,000 campioni per round) si resta ben sotto la partizione più
+        piccola tra quelle testate ($\sim$158\,500 campioni a $N=3$).
   \item \textbf{Fase C — push one-hop.} Il worker seleziona $\min(k,
         |\text{peer disponibili}|)$ vicini \emph{casualmente e in modo
         indipendente a ogni round} (non c'è memoria della selezione dei round
         precedenti) dalla propria cache di peer, e invia loro uno snapshot
         dei pesi correnti via gRPC con timeout configurabile. La selezione
-        uniforme è un sostituto semplice di una politica più informata (es.\
-        basata su prossimità di rete o latenza storica), che non richiede
-        conoscenza della topologia sottostante; se un peer non risponde entro
+        casuale non è un vincolo del protocollo ma un modello neutro di
+        qualunque politica di selezione dei vicini si volesse adottare in
+        pratica — prossimità di rete, similarità tra i dati locali dei
+        worker, o un qualsiasi altro stato osservabile del nodo; ha inoltre il
+        vantaggio di non richiedere alcuna conoscenza della topologia
+        sottostante. Se un peer non risponde entro
         il timeout, il worker aggiorna la propria cache interrogando di nuovo
-        il discovery server e ritenta una sola volta verso peer non ancora
-        contattati in quel round, senza bloccarsi sul nodo caduto.
+        il discovery server — al più una volta per round, solo in caso di
+        fallimento — e tenta un singolo invio verso un peer sostitutivo non
+        ancora contattato in quel round. Se anche questo secondo tentativo
+        fallisce, il worker non ritenta ulteriormente né richiama di nuovo il
+        registry in quel round: prosegue senza bloccarsi sul nodo caduto. La
+        scelta mantiene il traffico verso
+        il discovery server limitato a una sola chiamata per round anche nel
+        caso peggiore, accettando che un peer possa restare non contattato
+        per quel round.
 \end{itemize}
 
 Un controllo di \emph{staleness} lato ricevente scarta i messaggi il cui
@@ -53,14 +111,20 @@ al round corrente del ricevente, evitando che aggiornamenti molto obsoleti
 degradino la convergenza. L'early stopping (pazienza configurabile) è una
 decisione puramente locale basata sulla validation loss del singolo worker:
 un worker può terminare il proprio training mentre altri continuano,
-riducendo nel tempo il numero di vicini disponibili per chi prosegue.
+riducendo nel tempo il numero di vicini disponibili per chi prosegue. Lo
+stesso criterio determina anche quale checkpoint (\texttt{model\_best.pt}) viene salvato.
+Usare la performance sul global test set per scegliere quale round tenere
+costituirebbe una forma di \emph{data leakage}, gonfiando artificialmente il risultato riportato
+verso il round che per puro rumore statistico va meglio su quel set
+specifico. Il global test set resta così una valutazione mai usata
+per decisioni, solo per misurare a posteriori.
 
-\subsection{Modello e tolleranza ai guasti}
-Il modello (Tabella~\ref{tab:model}) è una CNN con due blocchi
-convoluzionali (32 e 64 canali, batch normalization, dropout spaziale) e un
-classificatore fully-connected, per un totale di 1\,704\,350 parametri
-float32 — circa 6,82\,MB per snapshot serializzato, la quantità di dati
-effettivamente trasmessa a ogni push.
+\subsection{Modello}
+Il modello (Tabella~\ref{tab:model}) è una CNN
+con due blocchi convoluzionali (32 e 64 canali, batch normalization, dropout
+spaziale) e un classificatore fully-connected, per un totale di 1\,704\,350
+parametri float32 — circa 6,82\,MB per snapshot serializzato, la quantità di
+dati effettivamente trasmessa a ogni push.
 
 \begin{table}[t]
   \centering
@@ -80,6 +144,31 @@ effettivamente trasmessa a ogni push.
   \end{tabular}
 \end{table}
 
+La progressione di canali $1\to32\to64$ approssima una conservazione del volume
+di informazione a ogni dimezzamento della risoluzione spaziale
+($28\to14\to7$); il kernel $3\times3$ in cascata ottiene il
+campo ricettivo di una $5\times5$ con meno parametri, e il same padding
+preserva la dimensione spaziale fino al pooling. Un'architettura più pesante
+(es.\ ResNet-18, $\sim$11M parametri, $\sim$6$\times$ questo modello) sarebbe
+sovradimensionata a questa risoluzione: i tratti di un carattere scritto a
+mano sono già ben rappresentati da 2--3 layer convolutivi, e la profondità o
+le connessioni residuali aggiuntive tipiche di ResNet servono a catturare
+gerarchie di feature molto più complesse (immagini naturali, centinaia di
+pixel per lato) che qui si suppone non servono. In un sistema FL dove il modello
+viene interamente ritrasmesso a ogni push, la dimensione è fondamentale:
+non solo come capacità, ma come costo di comunicazione diretto. Il modello qui usato è quindi un compromesso deliberato tra
+capacità sufficiente per il compito e leggerezza per il contesto FL.
+
+Batch normalization stabilizza il training; nel contesto federato
+solo $\gamma,\beta$ sono aggregati da FedAvg, le statistiche correnti
+restano locali — limitazione discussa in Sezione~\ref{sec:discussion}.
+Dropout spaziale ($p=0{,}25$) e dropout standard ($p=0{,}5$ sul layer più esposto a
+overfitting con $\sim$1,6M parametri) regolarizzano le partizioni locali.
+L'inizializzazione dei pesi usa il default di PyTorch, Kaiming uniform per
+\texttt{Conv2d} e \texttt{Linear}~\cite{he2015delving}. Il modello è addestrato con
+AdamW.
+
+\subsection{Tolleranza ai guasti}
 Il sistema include meccanismi opzionali di fault injection configurabili
 (probabilità di crash simulato via \texttt{sys.exit} e di drop silenzioso di
 un messaggio), implementati ma non esercitati in nessuno dei 16 run
@@ -97,22 +186,28 @@ che lascia una entry non valida nel discovery server fino al successivo
 fallimento di invio — limitazione discussa nella
 Sezione~\ref{sec:discussion}.
 
-\subsection{Motivazione dell'architettura e degli iperparametri}
-La progressione di canali $1\to32\to64$ approssima una conservazione del
-volume di informazione a ogni dimezzamento della risoluzione spaziale
-($28\to14\to7$). Il kernel $3\times3$ in cascata (stile
-VGG~\cite{simonyan2015vgg}) ottiene il campo ricettivo di una $5\times5$
-con meno parametri; il same padding preserva la dimensione spaziale fino al
-pooling. Batch normalization stabilizza il training; nel contesto federato
-solo $\gamma,\beta$ sono aggregati da FedAvg, le statistiche correnti
-restano locali — limitazione discussa in Sezione~\ref{sec:discussion}.
-Dropout spaziale ($p=0{,}25$) e dropout standard ($p=0{,}5$, il valore di
-Srivastava et al.~\cite{srivastava2014dropout}, sul layer più esposto a
-overfitting con $\sim$1,6M parametri) regolarizzano le partizioni locali;
-il gradient clipping ($\|\nabla\|\le1$) limita la deriva dei pesi tra
+\subsection{Motivazione degli iperparametri di training}
+Il gradient clipping ($\|\nabla\|\le1$) limita la deriva dei pesi tra
 aggregazioni; il label smoothing ($\epsilon=0{,}1$~\cite{szegedy2016rethinking})
 attenua l'eccesso di confidenza sulle classi ambigue di FEMNIST (es.\
 \texttt{0}/\texttt{O}, \texttt{1}/\texttt{l}/\texttt{I}).
+
+L'ottimizzatore è AdamW~\cite{loshchilov2019decoupled} anziché SGD o Adam
+semplice, per due motivi. Primo, AdamW disaccoppia il weight decay
+dall'aggiornamento basato sul gradiente adattivo: in Adam classico, la
+regolarizzazione L2 interagisce con i learning rate adattivi per-parametro
+in modo che ne attenua l'effetto in modo non uniforme tra i parametri;
+AdamW applica il weight decay direttamente ai pesi, indipendentemente dalla
+scala del gradiente, un comportamento più prevedibile per un iperparametro
+(\texttt{weight\_decay}) che qui resta comunque fisso. Secondo, un
+ottimizzatore adattivo per-parametro richiede meno tuning del learning rate
+di SGD per convergere in modo ragionevole — utile in questo lavoro, dove il
+budget sperimentale è speso sui tre parametri di sistema ($H$, $k$, $N$) e
+non è disponibile per una ricerca separata del learning rate ottimale per
+ciascuna delle 16 configurazioni; è inoltre coerente con l'eterogeneità non-i.i.d.
+tra worker, dove ciascuno ottimizza una loss locale diversa: un tasso
+adattivo per-parametro si adegua meglio a superfici di loss locali diverse
+rispetto a un tasso fisso unico calibrato per tutte.
 
 AdamW con learning rate $10^{-3}$ e batch size 32 sono \emph{fissi} e legati
 dalla \emph{linear scaling rule}: variarli insieme avrebbe introdotto un
@@ -126,7 +221,11 @@ sistema variati} (Sezione~\ref{sec:results}): $H\in\{100,500,1000\}$ (Blocco
 A, $N=3$ fisso; 500 è il valore di riferimento di
 DiLoCo~\cite{douillard2023diloco}), il fanout $k$ e $N\in\{3,5,8\}$
 (Blocchi B e C) — i soli tre parametri di cui questo lavoro misura l'effetto
-comparativo. \emph{Parametri strutturali fissi}: FedAvg,
+comparativo. Il limite superiore $N=8$ non è una scelta di progetto ma un
+vincolo della piattaforma di test: AWS Learner Lab consente al massimo 9
+istanze EC2 concorrenti per account, una delle quali è riservata al
+discovery server, lasciando $N\le8$ worker disponibili
+(Sezione~\ref{sec:details}F). \emph{Parametri strutturali fissi}: FedAvg,
 \texttt{max\_staleness}=10, fault injection disattivata.
 
 \subsection{Piattaforma software}
@@ -136,6 +235,26 @@ con Docker e orchestrato con Docker Compose in locale. Il deployment su AWS
 usa Terraform per provisionare un'istanza EC2 per worker più una per il
 discovery server (modalità multi-istanza, rete reale tra macchine fisicamente
 separate), con build dell'immagine Docker in parallelo su ciascuna istanza.
+L'account didattico AWS Learner Lab usato per i test impone un tetto di 9
+istanze EC2 concorrenti: una è occupata dal discovery server, per cui il
+numero massimo di worker testabile è $N=8$ — il limite superiore della
+griglia sperimentale (Sezione~\ref{sec:results}) riflette questo vincolo
+della piattaforma, non un limite del protocollo, che non assume alcun tetto
+su $N$.
+
+Le immagini Docker sono costruite sfruttando il \emph{layer caching}: ogni
+istruzione del Dockerfile produce un layer immutabile riutilizzato se il suo
+hash coincide con la build precedente, e l'invalidazione è a cascata (un
+layer modificato invalida tutti quelli successivi). Il Dockerfile del worker
+copia e compila \texttt{proto/gossip.proto} \emph{prima} di copiare il resto
+del sorgente Python: il layer più costoso, l'installazione di PyTorch
+($\sim$750\,MB), viene rieseguito solo se cambia \texttt{requirements.worker.txt},
+non ad ogni modifica al codice — una modifica al codice invalida solo l'ultimo
+layer, riducendo la rebuild da minuti a pochi secondi. Tutti i worker di un
+deployment condividono inoltre un'unica immagine (\texttt{docker compose
+up --build} la costruisce una sola volta): i layer read-only, incluso quello
+di PyTorch, sono condivisi su disco tra tutti i container, che aggiungono
+solo un sottile layer scrivibile per i propri file di runtime.
 
 Il sistema non include una suite di test automatizzati (unit o integration
 test); la sua validazione è di tipo empirico, tramite esecuzione end-to-end

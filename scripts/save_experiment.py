@@ -17,8 +17,10 @@ Output:
         config.yaml                    ← exact config used for this run
         global_metrics.csv             ← per-round aggregated stats
         summary.txt                    ← human-readable summary
+        confusion_matrix.csv           ← per-class confusion matrix (if confusion_matrix.py was run)
         worker_0/metrics.csv           ← per-round per-worker metrics
         worker_0/local_test_result.json ← final test accuracy (if local_test_set: true)
+        worker_0/model_best.pt         ← best checkpoint by val_loss
         worker_1/...
         ...
 """
@@ -109,8 +111,8 @@ def main():
         shutil.copy2(config_src, os.path.join(dest, "config.yaml"))
         copied.append("config.yaml")
 
-    # Aggregated outputs from aggregate_metrics.py
-    for fname in ("global_metrics.csv", "summary.txt",
+    # Aggregated outputs from aggregate_metrics.py and confusion_matrix.py
+    for fname in ("global_metrics.csv", "summary.txt", "confusion_matrix.csv",
                   "accuracy_over_rounds.png", "loss_over_rounds.png",
                   "phase_timing.png", "global_test_accuracy.png"):
         src = os.path.join(DATA_ROOT, fname)
@@ -144,7 +146,7 @@ def main():
 
     # Clean working directory so the next run starts from a blank slate.
     cleaned = []
-    for fname in ("global_metrics.csv", "summary.txt"):
+    for fname in ("global_metrics.csv", "summary.txt", "confusion_matrix.csv"):
         p = os.path.join(DATA_ROOT, fname)
         if os.path.exists(p):
             os.remove(p)
