@@ -126,7 +126,7 @@ def main():
         worker_dest = os.path.join(dest, worker_name)
         os.makedirs(worker_dest)
 
-        for fname in ("metrics.csv", "local_test_result.json"):
+        for fname in ("metrics.csv", "local_test_result.json", "model_best.pt"):
             src = os.path.join(worker_dir, fname)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(worker_dest, fname))

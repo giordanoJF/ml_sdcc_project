@@ -14,11 +14,11 @@ network:
   grpc_port: 50051
 
   # Peers each worker pushes weights to per round (k-push gossip). 0 = no-FL baseline.
-  gossip_fanout: 1
+  gossip_fanout: 4
 
   # After changing: python scripts/split_dataset.py && python scripts/generate_compose.py
   # AWS max: num_workers <= 8 (Learner Lab limit: 9 instances total, 1 for registry).
-  num_workers: 3
+  num_workers: 5
 
 federated_learning:
   # Hard cap; can terminate earlier via early_stopping_patience.
@@ -26,7 +26,7 @@ federated_learning:
 
   # Local SGD steps per worker before gossip (H in DiLoCo). Higher H = less communication.
   # Experiment candidates: 100, 500, 1000
-  inner_steps_H: 100
+  inner_steps_H: 1000
 
   aggregation_strategy: "FedAvg"
 

@@ -14,10 +14,11 @@ Usage:
 
 Input:
     <data-root>/worker_*/metrics.csv      (one file per worker, required)
-    <data-root>/worker_*/model_best.pt    (best checkpoint by val_loss — only ever present for
-                                            the live/current run; save_experiment.py does not
-                                            archive it, so weight divergence is unavailable when
-                                            --data-root points at an archived results/<name> run)
+    <data-root>/worker_*/model_best.pt    (best checkpoint by val_loss; archived by
+                                            save_experiment.py alongside the metrics, so weight
+                                            divergence is also available for archived
+                                            results/<name> runs saved after that fix — older
+                                            archived runs predating it will not have it)
     <data-root>/config.yaml               (used for total_rounds; falls back to the project's
                                             live config.yaml if not found under --data-root)
 
@@ -529,8 +530,8 @@ def main():
         except Exception as exc:
             print(f"  Could not compute weight divergence: {exc}")
     elif is_archived_run:
-        print("\nWeight divergence: N/A — model_best.pt is not archived by save_experiment.py,")
-        print("  only available for the live/current run (before it gets archived).")
+        print("\nWeight divergence: N/A — no model_best.pt found in this archived run")
+        print("  (predates the save_experiment.py fix that archives checkpoints).")
     else:
         print("\nNo model_best.pt checkpoints found — skipping weight divergence analysis.")
         print("  (model_best.pt is saved automatically whenever val_loss improves during training)")
@@ -612,6 +613,14 @@ def main():
             "\n  [B] At model_best.pt round (min val_loss) — PRIMARY metric:"
         )
         best_ckpt_gt: dict[str, float] = {}
+        best_ckpt_extra: dict[str, dict[str, float]] = {
+            "macro_precision": {}, "macro_recall": {}, "macro_f1": {}
+        }
+        extra_csv_keys = {
+            "macro_precision": "global_test_macro_precision",
+            "macro_recall": "global_test_macro_recall",
+            "macro_f1": "global_test_macro_f1",
+        }
         for wid, rows in sorted(worker_rows.items()):
             rows_sorted = sorted(rows, key=lambda r: int(r["round"]))
             best_row = min(rows_sorted, key=lambda r: float(r["val_loss"]))
@@ -619,9 +628,16 @@ def main():
             if gt_val != "":
                 gt_val = float(gt_val)
                 best_ckpt_gt[wid] = gt_val
+                extra_str = ""
+                for label, csv_key in extra_csv_keys.items():
+                    raw = best_row.get(csv_key, "")
+                    if raw != "":
+                        val = float(raw)
+                        best_ckpt_extra[label][wid] = val
+                        extra_str += f"  {csv_key}={val:.4f}"
                 line = (f"      Worker {wid:>2}: round={int(best_row['round']):>4}  "
                         f"val_loss={float(best_row['val_loss']):.4f}  "
-                        f"global_test={gt_val:.4f}")
+                        f"global_test={gt_val:.4f}{extra_str}")
                 print(line)
                 summary_lines.append(line)
         if len(best_ckpt_gt) > 1:
@@ -630,16 +646,39 @@ def main():
             std_bgt = statistics.stdev(vals)
             spread_b = max(vals) - min(vals)
             verdict_b = _verdict(spread_b)
-            print(f"\n      mean={mean_bgt:.4f}  std={std_bgt:.4f}  spread={spread_b:.4f}")
+            print(f"\n      accuracy: mean={mean_bgt:.4f}  std={std_bgt:.4f}  spread={spread_b:.4f}")
             print(f"      Verdict: {verdict_b}")
             summary_lines.append(
-                f"\n      mean={mean_bgt:.4f}  std={std_bgt:.4f}  spread={spread_b:.4f}\n"
+                f"\n      accuracy: mean={mean_bgt:.4f}  std={std_bgt:.4f}  spread={spread_b:.4f}\n"
                 f"      Verdict: {verdict_b}"
             )
         elif best_ckpt_gt:
-            line = f"\n      mean={next(iter(best_ckpt_gt.values())):.4f}  (single worker — no spread)"
+            line = f"\n      accuracy: mean={next(iter(best_ckpt_gt.values())):.4f}  (single worker — no spread)"
             print(line)
             summary_lines.append(line)
+        for label in ("macro_precision", "macro_recall", "macro_f1"):
+            per_worker = best_ckpt_extra[label]
+            if len(per_worker) > 1:
+                vals_e = list(per_worker.values())
+                mean_e = statistics.mean(vals_e)
+                std_e = statistics.stdev(vals_e)
+                spread_e = max(vals_e) - min(vals_e)
+                print(f"      {label}: mean={mean_e:.4f}  std={std_e:.4f}  spread={spread_e:.4f}")
+                summary_lines.append(
+                    f"      {label}: mean={mean_e:.4f}  std={std_e:.4f}  spread={spread_e:.4f}"
+                )
+            elif per_worker:
+                line = f"      {label}: mean={next(iter(per_worker.values())):.4f}  (single worker — no spread)"
+                print(line)
+                summary_lines.append(line)
+        if best_ckpt_extra["macro_f1"] and best_ckpt_gt:
+            mean_f1_check = statistics.mean(best_ckpt_extra["macro_f1"].values())
+            mean_acc_check = statistics.mean(best_ckpt_gt.values())
+            if mean_acc_check - mean_f1_check > 0.05:
+                print(
+                    "      → macro_f1 much lower than accuracy = model does well on frequent\n"
+                    "        classes but poorly on rare ones (accuracy alone would hide this)"
+                )
         print("-" * 65)
         print()
 
@@ -657,19 +696,34 @@ def main():
         print("-" * 65)
         print("  (writers from the same worker partition, held out from gradient updates)")
         local_test_accs = []
+        local_test_extra: dict[str, list[float]] = {
+            "macro_precision": [], "macro_recall": [], "macro_f1": []
+        }
         for path in local_test_result_paths:
             with open(path) as f:
                 r = json.load(f)
+            extra_str = ""
+            for label in ("macro_precision", "macro_recall", "macro_f1"):
+                val = r.get(f"local_test_{label}")  # absent in runs saved before this metric existed
+                if val is not None:
+                    local_test_extra[label].append(val)
+                    extra_str += f"  local_test_{label}={val:.4f}"
             print(f"  Worker {r['worker_id']:>2}: local_test_accuracy={r['local_test_accuracy']:.4f}  "
-                  f"local_test_loss={r['local_test_loss']:.4f}")
+                  f"local_test_loss={r['local_test_loss']:.4f}{extra_str}")
             local_test_accs.append(r["local_test_accuracy"])
             summary_lines.append(
-                f"  Worker {r['worker_id']}: local_test_accuracy={r['local_test_accuracy']:.4f}"
+                f"  Worker {r['worker_id']}: local_test_accuracy={r['local_test_accuracy']:.4f}{extra_str}"
             )
         mean_lt = statistics.mean(local_test_accs)
         std_lt = statistics.stdev(local_test_accs) if len(local_test_accs) > 1 else 0.0
         print(f"\n  Mean local test accuracy: {mean_lt:.4f}  (std={std_lt:.4f})")
         summary_lines.append(f"\nMean local test accuracy: {mean_lt:.4f}  std={std_lt:.4f}")
+        for label, vals_e in local_test_extra.items():
+            if vals_e:
+                mean_e = statistics.mean(vals_e)
+                std_e = statistics.stdev(vals_e) if len(vals_e) > 1 else 0.0
+                print(f"  Mean local test {label}: {mean_e:.4f}  (std={std_e:.4f})")
+                summary_lines.append(f"Mean local test {label}: {mean_e:.4f}  std={std_e:.4f}")
         print("-" * 65)
         print()
 

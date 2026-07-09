@@ -248,13 +248,28 @@ def main():
                         f"combined={combined_samples}"
                     )
 
-            val_loss, val_acc = validate(model, val_loader, device)
-            logger.info(f"Validation — loss={val_loss:.4f}, accuracy={val_acc:.2%}")
+            val_loss, val_acc, val_macro_precision, val_macro_recall, val_macro_f1 = validate(
+                model, val_loader, device
+            )
+            logger.info(
+                f"Validation — loss={val_loss:.4f}, accuracy={val_acc:.2%}, "
+                f"macro_precision={val_macro_precision:.4f}, macro_recall={val_macro_recall:.4f}, "
+                f"macro_f1={val_macro_f1:.4f}"
+            )
 
             global_test_acc: float | None = None
+            global_test_macro_precision: float | None = None
+            global_test_macro_recall: float | None = None
+            global_test_macro_f1: float | None = None
             if global_test_loader is not None:
-                _, global_test_acc = validate(model, global_test_loader, device)
-                logger.info(f"Global test — accuracy={global_test_acc:.2%}")
+                _, global_test_acc, global_test_macro_precision, global_test_macro_recall, global_test_macro_f1 = (
+                    validate(model, global_test_loader, device)
+                )
+                logger.info(
+                    f"Global test — accuracy={global_test_acc:.2%}, "
+                    f"macro_precision={global_test_macro_precision:.4f}, "
+                    f"macro_recall={global_test_macro_recall:.4f}, macro_f1={global_test_macro_f1:.4f}"
+                )
 
             phase_a_s = time.time() - t_phase_a
 
@@ -357,7 +372,13 @@ def main():
                     grpc_mean_latency_s=grpc_mean_latency_s,
                     neighbors_aggregated=neighbors_aggregated,
                     peers_contacted=sent_count,
+                    val_macro_precision=val_macro_precision,
+                    val_macro_recall=val_macro_recall,
+                    val_macro_f1=val_macro_f1,
                     global_test_accuracy=global_test_acc,
+                    global_test_macro_precision=global_test_macro_precision,
+                    global_test_macro_recall=global_test_macro_recall,
+                    global_test_macro_f1=global_test_macro_f1,
                 )
 
     finally:
@@ -368,14 +389,22 @@ def main():
     # Local test: run once after training, never influences training decisions.
     # Only present when local_test_set: true in config (80/10/10 split mode).
     if local_test_loader is not None:
-        local_test_loss, local_test_acc = validate(model, local_test_loader, device)
-        logger.info(f"Local test set — loss={local_test_loss:.4f}, accuracy={local_test_acc:.2%}")
+        (local_test_loss, local_test_acc, local_test_macro_precision,
+         local_test_macro_recall, local_test_macro_f1) = validate(model, local_test_loader, device)
+        logger.info(
+            f"Local test set — loss={local_test_loss:.4f}, accuracy={local_test_acc:.2%}, "
+            f"macro_precision={local_test_macro_precision:.4f}, macro_recall={local_test_macro_recall:.4f}, "
+            f"macro_f1={local_test_macro_f1:.4f}"
+        )
         result_path = os.path.join(p.data_dir, "local_test_result.json")
         with open(result_path, "w") as f:
             json.dump({
                 "worker_id": p.worker_id,
                 "local_test_loss": round(local_test_loss, 6),
                 "local_test_accuracy": round(local_test_acc, 6),
+                "local_test_macro_precision": round(local_test_macro_precision, 6),
+                "local_test_macro_recall": round(local_test_macro_recall, 6),
+                "local_test_macro_f1": round(local_test_macro_f1, 6),
             }, f)
         logger.info(f"Local test result saved → {result_path}")
 
