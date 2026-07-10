@@ -1,0 +1,54 @@
+Experiment summary — 5 workers
+============================================================
+
+  Worker  0: 63 rounds | final_acc=0.9049 | best_acc=0.9293 | total_training_s=13431.1 | avg_peers_contacted=0.98 | avg_neighbors_aggregated=1.16
+           phase_a=118510.0ms  phase_b=94.60s  phase_c=73.9ms  grpc_latency=70.04ms/call
+  Worker  1: 63 rounds | final_acc=0.9383 | best_acc=0.9383 | total_training_s=13174.4 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=1.02
+           phase_a=114365.0ms  phase_b=94.65s  phase_c=92.5ms  grpc_latency=90.05ms/call
+  Worker  2: 43 rounds | final_acc=0.8694 | best_acc=0.9080 | total_training_s=8919.7 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.93
+           phase_a=108705.9ms  phase_b=98.66s  phase_c=64.1ms  grpc_latency=61.53ms/call
+  Worker  3: 29 rounds | final_acc=0.8874 | best_acc=0.8912 | total_training_s=5543.7 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.69
+           phase_a=104805.5ms  phase_b=86.29s  phase_c=63.3ms  grpc_latency=62.93ms/call
+  Worker  4: 35 rounds | final_acc=0.8557 | best_acc=0.9070 | total_training_s=7239.2 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.89
+           phase_a=108522.9ms  phase_b=98.23s  phase_c=73.6ms  grpc_latency=72.24ms/call
+
+mean_best_val_accuracy = 0.9148  std=0.0189
+  Worker  0: converged at round   63              wall-clock = 13431.2s
+  Worker  1: converged at round   63              wall-clock = 13174.4s
+  Worker  2: converged at round   43              wall-clock =  8919.7s
+  Worker  3: converged at round   29              wall-clock =  5543.7s
+  Worker  4: converged at round   35              wall-clock =  7239.2s
+
+System convergence: YES — all workers converged
+System wall-clock total: 13431.2s
+
+Mean pairwise L2 weight distance: 100.9997
+
+Global test set — functional convergence analysis (writers never seen by any worker):
+
+  [A] At final round (each worker's own stop point) — reference only, noisy:
+      Worker  0: final_global_test=0.8788  best_global_test=0.9065
+      Worker  1: final_global_test=0.9061  best_global_test=0.9066
+      Worker  2: final_global_test=0.8729  best_global_test=0.8948
+      Worker  3: final_global_test=0.6804  best_global_test=0.8826
+      Worker  4: final_global_test=0.8355  best_global_test=0.8805
+
+      mean=0.8348  std=0.0899  spread=0.2257
+      Verdict: WEAK functional convergence (spread > 5%) — models still diverge
+
+  [B] At model_best.pt round (min val_loss) — PRIMARY metric:
+      Worker  0: round=  54  val_loss=0.2980  global_test=0.9044  global_test_macro_precision=0.8680  global_test_macro_recall=0.7997  global_test_macro_f1=0.8196
+      Worker  1: round=  55  val_loss=0.2683  global_test=0.9022  global_test_macro_precision=0.8708  global_test_macro_recall=0.7885  global_test_macro_f1=0.8109
+      Worker  2: round=  34  val_loss=0.3694  global_test=0.6934  global_test_macro_precision=0.7126  global_test_macro_recall=0.7020  global_test_macro_f1=0.6380
+      Worker  3: round=  20  val_loss=0.4059  global_test=0.6794  global_test_macro_precision=0.6961  global_test_macro_recall=0.6776  global_test_macro_f1=0.6187
+      Worker  4: round=  26  val_loss=0.3503  global_test=0.6873  global_test_macro_precision=0.7149  global_test_macro_recall=0.6942  global_test_macro_f1=0.6342
+
+      accuracy: mean=0.7733  std=0.1187  spread=0.2249
+      Verdict: WEAK functional convergence (spread > 5%) — models still diverge
+      macro_precision: mean=0.7725  std=0.0888  spread=0.1747
+      macro_recall: mean=0.7324  std=0.0571  spread=0.1221
+      macro_f1: mean=0.7043  std=0.1016  spread=0.2008
+
+Total gossip messages sent: 232
+
+Run termination: UNKNOWN — registry log not found
