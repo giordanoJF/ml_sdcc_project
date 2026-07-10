@@ -1,20 +1,20 @@
 Experiment summary — 3 workers
 ============================================================
 
-  Worker  0: 56 rounds | final_acc=0.8689 | best_acc=0.9220 | total_training_s=12677.8 | avg_peers_contacted=0.96 | avg_neighbors_aggregated=1.02
-           phase_a=129454.4ms  phase_b=96.77s  phase_c=134.5ms  grpc_latency=133.59ms/call
-  Worker  1: 55 rounds | final_acc=0.8922 | best_acc=0.8927 | total_training_s=11592.4 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.91
-           phase_a=115416.1ms  phase_b=95.15s  phase_c=200.7ms  grpc_latency=199.20ms/call
-  Worker  2: 60 rounds | final_acc=0.8376 | best_acc=0.9003 | total_training_s=13077.0 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.90
-           phase_a=120845.0ms  phase_b=96.97s  phase_c=123.7ms  grpc_latency=122.16ms/call
+  Worker  0: 36 rounds | final_acc=0.8689 | best_acc=0.9220 | total_training_s=8109.5 | avg_peers_contacted=0.94 | avg_neighbors_aggregated=1.06
+           phase_a=129686.6ms  phase_b=95.43s  phase_c=123.5ms  grpc_latency=122.28ms/call
+  Worker  1: 28 rounds | final_acc=0.8922 | best_acc=0.8922 | total_training_s=6158.6 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.93
+           phase_a=120584.3ms  phase_b=99.09s  phase_c=269.5ms  grpc_latency=268.86ms/call
+  Worker  2: 34 rounds | final_acc=0.8376 | best_acc=0.9003 | total_training_s=7610.6 | avg_peers_contacted=1.00 | avg_neighbors_aggregated=0.85
+           phase_a=124891.7ms  phase_b=98.82s  phase_c=123.1ms  grpc_latency=120.79ms/call
 
-mean_best_val_accuracy = 0.9050  std=0.0152
-  Worker  0: converged at round   36              wall-clock = 27826.5s
-  Worker  1: converged at round   28              wall-clock = 25875.7s
-  Worker  2: converged at round   34              wall-clock = 27327.4s
+mean_best_val_accuracy = 0.9048  std=0.0154
+  Worker  0: converged at round   36              wall-clock =  8109.7s
+  Worker  1: converged at round   28              wall-clock =  6158.6s
+  Worker  2: converged at round   34              wall-clock =  7610.6s
 
 System convergence: YES — all workers converged
-System wall-clock total: 27826.5s
+System wall-clock total: 8109.7s
 
 Mean pairwise L2 weight distance: 91.5293
 
@@ -39,6 +39,4 @@ Global test set — functional convergence analysis (writers never seen by any w
       macro_recall: mean=0.7296  std=0.0381  spread=0.0681
       macro_f1: mean=0.6981  std=0.0763  spread=0.1371
 
-Total gossip messages sent: 169
-
-Run termination: UNKNOWN — registry log not found
+Total gossip messages sent: 96
