@@ -1,28 +1,5 @@
 #!/usr/bin/env python3
-"""
-Run the complete experimental plan (8 core runs).
 
-Block A — H ablation  (N=3, fanout=1, lr=1e-3):
-  ref   : H=500   ← reference for all comparisons
-  h100  : H=100   ← more frequent gossip, less local drift
-  h1000 : H=1000  ← less frequent gossip, more local drift
-  → best_H determined automatically from Block A results
-
-Block B — Fanout at N=3  (H=best_H):
-  f2    : fanout=2  (=N-1, full broadcast for N=3)
-
-Block C — Scalability  (H=best_H):
-  n5_f1 : N=5, fanout=1          [risplit required]
-  n5_fn : N=5, fanout=4  (=N-1)
-  n8_f1 : N=8, fanout=1          [risplit required]
-  n8_fn : N=8, fanout=7  (=N-1)
-
-Usage:
-    python scripts/run_grid.py              # full plan, skips already-done runs
-    python scripts/run_grid.py --dry-run    # print plan without executing
-    python scripts/run_grid.py --only ref h100 h1000
-    python scripts/run_grid.py --from f2    # skip everything before f2
-"""
 import argparse
 import os
 import re
@@ -163,13 +140,7 @@ def save_crash_logs(label: str) -> None:
 
 
 def run_compose_up(label: str) -> bool:
-    """Run 'docker compose up --build' with automatic retry on failure.
 
-    Returns True if the command eventually succeeded, False if all retries
-    were exhausted (caller should skip the current run with `continue`).
-    Docker pulls/builds are left to run to completion — we only retry after
-    the process exits with a non-zero code.
-    """
     cmd = ["docker", "compose", "up", "--build"]
     for attempt in range(1, _COMPOSE_MAX_RETRIES + 1):
         print(f"[{label}] $ {' '.join(cmd)}"
@@ -218,7 +189,7 @@ def main() -> None:
         if already_done(run["label"]):
             current_n = run["n"]
 
-    # ── Print plan table ──────────────────────────────────────────────────
+
     print(f"\n{'#':<3} {'Blk':<5} {'Label':<10} {'N':<4} {'fanout':<7} {'H':<6}  Status")
     print("─" * 58)
     active_print = args.from_label is None
@@ -241,7 +212,7 @@ def main() -> None:
     if args.dry_run:
         return
 
-    # ── Execute ───────────────────────────────────────────────────────────
+
     best_h: int | None = None
     active = args.from_label is None
 

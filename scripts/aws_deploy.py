@@ -1,141 +1,5 @@
 #!/usr/bin/env python3
-"""
-AWS deployment orchestrator for P2P Federated Learning.
 
-Supports two deployment modes:
-  - Single EC2:      all containers (N workers + registry) on one instance.
-                     Uses docker-compose.yml, just like local mode.
-  - Multi-instance:  one container per EC2 instance, workers communicate
-                     over real TCP/IP between separate machines.
-
---- SINGLE EC2 ---
-
-  # 0. Set Learner Lab credentials (copy from the AWS Academy panel each session)
-  export AWS_ACCESS_KEY_ID=...
-  export AWS_SECRET_ACCESS_KEY=...
-  export AWS_SESSION_TOKEN=...
-
-  # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, aws.instance_type_single)
-  # 2. Download and split dataset (once, or when local_test_set / num_workers changes)
-  python scripts/download_femnist.py
-  python scripts/split_dataset.py
-  python scripts/generate_compose.py
-
-  # 3. Provision the instance via Terraform (creates EC2 + installs Docker automatically)
-  python scripts/aws_deploy.py provision_single
-
-  # 4. Upload project, install dependencies, start training (fully automated)
-  python scripts/aws_deploy.py deploy_single
-
-  # 5. Analyze results (still on EC2 host, via SSH)
-  ssh -i ~/Downloads/labsuser.pem ubuntu@<ip>
-    cd ~/project
-    python scripts/aggregate_metrics.py
-    python scripts/save_experiment.py <name>
-
-  # 6. Destroy the instance to stop billing
-  python scripts/aws_deploy.py destroy_single
-
-  # --- If the Learner Lab session expired while the instance was still running ---
-  #
-  # The Learner Lab has a ~4h session limit. If it expires before you run
-  # destroy_single, AWS stops the instance automatically. Data on disk (metrics.csv,
-  # dataset) survives. But the Docker containers are stopped.
-  #
-  # When you start a new session, the instance restarts with a NEW public IP.
-  # resume_single updates the Terraform state so the new IP is known.
-  #
-  # Then, depending on what happened:
-  #
-  #   Case A — training had already finished:
-  #     python scripts/aws_deploy.py resume_single   # prints new IP
-  #     ssh ubuntu@<new_ip>
-  #       python scripts/aggregate_metrics.py
-  #       python scripts/save_experiment.py <name>
-  #     python scripts/aws_deploy.py destroy_single
-  #
-  #   Case B — training was still running when session expired (model state lost):
-  #     python scripts/aws_deploy.py resume_single   # prints new IP
-  #     ssh ubuntu@<new_ip>
-  #       cd ~/project && docker compose up          # restart from round 1
-  #     python scripts/aws_deploy.py destroy_single
-
---- MULTI-INSTANCE ---
-
-  # 0. Set Learner Lab credentials (same as above)
-  # 1. Edit config.yaml (num_workers, aws.key_name, aws.key_path, aws.instance_type_worker)
-  # 2. Download and split dataset
-  python scripts/download_femnist.py
-  python scripts/split_dataset.py
-
-  # 3. Provision EC2 instances via Terraform
-  python scripts/aws_deploy.py provision
-
-  # 4. Build images, upload partitions, start containers
-  python scripts/aws_deploy.py deploy
-
-  # 5. Monitor training
-  python scripts/aws_deploy.py status
-  python scripts/aws_deploy.py logs 0        # tail worker_0
-  python scripts/aws_deploy.py logs registry
-
-  # 6. Collect metrics once training finishes
-  python scripts/aws_deploy.py collect
-  python scripts/aggregate_metrics.py
-  python scripts/save_experiment.py <name>
-
-  # 7. Destroy all instances to stop billing (IMPORTANT: do this after every session)
-  python scripts/aws_deploy.py destroy
-
-  # --- If the Learner Lab session expired while instances were still running ---
-  #
-  # The Learner Lab has a ~4h session limit. If it expires before you run destroy,
-  # AWS stops all instances automatically. Data on disk (metrics.csv, dataset
-  # partitions) survives on EBS. But Docker containers are stopped and do not
-  # restart automatically (workers have no restart policy).
-  #
-  # When you start a new session, all instances restart with NEW public IPs.
-  # resume updates the Terraform state so the new IPs are known.
-  #
-  # Then, depending on what happened:
-  #
-  #   Case A — training had already finished before the session expired:
-  #     python scripts/aws_deploy.py resume    # prints new IPs for all instances
-  #     python scripts/aws_deploy.py collect   # SCP metrics.csv from each worker
-  #     python scripts/aggregate_metrics.py
-  #     python scripts/save_experiment.py <name>
-  #     python scripts/aws_deploy.py destroy
-  #
-  #   Case B — training was still running when the session expired (model state lost,
-  #            no checkpointing — training must restart from round 1):
-  #     python scripts/aws_deploy.py resume    # prints new IPs
-  #     python scripts/aws_deploy.py deploy    # rebuild images, restart containers
-  #     # ... wait for training to finish ...
-  #     python scripts/aws_deploy.py collect
-  #     python scripts/aws_deploy.py destroy
-
-Usage
------
-  python scripts/aws_deploy.py <command> [args]
-
-Commands — single EC2
----------------------
-  provision_single   Create one EC2 instance via Terraform (docker-compose mode)
-  deploy_single      Upload project and dataset, build images, start containers
-  collect_single     Download per-worker output files from the single EC2 to data/femnist/
-  destroy_single     Terminate the single EC2 instance
-  resume_single      Refresh Terraform state after a session restart (IP changed)
-
-Commands — multi-instance
--------------------------
-  provision   Create EC2 instances and security group via Terraform
-  deploy      Build Docker images, upload dataset partitions, start containers
-  collect     Download metrics.csv (and local_test_result.json) from each worker
-  status      Show Docker container status on every instance
-  logs [id]   Tail logs from worker <id> (default 0) or 'registry'
-  resume      Refresh Terraform state after a Learner Lab session restart (IPs change)
-  destroy     Terminate all EC2 instances and remove security group
-"""
 import argparse
 import json
 import os
@@ -252,7 +116,7 @@ def _create_source_archive() -> str:
 
 
 def _create_single_source_archive() -> str:
-    """Pack source files needed for single-EC2 docker compose deployment."""
+
     src_files = [
         "docker/Dockerfile.worker", "docker/Dockerfile.registry",
         "requirements.worker.txt", "requirements.registry.txt",
@@ -278,7 +142,7 @@ def _create_single_source_archive() -> str:
 
 
 def _build_on_instance(ip: str, key_path: str, archive: str, role: str):
-    """Upload source archive and docker build the appropriate image."""
+
     _scp_to(ip, key_path, Path(archive), "/home/ubuntu/src.tar.gz")
     _ssh(ip, key_path,
          "mkdir -p /home/ubuntu/build && "
@@ -298,11 +162,7 @@ def _build_on_instance(ip: str, key_path: str, archive: str, role: str):
 # ---------------------------------------------------------------------------
 
 def cmd_provision_single(cfg: dict):
-    """Create one EC2 instance via Terraform (single-EC2 / docker-compose mode).
 
-    Docker is installed automatically via user_data; this command waits until
-    the instance is SSH-reachable and Docker is ready before returning.
-    """
     aws_cfg = cfg.get("aws", {})
     key_path = os.path.expanduser(aws_cfg.get("key_path", "~/Downloads/labsuser.pem"))
 
@@ -337,7 +197,7 @@ def cmd_provision_single(cfg: dict):
 
 
 def cmd_deploy_single(cfg: dict):
-    """Upload project and dataset, build images, start containers on the single EC2 instance."""
+
     aws_cfg  = cfg.get("aws", {})
     key_path = os.path.expanduser(aws_cfg.get("key_path", "~/Downloads/labsuser.pem"))
 
@@ -432,29 +292,7 @@ def cmd_destroy_single():
 
 
 def cmd_resume_single():
-    """Refresh Terraform state after a Learner Lab session restart (single EC2).
 
-    The Learner Lab has a ~4h session limit. To avoid expiry during a long run,
-    click "Start Lab" again before the timer reaches 0:00 to renew the session —
-    this makes resume_single unnecessary.
-
-    If the session expires before destroy_single is run, AWS stops the instance
-    automatically — data on EBS (metrics.csv, dataset) survives, but Docker
-    containers are stopped.
-
-    When a new session starts and the instance restarts, it gets a NEW public IP.
-    This command syncs the Terraform state file so the new IP is known.
-
-    After this command, check whether training had finished (Case A) or not (Case B):
-
-      Case A — training finished:
-        ssh ubuntu@<new_ip> "cd ~/project && python scripts/aggregate_metrics.py"
-        python scripts/aws_deploy.py destroy_single
-
-      Case B — training was mid-run (model state lost, no checkpointing):
-        ssh ubuntu@<new_ip> "cd ~/project && docker compose up"  # restart from round 1
-        python scripts/aws_deploy.py destroy_single
-    """
     print("Refreshing Terraform state for single EC2 instance...")
     _terraform(TERRAFORM_SINGLE_DIR, "apply", "-refresh-only", "-auto-approve")
     out = _terraform_output(TERRAFORM_SINGLE_DIR)
@@ -466,33 +304,7 @@ def cmd_resume_single():
 # ---------------------------------------------------------------------------
 
 def cmd_resume():
-    """Refresh Terraform state after a Learner Lab session restart (multi-instance).
 
-    The Learner Lab has a ~4h session limit. To avoid expiry during a long run,
-    click "Start Lab" again before the timer reaches 0:00 to renew the session —
-    this makes resume unnecessary.
-
-    If the session expires before destroy is run, AWS stops all instances
-    automatically — data on EBS (metrics.csv, dataset partitions) survives,
-    but Docker containers are stopped (workers have no restart policy).
-
-    When a new session starts and instances restart, they get NEW public IPs.
-    This command syncs the Terraform state file so the new IPs are known.
-    It does not change anything on AWS and does not restart containers.
-
-    After this command, check whether training had finished (Case A) or not (Case B):
-
-      Case A — training finished before the session expired:
-        python scripts/aws_deploy.py collect   # metrics.csv is on disk, SCP works
-        python scripts/aggregate_metrics.py
-        python scripts/aws_deploy.py destroy
-
-      Case B — training was mid-run (model state in RAM was lost, no checkpointing):
-        python scripts/aws_deploy.py deploy    # re-upload source, restart containers
-        # training restarts from round 1
-        python scripts/aws_deploy.py collect
-        python scripts/aws_deploy.py destroy
-    """
     print("Refreshing Terraform state (public IPs may have changed after session restart)...")
     _terraform(TERRAFORM_DIR, "apply", "-refresh-only", "-auto-approve")
     out = _terraform_output(TERRAFORM_DIR)
@@ -518,8 +330,7 @@ def cmd_provision(cfg: dict):
             f"Set num_workers <= 8 in config.yaml before provisioning."
         )
 
-    # vCPU check: t3.small/medium/large all use 2 vCPUs; limit is 32.
-    # 9 × t3.large (2 vCPU) = 18 vCPUs — always within limits for supported types.
+
 
     tfvars = {
         "num_workers":            num_workers,
@@ -666,8 +477,7 @@ def cmd_deploy(cfg: dict):
     print("\n[5/5] Starting workers...")
     def start_worker(args):
         i, pub, priv = args
-        # Mount worker_{i}/ directly as /app/data/femnist so the container
-        # sees train/ and val/ at the top level, matching load_partition(data_dir).
+
         global_test_mount = (
             f"-v /home/ubuntu/data/femnist/global_test:/app/data/femnist/global_test:ro "
             if global_test_set else ""
@@ -710,7 +520,7 @@ def cmd_collect(cfg: dict):
         local_dir = DATA_ROOT / f"worker_{i}"
         local_dir.mkdir(parents=True, exist_ok=True)
         # Files are written to /app/data/femnist/ inside the container, which
-        # maps to /home/ubuntu/data/femnist/worker_{i}/ on the host (the mount point).
+        # maps to /home/ubuntu/data/femnist/worker_{i}/ on the host .
         remote_dir = f"/home/ubuntu/data/femnist/worker_{i}"
         for fname in ("metrics.csv", "local_test_result.json", "model_best.pt"):
             probe = _ssh(ip, key_path,

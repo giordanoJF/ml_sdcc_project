@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""
-Per-class error analysis: confusion matrix over the global test set.
 
-Complements aggregate_metrics.py, which reports scalar accuracy/macro-F1 per
-worker but cannot say *where* a model fails. This script loads every worker's
-model_best.pt for a configuration, runs inference on the shared global test
-set, and sums the per-worker confusion matrices into one combined matrix for
-the configuration — consistent with how other metrics in this project (mean
-accuracy, spread) are already read at the configuration level, not per
-individual worker.
-
-Requires model_best.pt to be present under <data-root>/worker_*/ — for
-archived runs, only present since the save_experiment.py fix that archives
-checkpoints; older archived runs will not have it (rerun to get it).
-
-Usage:
-    python scripts/confusion_matrix.py                                # live run
-    python scripts/confusion_matrix.py --data-root results/<name>     # archived run
-    python scripts/confusion_matrix.py --top-k 30
-
-Output (printed to stdout, and saved to <data-root>/confusion_matrix.csv):
-    - Per-worker macro precision/recall/F1 (cross-check against metrics.csv)
-    - Combined macro precision/recall/F1 over all workers summed
-    - Top-K most confused ordered class pairs (true -> predicted)
-    - Bottom-K classes by recall (the classes the model misses most)
-"""
 import argparse
 import glob
 import os

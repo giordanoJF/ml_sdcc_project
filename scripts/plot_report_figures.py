@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Generate aggregate, multi-run figures for the academic report.
 
-Reads the raw per-run outputs already saved under results/<run>/ (summary.txt,
-global_metrics.csv, config.yaml) without modifying anything in that tree, and
-writes PDF figures to results/report_figures/.
-
-Usage:
-    python scripts/plot_report_figures.py
-"""
 import csv
 import os
 import re
@@ -32,14 +23,14 @@ RUNS = [
     ("20260620_205044_n5_fn_run6", "n5_fn",     "local"),
     ("20260620_211325_n8_f1_run7", "n8_f1",     "local"),
     ("20260620_213754_n8_fn_run8", "n8_fn",     "local"),
-    ("20260705_160406_AWS_run1",   "n3_h500",   "aws"),
-    ("20260704_014958_AWS_run2",   "n3_h100",   "aws"),
-    ("20260705_125640_AWS_run3",   "n3_h1000",  "aws"),
-    ("20260706_022225_AWS_run4",   "n3_f2",     "aws"),
-    ("20260706_135409_AWS_run5",   "n5_f1",     "aws"),
-    ("20260706_190039_AWS_run6",   "n5_fn",     "aws"),
-    ("20260706_163723_AWS_run7",   "n8_f1",     "aws"),
-    ("20260707_034140_AWS_run8",   "n8_fn",     "aws"),
+    ("20260709_181238_AWS-RUN1-FIX", "n3_h500",   "aws"),
+    ("20260709_181546_AWS-RUN2-FIX", "n3_h100",   "aws"),
+    ("20260710_023241_AWS-RUN3-FIX", "n3_h1000",  "aws"),
+    ("20260710_014136_AWS-RUN4-FIX", "n3_f2",     "aws"),
+    ("20260710_101843_AWS-RUN5-FIX", "n5_f1",     "aws"),
+    ("20260710_101126_AWS-RUN6-FIX", "n5_fn",     "aws"),
+    ("20260710_143713_AWS-RUN7-FIX", "n8_f1",     "aws"),
+    ("20260710_140006_AWS-RUN8-FIX", "n8_fn",     "aws"),
 ]
 
 # Verified against core/model.py (FEMNISTModel, default hyperparameters):

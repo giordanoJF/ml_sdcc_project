@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Generate docker-compose.yml from config.yaml.
 
-Workflow:
-    1. Edit  network.num_workers  in config.yaml
-    2. Run   python scripts/generate_compose.py
-    3. Run   docker compose up --build
-"""
 import os
 import yaml
 
@@ -26,13 +19,7 @@ def _healthcheck(registry_port: int) -> str:
 
 
 def write_local_compose(num_workers: int, registry_port: int, use_gpu: bool, global_test_set: bool = False) -> None:
-    """
-    Generate docker-compose.yml for local single-machine development.
 
-    Uses string templating (instead of yaml.dump) so that the healthcheck
-    test is rendered as an inline flow sequence, which IDE schema validators
-    accept without warnings.
-    """
     dockerfile = "docker/Dockerfile.worker.gpu" if use_gpu else "docker/Dockerfile.worker"
     image_tag = "fl-worker-gpu" if use_gpu else "fl-worker"
 

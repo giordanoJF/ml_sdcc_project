@@ -43,8 +43,7 @@ le partizioni non sono bilanciate tra worker (Sezione~\ref{sec:details}A),
 quindi un criterio "un round = un'epoca" farebbe comunicare più spesso i
 worker con meno dati, rendendo la frequenza di comunicazione una
 conseguenza indiretta del partizionamento anziché un parametro controllato
-direttamente — a parità di $H$, tutti i worker comunicano alla stessa
-cadenza indipendentemente da quanti dati hanno (ma sempre in funzione dell'hardware).
+direttamente.
 
 La struttura è a tre livelli annidati, dal più piccolo al più grande. Il
 \emph{minibatch} è l'unità elementare: \texttt{batch\_size}$=32$ campioni,
@@ -63,7 +62,7 @@ della partizione — il caso concreto è discusso in Fase B qui sotto.
   \item \textbf{Fase A — aggregazione e valutazione.} Il worker applica
         FedAvg (Eq.~\ref{eq:fedavg}) tra i propri pesi e la somma pesata
         accumulata nel buffer di ricezione, quindi valuta il modello risultante
-        sul proprio validation set e, se abilitato, sul global test set. La
+        sul proprio validation set (controllando l'early stopping) e, se abilitato, sul global test set. La
         Fase A include quindi non solo la media dei pesi (costo trascurabile)
         ma anche l'inferenza completa su questi due insiemi di dati.
   \item \textbf{Fase B — addestramento locale.} Il worker esegue $H$ passi di
@@ -76,16 +75,21 @@ della partizione — il caso concreto è discusso in Fase B qui sotto.
         un'epoca termina durante
         i passi $H$ di un round, il generatore prosegue trasparentemente
         nell'epoca successiva con un nuovo shuffle, senza che il confine di
-        round interferisca. Nelle configurazioni qui testate un'epoca non si
-        esaurisce comunque mai entro un singolo round, quindi non si
-        verificano letture ripetute dello stesso campione
-        \emph{all'interno} di un round: anche al valore massimo $H=1000$
-        (32\,000 campioni per round) si resta ben sotto la partizione più
-        piccola tra quelle testate ($\sim$158\,500 campioni a $N=3$).
+        round interferisca. Il confine tra un'epoca e la successiva può quindi effettivamente cadere
+        durante l'esecuzione di un round anziché sul suo limite. Se un
+        tale round consuma le ultime $a$ osservazioni dell'epoca in esaurimento
+        (di dimensione $E$, la partizione locale del worker) e prosegue leggendo le restanti
+        $H\times\text{batch\_size} - a$ osservazioni da un'epoca appena rimescolata,
+        una lettura ripetuta \emph{all'interno dello stesso
+        round} si verifica solo se uno di questi nuovi campioni coincide con uno dei
+        $a$ già letti in questo stesso round. Poiché il nuovo shuffle è uniforme
+        sull'intera partizione dei campioni, la probabilità che ciò accada per un
+        singolo campione è bassa. È dunque strutturalmente
+        più probabile che un campione della nuova epoca corrisponda a una delle
+        $E-a$ osservazioni lette nei round precedenti di quella stessa epoca.
   \item \textbf{Fase C — push one-hop.} Il worker seleziona $\min(k,
         |\text{peer disponibili}|)$ vicini \emph{casualmente e in modo
-        indipendente a ogni round} (non c'è memoria della selezione dei round
-        precedenti) dalla propria cache di peer, e invia loro uno snapshot
+        indipendente a ogni round} dalla propria cache di peer, e invia loro uno snapshot
         dei pesi correnti via gRPC con timeout configurabile. La selezione
         casuale non è un vincolo del protocollo ma un modello neutro di
         qualunque politica di selezione dei vicini si volesse adottare in
@@ -149,98 +153,70 @@ di informazione a ogni dimezzamento della risoluzione spaziale
 ($28\to14\to7$); il kernel $3\times3$ in cascata ottiene il
 campo ricettivo di una $5\times5$ con meno parametri, e il same padding
 preserva la dimensione spaziale fino al pooling. Un'architettura più pesante
-(es.\ ResNet-18, $\sim$11M parametri, $\sim$6$\times$ questo modello) sarebbe
-sovradimensionata a questa risoluzione: i tratti di un carattere scritto a
-mano sono già ben rappresentati da 2--3 layer convolutivi, e la profondità o
-le connessioni residuali aggiuntive tipiche di ResNet servono a catturare
-gerarchie di feature molto più complesse (immagini naturali, centinaia di
-pixel per lato) che qui si suppone non servono. In un sistema FL dove il modello
+(es.\ ResNet-18, $\sim$11M parametri, $\sim$6$\times$ questo modello) abbiamo ipotizzato fosse
+sovradimensionata a questa risoluzione. In un sistema FL dove il modello
 viene interamente ritrasmesso a ogni push, la dimensione è fondamentale:
 non solo come capacità, ma come costo di comunicazione diretto. Il modello qui usato è quindi un compromesso deliberato tra
 capacità sufficiente per il compito e leggerezza per il contesto FL.
 
-Batch normalization stabilizza il training; nel contesto federato
-solo $\gamma,\beta$ sono aggregati da FedAvg, le statistiche correnti
-restano locali — limitazione discussa in Sezione~\ref{sec:discussion}.
+Per lo stesso motivo è stato escluso anche un Transformer (es.\ Vision
+Transformer): a differenza della convoluzione, il self-attention non ha
+alcun \emph{inductive bias} di località o traslazione-invarianza, e deve
+apprenderlo dai dati — motivo per cui i ViT richiedono pre-training su
+dataset enormi per essere competitivi con le CNN. Le partizioni non-i.i.d.\
+di poche centinaia di campioni per classe qui disponibili sono l'opposto
+di quel regime. A parità di capacità, un Transformer avrebbe anche più
+parametri da ritrasmettere a ogni push rispetto a questa CNN, aggravando
+proprio il costo di comunicazione che il modello è pensato per minimizzare.
+
+Batch normalization stabilizza il training; nel contesto federato $\gamma,\beta$ sono aggregati da FedAvg.
 Dropout spaziale ($p=0{,}25$) e dropout standard ($p=0{,}5$ sul layer più esposto a
 overfitting con $\sim$1,6M parametri) regolarizzano le partizioni locali.
 L'inizializzazione dei pesi usa il default di PyTorch, Kaiming uniform per
-\texttt{Conv2d} e \texttt{Linear}~\cite{he2015delving}. Il modello è addestrato con
+\texttt{Conv2d} e \texttt{Linear} (He initialization). Il modello è addestrato con
 AdamW.
 
 \subsection{Tolleranza ai guasti}
 Il sistema include meccanismi opzionali di fault injection configurabili
 (probabilità di crash simulato via \texttt{sys.exit} e di drop silenzioso di
 un messaggio), implementati ma non esercitati in nessuno dei 16 run
-riportati (\texttt{crash\_probability} e \texttt{drop\_probability} sono nulle
-in tutta la campagna sperimentale, Sezione~\ref{sec:results}): la loro
-validazione empirica non è stata effettuata per mancanza di tempo e resta
-lavoro futuro. Il comportamento previsto dal codice è il seguente: un crash
+riportati: la loro
+validazione empirica resta lavoro futuro. Il comportamento previsto dal codice è il seguente: un crash
 simulato interrompe il round corrente con \texttt{sys.exit}, che attraversa
 comunque il blocco di terminazione che deregistra il worker — un
 comportamento più vicino a un arresto pulito che a un crash reale; gli altri
 worker non vengono bloccati e si accorgono dell'assenza del peer al primo
 fallimento di invio verso di esso, aggiornando la propria cache. Solo un
-segnale SIGKILL, non intercettabile, produce un'uscita realmente non pulita,
-che lascia una entry non valida nel discovery server fino al successivo
-fallimento di invio — limitazione discussa nella
-Sezione~\ref{sec:discussion}.
+segnale SIGKILL, non intercettabile, produce un'uscita ungraceful,
+che lascia una entry non valida nel discovery server.
 
 \subsection{Motivazione degli iperparametri di training}
 Il gradient clipping ($\|\nabla\|\le1$) limita la deriva dei pesi tra
-aggregazioni; il label smoothing ($\epsilon=0{,}1$~\cite{szegedy2016rethinking})
+aggregazioni; il label smoothing ($\epsilon=0{,}1$)
 attenua l'eccesso di confidenza sulle classi ambigue di FEMNIST (es.\
 \texttt{0}/\texttt{O}, \texttt{1}/\texttt{l}/\texttt{I}).
 
-L'ottimizzatore è AdamW~\cite{loshchilov2019decoupled} anziché SGD o Adam
+L'ottimizzatore è AdamW anziché SGD o Adam
 semplice, per due motivi. Primo, AdamW disaccoppia il weight decay
 dall'aggiornamento basato sul gradiente adattivo: in Adam classico, la
 regolarizzazione L2 interagisce con i learning rate adattivi per-parametro
 in modo che ne attenua l'effetto in modo non uniforme tra i parametri;
 AdamW applica il weight decay direttamente ai pesi, indipendentemente dalla
 scala del gradiente, un comportamento più prevedibile per un iperparametro
-(\texttt{weight\_decay}) che qui resta comunque fisso. Secondo, un
+ che qui resta comunque fisso. Secondo, un
 ottimizzatore adattivo per-parametro richiede meno tuning del learning rate
-di SGD per convergere in modo ragionevole — utile in questo lavoro, dove il
-budget sperimentale è speso sui tre parametri di sistema ($H$, $k$, $N$) e
-non è disponibile per una ricerca separata del learning rate ottimale per
-ciascuna delle 16 configurazioni; è inoltre coerente con l'eterogeneità non-i.i.d.
-tra worker, dove ciascuno ottimizza una loss locale diversa: un tasso
-adattivo per-parametro si adegua meglio a superfici di loss locali diverse
-rispetto a un tasso fisso unico calibrato per tutte.
+di SGD per convergere in modo ragionevole.
 
-AdamW con learning rate $10^{-3}$ e batch size 32 sono \emph{fissi} e legati
-dalla \emph{linear scaling rule}: variarli insieme avrebbe introdotto un
-confondimento non separabile col numero limitato di run. Nessuna
-cross-validation: selezione manuale, un run per configurazione.
-
-I parametri seguono quindi tre categorie. \emph{Iperparametri ML fissi}:
-learning rate, batch size, dropout, label smoothing, gradient clipping,
-architettura della CNN — mai oggetto della griglia. \emph{Parametri di
-sistema variati} (Sezione~\ref{sec:results}): $H\in\{100,500,1000\}$ (Blocco
-A, $N=3$ fisso; 500 è il valore di riferimento di
-DiLoCo~\cite{douillard2023diloco}), il fanout $k$ e $N\in\{3,5,8\}$
-(Blocchi B e C) — i soli tre parametri di cui questo lavoro misura l'effetto
-comparativo. Il limite superiore $N=8$ non è una scelta di progetto ma un
-vincolo della piattaforma di test: AWS Learner Lab consente al massimo 9
-istanze EC2 concorrenti per account, una delle quali è riservata al
-discovery server, lasciando $N\le8$ worker disponibili
-(Sezione~\ref{sec:details}F). \emph{Parametri strutturali fissi}: FedAvg,
-\texttt{max\_staleness}=10, fault injection disattivata.
+Seguono quindi due categorie. \emph{Iperparametri ML fissi}:
+learning rate, batch size, dropout, label smoothing, gradient clipping. \emph{Iperparametri di
+sistema variati} (Sezione~\ref{sec:results}): $H\in\{100,500,1000\}$, il fanout $k$ e $N\in\{3,5,8\}$.
 
 \subsection{Piattaforma software}
 Il sistema è implementato in Python 3.11 con PyTorch (modello e training),
 gRPC/Protobuf (comunicazione push tra worker), Flask (discovery server), containerizzato
 con Docker e orchestrato con Docker Compose in locale. Il deployment su AWS
 usa Terraform per provisionare un'istanza EC2 per worker più una per il
-discovery server (modalità multi-istanza, rete reale tra macchine fisicamente
-separate), con build dell'immagine Docker in parallelo su ciascuna istanza.
-L'account didattico AWS Learner Lab usato per i test impone un tetto di 9
-istanze EC2 concorrenti: una è occupata dal discovery server, per cui il
-numero massimo di worker testabile è $N=8$ — il limite superiore della
-griglia sperimentale (Sezione~\ref{sec:results}) riflette questo vincolo
-della piattaforma, non un limite del protocollo, che non assume alcun tetto
-su $N$.
+discovery server, con build dell'immagine Docker in parallelo su ciascuna istanza.
 
 Le immagini Docker sono costruite sfruttando il \emph{layer caching}: ogni
 istruzione del Dockerfile produce un layer immutabile riutilizzato se il suo
@@ -251,56 +227,33 @@ del sorgente Python: il layer più costoso, l'installazione di PyTorch
 ($\sim$750\,MB), viene rieseguito solo se cambia \texttt{requirements.worker.txt},
 non ad ogni modifica al codice — una modifica al codice invalida solo l'ultimo
 layer, riducendo la rebuild da minuti a pochi secondi. Tutti i worker di un
-deployment condividono inoltre un'unica immagine (\texttt{docker compose
-up --build} la costruisce una sola volta): i layer read-only, incluso quello
-di PyTorch, sono condivisi su disco tra tutti i container, che aggiungono
-solo un sottile layer scrivibile per i propri file di runtime.
-
-Il sistema non include una suite di test automatizzati (unit o integration
-test); la sua validazione è di tipo empirico, tramite esecuzione end-to-end
-sulle 16 configurazioni sperimentali di Sezione~\ref{sec:results}, con
-verifica incrociata delle metriche registrate (conteggio dei messaggi
-scambiati, tempi di fase, coerenza tra round completati e pazienza configurata)
-contro i log grezzi prodotti da ciascun worker.
+deployment condividono inoltre un'unica immagine.
 
 \subsection{Vincolo di RAM e caricamento del dataset}
-Il caricamento del dataset non è \emph{lazy}: \texttt{FEMNISTDataset.\_\_init\_\_}
+\texttt{FEMNISTDataset.\_\_init\_\_}
 converte l'intero split di training in tensori tenuti in memoria all'avvio,
 una scelta di semplicità che però si scontra con il vincolo di RAM delle
 istanze \texttt{t3.small} usate su AWS (2\,GB, Sezione~\ref{sec:results}). Il
 formato LEAF serializza i pixel come numeri in JSON: durante il parsing, ogni
-valore diventa un oggetto \texttt{float} Python, che occupa $\sim$24\,byte per
-via dell'overhead dell'interprete, contro i 4\,byte di un \texttt{float32}
-compatto. Con $N=8$ worker ($\sim$100\,000 immagini ciascuno, 784 pixel per
-immagine) il picco di RAM durante il solo parsing JSON era
-$100\,000 \times 784 \times 24\,\text{byte} \approx 1{,}9$\,GB per singolo
-worker; con $N=3$ ($\sim$267\,000 immagini ciascuno) saliva a
-$\sim$4{,}6\,GB — ben oltre i 2\,GB disponibili. Il sintomo era un OOM kill
-(\texttt{SIGKILL}) su worker scelti a caso durante l'avvio, con il cluster
-bloccato a $N{-}1$ worker registrati su $N$ attesi.
+valore diventa un oggetto \texttt{float} Python, che occupa più byte rispetto un \texttt{float32}
+compatto.
 
 La correzione separa il parsing dal caricamento a runtime.
-\texttt{split\_dataset.py} esegue ora una terza passata che rilegge il JSON
+\texttt{split\_dataset.py} esegue ora una passata che rilegge il JSON
 già scritto per ciascun worker e lo converte, una sola volta, in array NumPy
 tipizzati (\texttt{float32} + \texttt{int64}), salvati come
 \texttt{data.npy}/\texttt{labels.npy} accanto al JSON originale.
 \texttt{dataset.py} carica questi binari con \texttt{np.load} quando
 presenti, con fallback al JSON per gli split generati prima della modifica:
 niente più oggetti \texttt{float} Python intermedi, il picco di RAM scende
-alla sola dimensione dell'array ($\sim$310\,MB a $N=8$, $\sim$830\,MB a
-$N=3$), e \texttt{torch.from\_numpy} condivide la memoria con l'array NumPy
+e \texttt{torch.from\_numpy} condivide la memoria con l'array NumPy
 senza copie aggiuntive. Il \emph{global test set}, letto in sola lettura da
 tutti i worker, usa inoltre \texttt{np.load(mmap\_mode=\textquotesingle
 c\textquotesingle)}: nelle modalità in cui più worker condividono la stessa
 macchina (locale, single-EC2) il sistema operativo mappa le stesse pagine
 fisiche per tutti i processi che aprono il file, azzerando la duplicazione
 che si avrebbe altrimenti per worker; in modalità multi-istanza, dove ogni
-EC2 ospita un solo worker, questo beneficio di condivisione non si applica,
-ma \texttt{mmap} resta comunque corretto ed evita il parsing JSON. Le
-partizioni per-worker non usano \texttt{mmap}: ogni worker legge un file
-diverso, quindi nessuna condivisione tra processi è possibile, e un array
-contiguo in RAM resta preferibile per l'accesso casuale del training loop con
-shuffle.
+EC2 ospita un solo worker, questo beneficio di condivisione non si applica.
 
 \subsection{Riusabilità}
 Il sistema è progettato per non dipendere dalle specificità di FEMNIST. Il
@@ -310,25 +263,14 @@ tra loro: l'eterogeneità è il caso di base gestito dal progetto, non
 un'eccezione da accomodare — un dataset LEAF diverso (es.\ Shakespeare,
 Sentiment140) o una partizione non-i.i.d.\ più estrema richiederebbero solo
 un nuovo caricatore dati (\texttt{core/dataset.py}), non una riprogettazione
-della logica di training o di comunicazione. L'unica dipendenza strutturale esterna
-è il discovery server, che espone quattro soli endpoint REST: adattare il
-sistema a un'altra infrastruttura (altro cloud provider, rete locale, un
-mix di dispositivi edge) richiede solo di ripuntare l'URL del registro, non
-di modificare il protocollo di aggregazione. Il protocollo di comunicazione
+della logica di training o di comunicazione. Il protocollo di comunicazione
 stesso è agnostico rispetto all'architettura del modello — serializza un
-intero \texttt{state\_dict} PyTorch senza logica specifica per
-\texttt{FEMNISTModel} — per cui sostituire la rete neurale richiede di
-cambiare un solo punto di istanziazione, non il livello di rete. Infine, il
+intero \texttt{state\_dict} PyTorch senza logica specifica. Infine, il
 numero di client, il fanout $k$ e tutti gli iperparametri sono parametrizzati
 in un unico file di
 configurazione: adattare il sistema a una nuova scala non richiede modifiche
-al codice, come dimostrato direttamente dai run a $N=3,5,8$ di
-Sezione~\ref{sec:results}. La scelta di gRPC su Protobuf è motivata anche da questo obiettivo di
+al codice. La scelta di gRPC su Protobuf è motivata anche da questo obiettivo di
 riusabilità: lo schema \texttt{gossip.proto} (Sezione~\ref{sec:design}C) è
 indipendente dal linguaggio e gRPC genera client/server per numerosi
 linguaggi, per cui un worker non Python potrebbe in linea di principio
-interoperare in un contesto eterogeneo. Questo vale però solo a livello di
-trasporto e metadati: il campo \texttt{weights} resta un payload opaco
-serializzato con \texttt{torch.save}, specifico di Python — l'interoperabilità
-end-to-end richiederebbe un formato di tensori neutro (es.\
-\texttt{safetensors}).
+interoperare in un contesto eterogeneo.

@@ -1,35 +1,5 @@
 #!/usr/bin/env python3
-"""
-Split the downloaded FEMNIST dataset into per-worker partitions.
 
-Run AFTER download_femnist.py and BEFORE docker compose up.
-Re-run whenever num_workers, local_test_set, or global_test_set in config.yaml changes.
-
-Usage:
-    python scripts/split_dataset.py
-
-Input:
-    data/femnist/data/train/*.json    (80% or 90% of each writer's samples)
-    data/femnist/data/val/*.json      (20% or 10% — set by --tf in download_femnist.py)
-
-Output (local_test_set: false, global_test_set: false):
-    data/femnist/worker_N/train/data.json + data.npy + labels.npy
-    data/femnist/worker_N/val/data.json   + data.npy + labels.npy
-
-Output (local_test_set: true):
-    data/femnist/worker_N/train/data.json      + data.npy + labels.npy  ← 80%
-    data/femnist/worker_N/val/data.json        + data.npy + labels.npy  ← 10%
-    data/femnist/worker_N/local_test/data.json + data.npy + labels.npy  ← 10%
-
-Output (global_test_set: true, additional):
-    data/femnist/global_test/data.json + data.npy + labels.npy
-
-Memory: three-pass — peak during streaming = one JSON shard; peak during .npy conversion =
-  one per-worker partition at a time (~300–800 MB depending on num_workers).
-  Pass 1 — read only writer IDs (no pixel data) from train/ and val/.
-  Pass 2 — stream shards, writing each writer's data to the correct file immediately.
-  Pass 3 — convert each per-worker JSON to .npy for fast binary loading in containers.
-"""
 import gc
 import glob
 import json
@@ -201,7 +171,7 @@ def main():
     if os.path.isdir(global_test_dir):
         shutil.rmtree(global_test_dir)
 
-    # ── Pass 1: single source of truth ────────────────────────────────────────
+    #Pass 1: single source of truth
     #
     # Sorted union of train/ and val/ writers: fully deterministic regardless of
     # LEAF's internal shard ordering. No assumption on which split comes first
@@ -229,7 +199,7 @@ def main():
 
     global_buffer: dict | None = {} if global_test_set else None
 
-    # ── Pass 2a: train/ ───────────────────────────────────────────────────────
+    # Pass 2a: train/
     train_dirs = [os.path.join(DEST_ROOT, f"worker_{i}", "train") for i in range(num_workers)]
     train_handles, first_train = _open_worker_files(train_dirs, train_user_lists)
 
@@ -238,7 +208,7 @@ def main():
             train_handles, first_train, global_buffer)
     _close_worker_files(train_handles)
 
-    # ── Pass 2b: val/ (+ optional local_test/) ───────────────────────────────
+    # Pass 2b: val/ (+ optional local_test/)
     val_dirs = [os.path.join(DEST_ROOT, f"worker_{i}", "val") for i in range(num_workers)]
     val_handles, first_val = _open_worker_files(val_dirs, val_user_lists)
 
@@ -255,7 +225,7 @@ def main():
     if lt_handles:
         _close_worker_files(lt_handles)
 
-    # ── Write global_test/ ────────────────────────────────────────────────────
+    # Write global_test/
     if global_buffer is not None:
         os.makedirs(global_test_dir, exist_ok=True)
         with open(os.path.join(global_test_dir, "data.json"), "w") as f:
@@ -277,11 +247,10 @@ def main():
         np.save(os.path.join(global_test_dir, "data.npy"),   gt_x[:idx])
         np.save(os.path.join(global_test_dir, "labels.npy"), gt_y[:idx])
 
-    # ── Pass 3: pre-generate .npy for fast loading in worker containers ──────────
+    # Pass 3: pre-generate .npy for fast loading in worker containers
     # JSON-parsed Python float objects cost ~24 bytes/float (vs 4 as float32).
-    # For N=8 workers (~100k images each), JSON peak RAM was ~1.9 GB — OOM risk on
-    # t3.small (2 GB). Binary .npy files let dataset.py skip JSON entirely: load
-    # peak drops to the array size alone (~310 MB for N=8, ~830 MB for N=3).
+    # For N=8 workers, JSON peak RAM was ~1.9 GB. Binary .npy files let dataset.py skip JSON entirely: load
+    # peak drops to the array size alone.
     npy_splits = ["train", "val"] + (["local_test"] if local_test_set else [])
     print(f"\n[pre-generating .npy ({', '.join(npy_splits)})]")
     for i in range(num_workers):

@@ -67,7 +67,7 @@ propria cache locale.
   peer-to-peer via gRPC (frecce continue). Il grafo tra worker è
   \emph{potenziale}, non fisso: a ogni round ciascun worker sceglie
   casualmente $k$ destinatari tra i peer disponibili, senza inoltro da parte
-  di chi riceve (Sezione~\ref{sec:background}E). Il riquadro tratteggiato
+  di chi riceve (Sezione~\ref{sec:background}D). Il riquadro tratteggiato
   rappresenta le istanze AWS; il terminale locale lancia il deployment,
   raccoglie i risultati e calcola le metriche aggregate a fine training.}
   \label{fig:architecture}
@@ -95,13 +95,13 @@ serializzazione binaria di un \texttt{state\_dict} PyTorch produce un
 messaggio 2--3$\times$ più compatto rispetto alla codifica testuale
 equivalente, un risparmio non trascurabile quando ogni messaggio trasporta
 l'intero modello (Sezione~\ref{sec:results}). La lista dei peer è letta dal
-discovery server una sola volta, all'avvio (Sezione~\ref{sec:details}A), e
+discovery server una sola volta, all'avvio (Sezione~\ref{sec:details}B), e
 tenuta in una cache locale per l'intera durata del training: se il worker
 la reinterrogasse a ogni round, il traffico verso il discovery server
 crescerebbe linearmente con il numero di round anziché restare $O(1)$ per
 l'intera run, vanificando in parte l'obiettivo di traffico ridotto che
 motiva anche la scelta del push one-hop a fanout fisso
-(Sezione~\ref{sec:background}E). La cache
+(Sezione~\ref{sec:background}D). La cache
 viene aggiornata solo lazily, cioè non periodicamente ma esclusivamente
 quando serve: ogni invio ha un timeout configurabile e, in caso di
 fallimento, il worker interroga di nuovo il discovery server e ritenta una

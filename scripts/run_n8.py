@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Quick test: run only the two N=8 configurations (n8_f1, n8_fn).
 
-H defaults to 500 (same as the reference run). If Block A results are already
-present in results/, best_H is read from them exactly as run_grid.py would.
-
-Usage:
-    python scripts/run_n8.py            # run both n8_f1 and n8_fn
-    python scripts/run_n8.py --dry-run  # print plan only
-"""
 import argparse
 import sys
 from pathlib import Path

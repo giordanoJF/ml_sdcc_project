@@ -1,13 +1,4 @@
-"""
-Per-worker metrics logging.
 
-Each worker writes one CSV row per round to {data_dir}/metrics.csv.
-Because data_dir is mounted from the host, the file is immediately
-visible on the host without any extra data transfer.
-
-After the experiment, run scripts/aggregate_metrics.py to produce
-global statistics across all workers.
-"""
 import csv
 import os
 import time
@@ -38,7 +29,6 @@ FIELDS = [
 
 
 class MetricsWriter:
-    """Appends one CSV row per round to output_path."""
 
     def __init__(self, output_path: str, worker_id: str):
         self.path = output_path

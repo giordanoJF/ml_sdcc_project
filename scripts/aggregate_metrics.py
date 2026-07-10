@@ -1,50 +1,5 @@
 #!/usr/bin/env python3
-"""
-Aggregate per-worker metric CSVs into a global summary.
 
-Run this script after an experiment to compare worker performance and
-compute global statistics. Useful for comparing different configurations
-or studying what changes when num_workers varies.
-
-Usage:
-    python scripts/aggregate_metrics.py
-    python scripts/aggregate_metrics.py --plot                      # also generate PNG plots
-    python scripts/aggregate_metrics.py --data-root data/femnist    # custom path, live run
-    python scripts/aggregate_metrics.py --data-root results/<name>  # recompute on an archived run
-
-Input:
-    <data-root>/worker_*/metrics.csv      (one file per worker, required)
-    <data-root>/worker_*/model_best.pt    (best checkpoint by val_loss; archived by
-                                            save_experiment.py alongside the metrics, so weight
-                                            divergence is also available for archived
-                                            results/<name> runs saved after that fix — older
-                                            archived runs predating it will not have it)
-    <data-root>/config.yaml               (used for total_rounds; falls back to the project's
-                                            live config.yaml if not found under --data-root)
-
-Output (printed to stdout):
-    Per-round table  : round | mean_acc | std_acc | min_acc | max_acc [| phase timings]
-    Per-worker table : final/best accuracy, total training time, avg peers, phase breakdown
-    Convergence      : per-worker status (converged vs hit round limit), wall-clock time,
-                       system-level convergence (time from first worker start to last end)
-    Weight divergence: pairwise L2 distance between final model weights (if checkpoints found)
-    Functional convergence (global test set, if enabled):
-                       [A] at each worker's final round — reference only, noisy (see below)
-                       [B] at each worker's model_best.pt round — primary metric
-    Local test results: per-worker local_test_accuracy (only when local_test_set: true)
-
-Output (saved to disk):
-    Live run (--data-root data/femnist, the default):
-        global_metrics.csv          — per-round aggregated stats (+ phase timings if present)
-        summary.txt                 — human-readable summary including convergence verdict
-        accuracy_over_rounds.png    — (--plot) mean accuracy ± std and per-worker curves
-        loss_over_rounds.png        — (--plot) mean val loss and per-worker curves
-        phase_timing.png            — (--plot) phase A/B/C durations over rounds
-
-    Archived run (--data-root results/<name>): never overwrites anything already in that
-    folder. Writes a single new file instead:
-        summary_recomputed.txt      — same structured report as summary.txt above
-"""
 import argparse
 import csv
 import glob
@@ -69,7 +24,7 @@ def _plot_results(global_rows, worker_rows, data_root, has_timing, has_global_te
     std_accs = [r["std_accuracy"] for r in global_rows]
     mean_losses = [r["mean_val_loss"] for r in global_rows]
 
-    # --- accuracy over rounds ---
+    #  accuracy over rounds
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(rounds, mean_accs, label="mean accuracy", linewidth=2, color="steelblue")
     ax.fill_between(
@@ -115,7 +70,7 @@ def _plot_results(global_rows, worker_rows, data_root, has_timing, has_global_te
     plt.close(fig)
     print(f"Plot saved: {path}")
 
-    # --- phase timing (only when timing columns are present) ---
+    #  phase timing (only when timing columns are present)
     if has_timing:
         phase_b = [r["mean_phase_b_s"] for r in global_rows]
         phase_a_ms = [r["mean_phase_a_s"] * 1000 for r in global_rows]
@@ -141,7 +96,7 @@ def _plot_results(global_rows, worker_rows, data_root, has_timing, has_global_te
         plt.close(fig)
         print(f"Plot saved: {path}")
 
-    # --- global test accuracy over rounds (functional convergence) ---
+    #  global test accuracy over rounds (functional convergence)
     if has_global_test:
         fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -177,18 +132,18 @@ def _plot_results(global_rows, worker_rows, data_root, has_timing, has_global_te
         print(f"Plot saved: {path}")
 
 
-# ---------------------------------------------------------------------------
+
 # Helpers
-# ---------------------------------------------------------------------------
+
 
 def load_worker_csv(path: str) -> list[dict]:
     with open(path, newline="") as f:
         return list(csv.DictReader(f))
 
 
-# ---------------------------------------------------------------------------
+
 # Main
-# ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate per-worker metrics.")
@@ -204,8 +159,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Any --data-root other than the live working directory (i.e. an archived
-    # results/<name>/ folder) is treated as read-only: we never overwrite files
+    # Any --data-root other than the live working directory is treated as read-only: we never overwrite files
     # that are already there, we only ever add a new summary_recomputed.txt.
     default_data_root = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "femnist"
@@ -248,9 +202,9 @@ def main():
     )
     has_macro_metrics = "val_macro_f1" in (all_rows[0] if all_rows else {})
 
-    # ---------------------------------------------------------------------------
+
     # Per-round global statistics
-    # ---------------------------------------------------------------------------
+
     if has_timing:
         print("=" * 100)
         print(f"{'Round':>6}  {'Mean Acc':>9}  {'Std Acc':>8}  {'Min Acc':>8}  {'Max Acc':>8}  "
@@ -335,9 +289,9 @@ def main():
     print(sep)
     print()
 
-    # ---------------------------------------------------------------------------
+
     # Per-worker summary
-    # ---------------------------------------------------------------------------
+
     worker_rows: dict[str, list[dict]] = {}
     for row in all_rows:
         worker_rows.setdefault(row["worker_id"], []).append(row)
@@ -403,13 +357,13 @@ def main():
     print(f"Total gossip messages sent across all workers and rounds: {total_sent}")
     print()
 
-    # ---------------------------------------------------------------------------
+
     # System convergence analysis
-    # ---------------------------------------------------------------------------
+
     # Load total_rounds from config.yaml to distinguish "converged" from "hit limit".
-    # Prefer the config archived alongside an old run (--data-root results/<name>/config.yaml)
+    # Prefer the config archived alongside an old run
     # so this reflects the config that actually produced the data, not today's live config.
-    # Falls back to the live project config.yaml (the normal case for the current run).
+    # Falls back to the live project config.yaml.
     # Gracefully skipped if neither is found.
     total_rounds_cfg = None
     archived_config_path = os.path.join(args.data_root, "config.yaml")
@@ -463,7 +417,7 @@ def main():
         summary_lines.append(line)
 
     # System-level: from the earliest worker start to the latest worker end.
-    # Workers run in parallel, so system convergence time ≠ sum of individual times.
+    # Workers run in parallel, so system convergence time != sum of individual times.
     system_start = min(worker_start_times)
     system_end   = max(worker_end_times)
     system_wall  = system_end - system_start
@@ -491,9 +445,9 @@ def main():
     print("-" * 65)
     print()
 
-    # ---------------------------------------------------------------------------
+
     # Save outputs
-    # ---------------------------------------------------------------------------
+
     if is_archived_run:
         print("Archived run — skipping global_metrics.csv (would overwrite the saved copy).")
     else:
@@ -516,9 +470,9 @@ def main():
             w.writerows(global_rows)
         print(f"Global metrics saved to: {global_csv_path}")
 
-    # ---------------------------------------------------------------------------
+
     # Weight divergence (requires final checkpoints — optional)
-    # ---------------------------------------------------------------------------
+
     checkpoint_paths = sorted(
         glob.glob(os.path.join(args.data_root, "worker_*", "model_best.pt"))
     )
@@ -562,14 +516,14 @@ def main():
 
     print()
 
-    # ---------------------------------------------------------------------------
+
     # Global test set convergence analysis (present only when global_test_set: true)
-    # ---------------------------------------------------------------------------
+
     # The global test set contains writers never assigned to any worker. Evaluating
     # all workers on the same data at each round reveals functional convergence:
     # if workers reach the same accuracy on unseen writers, the gossip protocol has
-    # driven them to the same functional solution — not just nearby parameters.
-    # ---------------------------------------------------------------------------
+    # driven them to the same functional solution
+
     def _verdict(spread: float) -> str:
         if spread < 0.02:
             return "STRONG functional convergence (spread < 2%)"
@@ -587,13 +541,13 @@ def main():
             "(writers never seen by any worker):"
         )
 
-        # ---------------------------------------------------------------
+
         # [A] At each worker's final round. Reference only: each worker stops
         # independently (async early stopping), so this compares workers at
         # arbitrary, unrelated rounds — noisy, can look better or worse than
         # the actual saved checkpoint. Kept for continuity with older runs.
         # See [B] below for the metric to use when comparing configurations.
-        # ---------------------------------------------------------------
+
         print("  [A] At final round (each worker's own stop point) — reference only, noisy:")
         summary_lines.append(
             "\n  [A] At final round (each worker's own stop point) — reference only, noisy:"
@@ -625,12 +579,12 @@ def main():
                 f"      Verdict: {verdict_a}"
             )
 
-        # ---------------------------------------------------------------
+
         # [B] At each worker's model_best.pt round (min val_loss). This is the
         # PRIMARY metric: it evaluates every worker at the checkpoint that is
         # actually saved/reported, chosen by a criterion independent of the
         # test set, so there is no post-peak drift or selection bias.
-        # ---------------------------------------------------------------
+
         print()
         print("  [B] At model_best.pt round (min val_loss) — PRIMARY metric:")
         summary_lines.append(
@@ -706,12 +660,12 @@ def main():
         print("-" * 65)
         print()
 
-    # ---------------------------------------------------------------------------
+
     # Local test set results (present only when local_test_set: true in config.yaml)
-    # ---------------------------------------------------------------------------
+
     # Local test writers belong to the same worker partition but were held out from
     # gradient updates. Measures generalisation on the worker's own writer population.
-    # ---------------------------------------------------------------------------
+
     local_test_result_paths = sorted(glob.glob(
         os.path.join(args.data_root, "worker_*", "local_test_result.json")
     ))
@@ -751,9 +705,9 @@ def main():
         print("-" * 65)
         print()
 
-    # ---------------------------------------------------------------------------
+
     # Save outputs
-    # ---------------------------------------------------------------------------
+
     summary_fname = "summary_recomputed.txt" if is_archived_run else "summary.txt"
     summary_path = os.path.join(args.data_root, summary_fname)
     with open(summary_path, "w") as f:

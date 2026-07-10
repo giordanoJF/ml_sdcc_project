@@ -1,32 +1,8 @@
-"""
-CNN for FEMNIST classification.
 
-Input:  (N, 1, 28, 28) — grayscale 28×28 images
-Output: (N, 62)        — logits over 62 character classes
-
-Architecture: two double-conv blocks (VGG-style) + fully-connected classifier.
-  - same-padding convolutions preserve spatial dimensions until each MaxPool
-  - BatchNorm after every conv stabilises activations and speeds convergence
-  - Dropout2d (spatial) and Dropout prevent overfitting on the small
-    non-i.i.d. local partitions each worker holds in the federated setting
-"""
 import torch.nn as nn
 
 
 class FEMNISTModel(nn.Module):
-    """
-    VGG-style CNN for FEMNIST (28×28 grayscale, 62 classes).
-
-    Spatial flow:
-        (N,  1, 28, 28)   input
-        (N, 32, 28, 28)   after block1 conv layers  (same padding, no shrink)
-        (N, 32, 14, 14)   after block1 MaxPool
-        (N, 64, 14, 14)   after block2 conv layers  (same padding, no shrink)
-        (N, 64,  7,  7)   after block2 MaxPool
-        (N,     3136)     flatten  (64 × 7 × 7)
-        (N,      512)     after fc1
-        (N,       62)     logits (no softmax — use cross_entropy loss)
-    """
 
     def __init__(
         self,

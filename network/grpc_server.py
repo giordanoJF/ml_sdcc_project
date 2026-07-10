@@ -1,11 +1,4 @@
-"""
-Worker Thread 1: gRPC Server (The Receiver).
 
-Listens for incoming gossip messages from peers, applies a staleness check,
-and merges received weights into a shared buffer via online (streaming) aggregation.
-The buffer stores a running weighted sum instead of a list of models, keeping
-memory usage O(model_size) regardless of how many messages are received.
-"""
 import concurrent.futures
 import io
 import logging
@@ -21,20 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class AggregationBuffer:
-    """
-    Thread-safe shared state between the gRPC server (Thread 1) and the
-    training loop (Thread 2).
 
-    Attributes:
-        lock:             Mutex protecting both accumulators.
-        weighted_sum:     Running weighted sum of received parameters,
-                          {param_name -> Tensor}. None until the first message
-                          arrives. Each tensor equals sum(w_i * n_i) over all
-                          received neighbors i.
-        received_samples: Sum of local_samples contributed by every received
-                          neighbor. Acts as the denominator when computing the
-                          neighbors' weighted average in Phase A.
-    """
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -46,7 +26,7 @@ class AggregationBuffer:
 
 
 class GossipServicer(gossip_pb2_grpc.GossipServiceServicer):
-    """gRPC servicer that implements the ReceiveModel RPC."""
+
 
     def __init__(
         self,
@@ -64,7 +44,7 @@ class GossipServicer(gossip_pb2_grpc.GossipServiceServicer):
         sender_round = request.round
         current_round = self.shared_state["current_round"]
 
-        # --- Staleness check (one-directional) ---
+        # Staleness check (one-directional)
         # Discard messages that are too old. If sender_round > current_round
         # the difference is negative, so messages "from the future" are always
         # accepted — a more advanced peer's update should never be rejected.
@@ -86,7 +66,7 @@ class GossipServicer(gossip_pb2_grpc.GossipServiceServicer):
         # Used to weight this neighbor's contribution proportionally.
         sender_samples: int = request.num_samples
 
-        # --- Online aggregation: maintain a running weighted sum ---
+        #  Online aggregation: maintain a running weighted sum
         # Instead of storing every received model in a list (O(N * model_size)),
         # we accumulate: weighted_sum += weights * sender_samples
         # so that weighted_sum / received_samples gives the neighbors' average.

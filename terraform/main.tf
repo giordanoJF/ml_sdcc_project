@@ -96,8 +96,7 @@ resource "aws_instance" "registry" {
   availability_zone      = var.availability_zone
   user_data              = local.user_data
 
-  # gp3 is cheaper ($0.08/GB/month) and faster than gp2 ($0.10/GB/month).
-  # volume_size_registry default: 8 GB (Flask server, no data stored).
+
   root_block_device {
     volume_type = "gp3"
     volume_size = var.volume_size_registry
@@ -119,9 +118,7 @@ resource "aws_instance" "worker" {
   availability_zone      = var.availability_zone
   user_data              = local.user_data
 
-  # gp3 is cheaper ($0.08/GB/month) and faster than gp2 ($0.10/GB/month).
-  # volume_size_worker default: 20 GB (OS ~5 GB + Docker ~1 GB + image ~3 GB +
-  # dataset partition ~0.5–2 GB + build cache ~1 GB).
+
   root_block_device {
     volume_type = "gp3"
     volume_size = var.volume_size_worker

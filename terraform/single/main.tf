@@ -74,9 +74,7 @@ resource "aws_instance" "single" {
   availability_zone      = var.availability_zone
   user_data              = local.user_data
 
-  # gp3 is cheaper ($0.08/GB/month) and faster than gp2 ($0.10/GB/month).
-  # volume_size default: 20 GB (OS ~6 GB + worker image ~3 GB + registry image ~0.3 GB
-  # + all dataset partitions ~0.5–4 GB + build cache ~1 GB).
+
   root_block_device {
     volume_type = "gp3"
     volume_size = var.volume_size

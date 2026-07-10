@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""
-Download and preprocess the FEMNIST dataset from the LEAF repository.
-Run this script ONCE before starting the system with docker compose.
 
-Usage:
-    python scripts/download_femnist.py          # full dataset (default, --sf 1.0)
-    python scripts/download_femnist.py --sf 0.05  # 5% subset for fast development
-
-    --sf: sampling fraction (default 1.0 = full dataset; 0.05 for quick runs)
-
-Output:
-    data/femnist/data/train/*.json
-    data/femnist/data/val/*.json
-"""
 import argparse
 import os
 import re
@@ -83,9 +70,6 @@ def main():
         print("Patched data_to_json.py: Image.ANTIALIAS → Image.LANCZOS")
 
     # Step 1c — Patch get_data.sh to use Python's zipfile instead of `unzip`.
-    # `unzip` is not universally available (absent on some Linux distros and WSL
-    # environments by default); Python's zipfile is always present and produces
-    # identical output.
     get_data_sh = os.path.join(LEAF_DIR, "data", "femnist", "preprocess", "get_data.sh")
     with open(get_data_sh) as f:
         src_text = f.read()
@@ -111,7 +95,7 @@ def main():
 
     # Step 3 — Run LEAF's preprocessing script for FEMNIST with non-i.i.d. split
     #
-    # preprocess.sh scarica le immagini NIST (~900 MB), le attribuisce a ogni scrittore
+    # preprocess.sh scarica le immagini NIST , le attribuisce a ogni scrittore
     # e produce train/*.json e test/*.json. La struttura per scrittore è preservata
     # dentro i JSON (chiave user_data), non in cartelle separate.
     #

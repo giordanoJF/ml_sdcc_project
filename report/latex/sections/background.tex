@@ -14,7 +14,7 @@ convergenza di FedAvg degrada con il grado di eterogeneità tra le
 distribuzioni locali.
 
 \subsection{DiLoCo e comunicazione sparsa}
-DiLoCo~\cite{douillard2023diloco} riduce la frequenza di comunicazione
+DiLoCo riduce la frequenza di comunicazione
 alternando $H$ passi di ottimizzazione locale (\emph{inner steps}) a un
 singolo passo di sincronizzazione globale, eseguito da un \emph{outer
 optimizer} con momentum mantenuto centralmente. Il sistema qui presentato
@@ -25,7 +25,7 @@ un coordinatore centrale. Il sistema sostituisce
 quindi la sincronizzazione globale periodica di DiLoCo con un'aggregazione
 locale asincrona basata su un push one-hop a fanout fisso tra vicini,
 descritta nella Sezione~\ref{sec:design} e motivata per contrasto con le
-alternative del corso nella Sezione~\ref{sec:background}E.
+alternative del corso nella Sezione~\ref{sec:background}D.
 
 \subsection{Dataset: LEAF e FEMNIST}
 FEMNIST è un dataset di caratteri manoscritti (cifre e
@@ -36,19 +36,6 @@ partizione corrisponde a scrittori diversi. Nel sistema qui presentato ogni
 client riceve dati di \emph{più} scrittori LEAF, per simulare
 uno scenario realistico in cui un partecipante rappresenta un piccolo gruppo
 di utenti piuttosto che un singolo individuo.
-
-\subsection{Strategie alternative non implementate}
-La letteratura propone diverse estensioni di FedAvg per mitigare
-l'eterogeneità dei dati: FedProx~\cite{li2020fedprox}, SCAFFOLD~\cite{karimireddy2020scaffold},
-FedBN~\cite{li2021fedbn}. Il sistema qui presentato implementa esclusivamente FedAvg,
-scelto come strategia di riferimento più semplice da rendere verificabile in
-un contesto decentralizzato puro. Non tutte le
-alternative sono equivalenti dal punto di vista architetturale: FedProx
-modifica solo la funzione di costo usata in Fase B (Sezione~\ref{sec:details}B)
-e potrebbe essere adottata senza alcuna modifica al buffer di aggregazione o
-al protocollo gRPC; SCAFFOLD richiederebbe di trasmettere anche variabili di
-controllo oltre ai pesi, aumentando la dimensione dei messaggi ma senza
-introdurre un aggregatore centrale.
 
 \subsection{Scelta del protocollo di comunicazione}
 Il corso di riferimento presenta tre famiglie di disseminazione a livello
@@ -61,7 +48,8 @@ anche come \emph{k-push}); i vicini sono scelti casualmente a ogni round,
 un modello neutro di una qualunque politica di selezione reale (prossimità
 di rete, similarità dei dati locali se disponibile, o un altro stato osservabile del nodo). I confronti
 che seguono si riferiscono alle scale testate in questo lavoro, $N\le8$ — il
-tetto imposto da AWS Learner Lab (Sezione~\ref{sec:details}F), non un limite
+tetto imposto dal numero massimo di istanze concorrenti consentito
+dall'account AWS Learner Lab usato per il deployment, non un limite
 intrinseco del protocollo.
 
 \textbf{Perché non flooding.} Il motivo principale è il traffico: il numero
@@ -91,7 +79,7 @@ traffico (requisito del progetto)— ogni hop di relay moltiplica i messaggi per
 ramificazione, mentre il push one-hop mantiene un costo per nodo
 indipendente da $N$ — quindi un compromesso esplicito tra traffico e
 qualità/freschezza dell'informazione, da valutare caso per caso. La nostra soluzione, essendo applicata ad un contesto
-di machine learning federato con fed avg, comunque propoaga ragionevolmente nel tempo l'informazione a tutta la rete,
+di machine learning federato con fed avg, comunque propaga ragionevolmente nel tempo l'informazione a tutta la rete,
 anche se hop è 1, in quanto i messaggi con i nuovi pesi hanno "memoria" anche dei vecchi aggiornamenti.
 Infatti il guadagno del relay è inoltre già in parte attenuato dal
 dominio applicativo: grazie a FedAvg, lo stato che un worker invia è già il
@@ -109,19 +97,3 @@ resta un'osservazione interessante da approfondire in futuro come si
 comporterebbe il gossip epidemico in un contesto con molti più nodi, e come
 si confronterebbe con la soluzione qui proposta.
 
-
-\textbf{Verifica empirica.} Il grafo one-hop raggiunge comunque la
-connettività completa alle scale qui testate: con $k=N-1$ ogni worker
-contatta \emph{tutti} i propri peer a ogni round, il limite superiore
-raggiungibile in un singolo hop. I risultati (Sezione~\ref{sec:results}A,
-Sezione~\ref{sec:discussion}A) mostrano che questo da solo chiude la
-maggior parte del divario osservato a fanout basso (+7--8 punti di
-accuratezza global-test tra $k=1$ e $k=N-1$ a $N=8$, spread quasi dimezzato);
-ma anche a $k=N-1$ lo spread non scende mai sotto il 14\%
-(Sezione~\ref{sec:discussion}D). Poiché $k=N-1$ è già la copertura massima
-raggiungibile in un hop, un relay multi-hop non avrebbe potuto ridurre
-ulteriormente questo residuo: la causa più probabile non è la portata del
-protocollo di comunicazione, ma l'assenza di un meccanismo esplicito di
-correzione del client drift (FedProx, SCAFFOLD, Sezione~\ref{sec:background}D)
-— una limitazione indipendente dalla scelta tra one-hop e multi-hop, discussa
-in Sezione~\ref{sec:discussion}D.

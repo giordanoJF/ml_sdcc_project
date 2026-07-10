@@ -2,49 +2,44 @@
 \label{sec:conclusions}
 
 Questo lavoro ha presentato un sistema di Federated Learning decentralizzato
-peer-to-peer, in cui FedAvg è eseguito tramite aggregazione online su pesi
+peer-to-peer, in cui FedAvg è eseguito tramite aggregazione su pesi
 scambiati con un protocollo di comunicazione push one-hop a fanout fisso $k$,
 senza alcun aggregatore centrale per l'intera durata dell'addestramento, e in
 cui la centralizzazione è confinata alla sola discovery dei client. Il sistema è stato valutato su
 FEMNIST (LEAF) con partizionamento non-i.i.d.\ per scrittore, in 16
 configurazioni tra esecuzione locale e deployment reale su AWS multi-istanza,
-raggiungendo un'accuratezza di validazione dell'87--91\% e mostrando che, nel
+raggiungendo un'accuratezza di validazione dell'87--92\% e mostrando che, nel
 regime testato, il costo di comunicazione del protocollo resta trascurabile
 rispetto al costo del calcolo locale, anche su rete reale. L'analisi ha inoltre evidenziato, in
-modo trasparente, i limiti della convergenza funzionale ottenuta e le
-condizioni sperimentali (singola replica, un confondimento di configurazione)
-sotto cui i risultati vanno interpretati.
+modo trasparente, i limiti della convergenza funzionale.
 
-Tra le 16 configurazioni testate, $N=8$, $k=N{-}1=7$, $H=1000$ emerge come
-quella con la miglior convergenza funzionale: la più alta accuratezza sul
-global test set e il più basso spread tra worker, in entrambi gli ambienti
-indipendentemente (83,5\%/15,2\% in locale, 84,6\%/14,0\% su AWS) — l'unico
-risultato di questo lavoro confermato in modo identico da entrambe le
-campagne sperimentali, e quindi la raccomandazione più solida che se ne
-possa trarre. Ha però anche il volume di traffico più alto di tutta la
-campagna (Tabella~\ref{tab:master}): resta una raccomandazione condizionata
-a un budget di banda ampio, non un ottimo assoluto. Se il traffico è
-vincolante, $N=5$, $k=N{-}1=4$, $H=1000$ offre un'accuratezza global-test e
-uno spread solo leggermente peggiori a una frazione del volume di
-comunicazione. In entrambi i casi, $H=1000$ resta il valore di passi locali
-raccomandato, l'unico iperparametro ML esplicitamente confrontato in
-questo lavoro (Sezione~\ref{sec:results}).
+Tra le 16 configurazioni testate, $N=8$, $k=N{-}1=7$, $H=1000$ resta quella
+con la più alta accuratezza sul global test set, in entrambi gli ambienti
+indipendentemente (83,5\% in locale, 81,6\% su AWS). Sullo spread tra worker
+il quadro è però meno netto della sola accuratezza: in locale resta anche la
+configurazione con lo spread più basso (15,2\%), ma nella campagna AWS qui
+riportata il minimo assoluto è \texttt{n3\_f2} (12,0\%, $N=3$, $k=2$),
+non \texttt{n8\_fn} (15,8\%). $N=8$, $k=N{-}1=7$ resta comunque anche la configurazione con il
+volume di traffico più alto di tutta la campagna (Tabella~\ref{tab:master}):
+la raccomandazione è condizionata a un budget di banda ampio, non un ottimo
+assoluto. Se il traffico è vincolante, $N=5$, $k=N{-}1=4$, $H=1000$ offre
+un'accuratezza global-test solo 3--4 punti più bassa (78,5\% su AWS) a meno di
+metà del volume di comunicazione (572 contro 1303 messaggi). In tutti i casi,
+$H=1000$ resta il valore di passi locali raccomandato.
 
-Sviluppi futuri naturali includono: l'introduzione di una strategia di
-aggregazione alternativa a FedAvg (ad es.\ FedProx) per mitigare
-esplicitamente il client drift osservato; una politica di $k$ adattivo che
-tenga conto del numero di peer ancora attivi; e la ripetizione delle
+Sviluppi futuri includono: l'introduzione di una strategia di
+aggregazione alternativa a FedAvg (ad es.\ FedProx), l'utilizzo del protocollo di gossip in sistemi a larga
+scala e la ripetizione delle
 configurazioni con seed multipli per quantificare rigorosamente la varianza
-run-to-run qui non misurata.
+run-to-run.
 
 Va inoltre osservato che il sistema non prevede alcun meccanismo di
 \emph{restart} automatico, né per i worker né per il discovery server: un
 crash richiede un intervento manuale, o un orchestratore esterno non
 implementato in questo lavoro (es. una restart policy Docker), per
-rilanciare il processo — i meccanismi seguenti presuppongono che il riavvio
-avvenga, non lo innescano. Due estensioni indirizzerebbero più a fondo la
+rilanciare il processo. Due estensioni indirizzerebbero più a fondo la
 tolleranza ai guasti, oggi solo parzialmente coperta
-(Sezione~\ref{sec:discussion}D). Per il rientro dopo un crash, il checkpoint
+(Sezione~\ref{sec:discussion}C). Per il rientro dopo un crash, il checkpoint
 locale già salvato a ogni miglioramento della
 validation loss potrebbe includere il numero di round: un worker riavviato
 si ri-registrerebbe con lo stesso identificativo e riprenderebbe da lì
@@ -58,5 +53,5 @@ solo il problema dei pesi, non quello dei dati: il partizionamento
 (Sezione~\ref{sec:details}A) è precalcolato per un numero fisso di worker
 prima del deployment, quindi un nodo davvero nuovo non avrebbe una
 partizione propria — servirebbe riservare in anticipo dati per client
-futuri (spreco se non usati) o un re-sharding a runtime, più complesso e in
-tensione con il principio di non spostare mai dati grezzi tra nodi.
+futuri o un re-sharding a runtime, più complesso e in
+tensione con il principio di non spostare mai dati grezzi tra nodi e rispettando la privacy.

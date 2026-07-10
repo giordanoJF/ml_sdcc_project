@@ -1,29 +1,35 @@
 \section{Discussione}
 \label{sec:discussion}
 
-Due osservazioni di sintesi guidano l'interpretazione dei risultati. Sulle
-prestazioni: la validation accuracy resta piatta (89--91\%) nelle
-configurazioni con $H\ge500$ perché riflette soprattutto l'adattamento di
-ciascun worker ai propri dati locali dopo la Fase B, un segnale poco
-sensibile al protocollo di comunicazione; scende invece a 87--88\% nei due
-run a $H=100$ (locale e AWS, Tabella~\ref{tab:master}), dove ogni round
-processa un decimo dei campioni prima dell'aggregazione. Global-test accuracy
-e spread, invece, variano
-sistematicamente con $k$ e $N$ perché misurano la reale convergenza
-collaborativa e non il solo adattamento locale — sono quindi le metriche
-rilevanti per giudicare la strategia di distribuzione, discussa di seguito.
-Sui tempi: il wall-clock è dominato dal calcolo locale (Fase A/B) e non
-dalla comunicazione (Fase C), come discusso più sotto — l'ambiente di
-esecuzione incide più della configurazione stessa.
+Due osservazioni di sintesi guidano l'interpretazione dei risultati. La prima
+riguarda le prestazioni. La validation accuracy di un worker è misurata su
+campioni degli stessi scrittori presenti nel suo training set — mai usati
+per aggiornare i pesi, ma stilisticamente affini a ciò su cui il worker si è
+allenato — quindi riflette soprattutto quanto bene quel worker impara dalla
+propria partizione durante la Fase B (training locale), non quanto
+efficacemente sta collaborando con gli altri tramite il gossip. Per questo
+resta piatta (89--92\%) in tutte le configurazioni con $H\ge500$
+indipendentemente dal fanout $k$: che un worker riceva pochi o molti
+aggiornamenti dai vicini, il numero di passi di training locale è già
+sufficiente da solo per adattarsi bene ai propri dati. Scende invece a
+87--89\% nei due run a $H=100$. Global-test
+accuracy e spread, al contrario, variano sistematicamente con $k$ e $N$
+perché sono misurati su scrittori mai visti da nessun worker: catturano
+quindi la reale convergenza collaborativa, non il solo adattamento locale, e
+sono per questo le metriche rilevanti per giudicare la strategia di
+distribuzione. La seconda osservazione riguarda i
+tempi: il wall-clock è dominato dal calcolo locale (Fase A/B) e non dalla
+comunicazione (Fase C).
 
 \subsection{Il fanout $k$ come compromesso esplicito}
 A $N=5$ e $N=8$ (locale e AWS), un $k$ più alto porta più aggiornamenti per
-round e un'accuratezza global-test più alta a parità di $H$ — coerente con
-un mixing più denso che riduce la divergenza verso soluzioni funzionalmente
-diverse. A $N=3$ l'effetto è piatto o leggermente negativo in entrambi gli
-ambienti: con solo due vicini possibili, $k=1\to2$ non cambia
-qualitativamente la topologia, e il rumore tra worker (tre soli campioni)
-è dello stesso ordine dell'effetto misurato. Il guadagno non è gratuito: il
+round e un'accuratezza global-test più alta a parità di $H$; a $N=8$ il guadagno è particolarmente marcato su AWS (75,4\%
+a $k=1$ contro 81,6\% a $k=N-1$). A $N=3$ l'effetto resta piatto in entrambi
+gli ambienti: con solo due vicini possibili, $k=1\to2$ non cambia
+qualitativamente la topologia, e il rumore tra worker
+è dello stesso ordine dell'effetto misurato,
+ulteriore indizio che a $N=3$ l'effetto di $k$ non è distinguibile dal
+rumore. Il guadagno non è gratuito: il
 traffico cresce nella stessa proporzione di $k$ (Sez.~\ref{sec:results}B),
 per cui $k$ va sempre scelto rispetto al budget di banda, non solo
 all'accuratezza target.
@@ -32,78 +38,45 @@ all'accuratezza target.
 Anche su rete reale tra istanze EC2 separate, la Fase C resta dell'ordine
 delle centinaia di millisecondi, mentre il rallentamento di oltre un ordine
 di grandezza su AWS è concentrato nella Fase A (Sez.~\ref{sec:results}C),
-compatibile con un limite di CPU burstable delle \texttt{t3.small} più che
+compatibile con un limite di CPU delle \texttt{t3.small} più che
 con un costo di rete. Questo supporta la scelta di comunicare snapshot
 completi a bassa frequenza invece di aggiornamenti più frequenti e piccoli:
 il costo di calcolo locale domina comunque quello di comunicazione, per cui
 ridurre ulteriormente la frequenza di comunicazione non avrebbe portato benefici
 proporzionali sul tempo totale.
 
-\subsection{Nota metodologica sulla metrica di convergenza funzionale}
-Lo strumento di analisi calcola lo spread sul global test set in due
-varianti: al round finale di ciascun worker (etichettata riferimento
-rumoroso) e al round del checkpoint migliore (metrica dichiarata primaria).
-Le due possono discordare sensibilmente: per due configurazioni a $N=3$, la
-variante riferimento suggeriva uno spread contenuto (4,5--4,8\%), mentre la
-primaria mostra per le stesse run 19,5--21,1\%, in linea con le altre 14. Si
-è scelto di riportare sempre e solo la metrica primaria
-(Tabella~\ref{tab:master}), per non presentare come rappresentativo un
-valore isolato ottenuto con la metrica esplicitamente definita rumorosa.
-
 \subsection{Limitazioni}
 \begin{itemize}
-  \item \textbf{Convergenza funzionale incompleta.} In nessuna configurazione
-        lo spread sul global test set scende sotto il 14\%, nemmeno a
-        connettività one-hop massima ($k=N-1$, Sezione~\ref{sec:background}E):
-        il push one-hop riduce ma non elimina la divergenza tra worker nel
-        budget testato. I dati
-        grezzi mostrano anche oscillazioni round-su-round marcate (in un
-        caso, $-28$ punti percentuali tra checkpoint migliore e round finale
-        di un worker), sintomo di instabilità dopo un merge FedAvg con
-        vicini divergenti.
-  \item \textbf{Singola replica per configurazione.} Nessun run è ripetuto
-        con seed diverso: la deviazione standard riportata è tra worker dello
-        stesso run, non tra run della stessa configurazione, e non separa con
-        certezza l'effetto di un iperparametro dalla variabilità intrinseca.
-  \item \textbf{Confondimento in una configurazione AWS.} \texttt{n8\_fn} su
-        AWS usa \texttt{early\_stopping\_patience=7} anziché 10 come tutti
-        gli altri, per un errore di configurazione: il confronto diretto a
-        $N=8$ va interpretato con cautela.
-  \item \textbf{Peer contattati sotto il target.} Il numero medio di vicini
-        contattati può scendere sotto $k$ quando altri worker terminano in
-        anticipo e si deregistrano, riducendo il pool disponibile — effetto
-        emergente dell'asincronia, non un difetto della selezione.
+  \item \textbf{Convergenza funzionale.} In nessuna configurazione
+        lo spread sul global test set scende sotto il 12\%, nemmeno a
+        connettività one-hop massima ($k=N-1$, Sezione~\ref{sec:background}D):
+        il push one-hop riduce ma non elimina la divergenza tra worker. I dati
+        grezzi mostrano anche oscillazioni round-su-round marcate, sintomo di instabilità dopo
+        un merge FedAvg con vicini divergenti.
   \item \textbf{Assenza di heartbeat.} Un peer caduto è rilevato solo al
         primo fallimento di invio; un crash non pulito (SIGKILL, OOM) lascia
         una entry non valida nel discovery server fino a quel momento. Scelta
         deliberata: un heartbeat periodico introdurrebbe traffico crescente
         con $N$, in contrasto con l'obiettivo di traffico ridotto che guida
-        anche cache dei peer e k-push; costo non giustificato per un caso
-        d'uso fuori dal perimetro sperimentale di questo lavoro.
-  \item \textbf{Statistiche di Batch Normalization non aggregate.} Solo
-        scala e bias sono mediati da FedAvg; media e varianza correnti
-        restano locali, nota causa di disallineamento post-aggregazione in
-        letteratura~\cite{li2021fedbn}.
-  \item \textbf{Nessuna metrica per classe.} \texttt{validate()}
-        (Sezione~\ref{sec:details}) calcola solo loss aggregata e accuratezza
-        top-1; non vengono salvate predizioni, logit o una confusion matrix.
-        FEMNIST ha 62 classi con frequenze naturalmente sbilanciate (cifre vs.
-        lettere, maiuscole vs.\ minuscole), e con partizionamento non-i.i.d.\
-        per scrittore alcuni worker vedono pochi esempi di certe classi:
-        un'accuratezza aggregata alta può quindi mascherare una scarsa
-        accuratezza sulle classi rare. Il dato non è recuperabile a
-        posteriori sulle 16 run già eseguite: \texttt{model\_best.pt} non
-        viene archiviato da \texttt{save\_experiment.py} — è cancellato dalla
-        working directory subito dopo la copia delle metriche, per lasciare
-        pulito l'ambiente alla run successiva — per cui un'analisi per classe
-        richiederebbe di ripetere almeno una configurazione.
+        anche cache dei peer e k-push.
+  \item \textbf{Metriche per classe assenti sulle 8 configurazioni locali.}
+        Le 8 configurazioni AWS di questa campagna calcolano precision/
+        recall/F1 macro e la matrice di confusione completa sul global test
+        set (Sezione~\ref{sec:results}E); le 8 configurazioni locali erano nate più come
+        strumento di debug prima di spostarci su aws per isolare possibili problematiche. Tuttavia rimangono
+        utili per fare paragoni con i run di aws essendo le stesse configurazioni, con la differenza che i run locali
+        misurano solo l'accuracy dei modelli.
 \end{itemize}
 
-\subsection{Confronto con la letteratura}
-FedAvg centralizzato su FEMNIST è tipicamente riportato attorno al
-77--80\% di accuratezza di test~\cite{li2020fedprox}. Le configurazioni qui
-testate raggiungono un'accuratezza di validazione più alta (87--91\%) ma
-global-test più bassa (75--85\%): confronto non del tutto omogeneo, poiché
-la validazione avviene su campioni degli stessi scrittori visti in training,
-mentre il global test contiene scrittori mai visti — un compito di
-generalizzazione più severo e più vicino allo scenario reale.
+\subsection{Il divario tra validation e global-test accuracy}
+La validation accuracy (87--92\%, Tabella~\ref{tab:master}) e l'accuratezza
+sul global test set (74--84\% come media tra le 16 configurazioni) misurano
+due cose diverse per costruzione: la prima su campioni degli stessi
+scrittori visti in training, la seconda su scrittori mai visti da alcun
+worker (Sezione~\ref{sec:details}A). Il divario tra le due — sistematicamente
+7--16 punti a favore della validation in tutte le configurazioni — è quindi
+atteso, non un sintomo di overfitting anomalo.
+Il global test set, per costruzione,
+isola esattamente l'effetto che la sola validation accuracy non può
+misurare: quanto la collaborazione tra worker generalizzi a scrittori mai visti da nessuno — il criterio con cui
+tutte le configurazioni di questo lavoro sono confrontate.

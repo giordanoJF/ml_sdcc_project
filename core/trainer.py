@@ -1,4 +1,4 @@
-"""Training and validation utilities for the local worker loop."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,13 +12,7 @@ def train_step(
     clip_grad: float = 1.0,
     label_smoothing: float = 0.1,
 ) -> float:
-    """
-    Run a single forward-backward-update step.
-    Returns the scalar loss value for logging purposes.
 
-    clip_grad:       max L2 norm for gradient clipping; limits client drift in FL
-    label_smoothing: softens hard targets (0.1 spread over 62 classes)
-    """
     x, y = batch[0].to(device), batch[1].to(device)
     optimizer.zero_grad()
     loss = F.cross_entropy(model(x), y, label_smoothing=label_smoothing)
@@ -34,13 +28,7 @@ def compute_confusion_matrix(
     loader,
     device: torch.device,
 ) -> torch.Tensor:
-    """
-    Run inference over loader and return the (num_classes, num_classes)
-    confusion matrix: rows = true class, columns = predicted class, cell
-    (i, j) = count of true-i samples predicted as j. num_classes is read
-    from the model's own output width. Used both by validate() (below) and
-    by scripts/confusion_matrix.py for post-hoc per-class error analysis.
-    """
+
     model.eval()
     confusion: torch.Tensor | None = None
     with torch.no_grad():
@@ -60,16 +48,7 @@ def compute_confusion_matrix(
 
 
 def macro_prf1_from_confusion(confusion: torch.Tensor) -> tuple[float, float, float]:
-    """
-    Derive (macro_precision, macro_recall, macro_f1) from a confusion matrix,
-    averaging per-class precision/recall/F1 over classes actually present
-    (equal weight per class, unlike accuracy which is implicitly weighted by
-    class frequency) — catches a model that does well on common classes but
-    poorly on rare ones, which plain accuracy hides. macro_recall in
-    particular is the per-class miss rate: low macro_recall with high
-    accuracy means specific classes are being missed almost entirely, even
-    if they are individually rare enough not to move accuracy much.
-    """
+
     if confusion.numel() == 0:
         return 0.0, 0.0, 0.0
     tp = confusion.diag().float()
@@ -90,13 +69,7 @@ def validate(
     val_loader,
     device: torch.device,
 ) -> tuple[float, float, float, float, float]:
-    """
-    Evaluate the model on the local validation set.
-    Returns (avg_loss, accuracy, macro_precision, macro_recall, macro_f1) over
-    the full validation split. Uses reduction='sum' to accumulate correctly
-    across batches. See macro_prf1_from_confusion() for what the macro_*
-    values mean.
-    """
+
     model.eval()
     total_loss, correct, total = 0.0, 0, 0
     confusion: torch.Tensor | None = None

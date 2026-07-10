@@ -1,29 +1,5 @@
 #!/usr/bin/env python3
-"""
-Archive the current experiment results for later comparison.
 
-Run this after aggregate_metrics.py to save a snapshot of the current run.
-Each snapshot includes the per-worker metrics, aggregated stats, test results
-(if present), and the config.yaml used — so you can always trace back which
-configuration produced which results.
-
-Usage:
-    python scripts/save_experiment.py <name>
-
-    <name>: short label describing what was varied, e.g. lr_1e-3, fanout_2, baseline
-
-Output:
-    results/<timestamp>_<name>/
-        config.yaml                    ← exact config used for this run
-        global_metrics.csv             ← per-round aggregated stats
-        summary.txt                    ← human-readable summary
-        confusion_matrix.csv           ← per-class confusion matrix (if confusion_matrix.py was run)
-        worker_0/metrics.csv           ← per-round per-worker metrics
-        worker_0/local_test_result.json ← final test accuracy (if local_test_set: true)
-        worker_0/model_best.pt         ← best checkpoint by val_loss
-        worker_1/...
-        ...
-"""
 import argparse
 import glob
 import os
